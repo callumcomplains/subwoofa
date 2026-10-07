@@ -41,6 +41,12 @@ enum Cmd {
         sample_rate: u32,
         #[arg(long)]
         dialnorm: Option<u8>,
+        /// Start offset into the source, in seconds.
+        #[arg(long)]
+        start: Option<f64>,
+        /// Length to encode, in seconds (e.g. 60 for a one-minute test).
+        #[arg(long)]
+        duration: Option<f64>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -70,7 +76,7 @@ fn run() -> Result<(), String> {
                 }
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, output, ffmpeg } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg } => {
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             let layout: &'static ChannelLayout =
@@ -88,7 +94,7 @@ fn run() -> Result<(), String> {
             }
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
             let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
-            let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, ffmpeg };
+            let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, start_secs: start, duration_secs: duration, ffmpeg };
             ff::run(&job).map_err(|e| e.to_string())?;
             println!("wrote {}", output.display());
         }

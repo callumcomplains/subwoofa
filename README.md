@@ -14,7 +14,8 @@ Early foundation. What works today:
 | Destination / stream type / sample rate / bit-rate validation matrix | done (first pass) |
 | CLI `subwoofa layouts / formats / encode` | done |
 | FFmpeg backend: AC-3, E-AC-3, DTS core | working |
-| FFmpeg backend: TrueHD / MLP | wired, experimental in FFmpeg (limited channels) |
+| FFmpeg backend: TrueHD / MLP | working; 5.1 verified bit-exact lossless on real PCM |
+| `--start` / `--duration` partial encodes | done |
 | Native encoders, DTS-HD (HRA/MA/Express), downmix, queue, verify, StreamTools, GUI | planned — see `docs/ROADMAP.md` |
 | Dolby Atmos | deferred |
 

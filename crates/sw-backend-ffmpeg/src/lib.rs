@@ -30,6 +30,9 @@ pub struct Job {
     pub sample_rate: Option<u32>,
     /// DTS-style dialog normalisation as a positive attenuation in dB (0..=31); AC-3 `-dialnorm`.
     pub dialnorm: Option<u8>,
+    /// Encode only this span of the source (seconds): start offset and length.
+    pub start_secs: Option<f64>,
+    pub duration_secs: Option<f64>,
     pub ffmpeg: PathBuf,
 }
 
@@ -82,6 +85,12 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
     let mut layout_names = Vec::new();
     for (i, ch) in job.layout.channels.iter().enumerate() {
         let path = job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?;
+        if let Some(s) = job.start_secs {
+            args.extend(["-ss".into(), s.to_string()]);
+        }
+        if let Some(d) = job.duration_secs {
+            args.extend(["-t".into(), d.to_string()]);
+        }
         args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
         let pos = ff_name(*ch).ok_or(Error::Unsupported("channel"))?;
         map.push_str(&format!("[{i}:a]"));
@@ -108,12 +117,17 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
         // AC-3 dialnorm is 1..=31 (dB below full scale); 31 == no attenuation.
         args.extend(["-dialnorm".into(), d.clamp(1, 31).to_string()]);
     }
-    if matches!(job.stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::DtsDigitalSurround) {
-        args.extend(["-f".into(), match job.stream {
-            StreamType::Ac3 => "ac3",
-            StreamType::Eac3 => "eac3",
-            _ => "dts",
-        }.into()]);
+    // Raw elementary-stream muxers, independent of the output file extension.
+    let muxer = match job.stream {
+        StreamType::Ac3 => Some("ac3"),
+        StreamType::Eac3 => Some("eac3"),
+        StreamType::DtsDigitalSurround => Some("dts"),
+        StreamType::TrueHd => Some("truehd"),
+        StreamType::Mlp => Some("mlp"),
+        _ => None,
+    };
+    if let Some(m) = muxer {
+        args.extend(["-f".into(), m.into()]);
     }
     args.push(job.output.to_string_lossy().into_owned());
     Ok(args)
@@ -146,7 +160,7 @@ mod tests {
     fn job(stream: StreamType) -> Job {
         let layout = ChannelLayout::find("5.1").unwrap();
         let inputs = layout.channels.iter().map(|c| (*c, PathBuf::from(format!("{}.wav", c.short())))).collect();
-        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), ffmpeg: "ffmpeg".into() }
+        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, ffmpeg: "ffmpeg".into() }
     }
 
     #[test]
