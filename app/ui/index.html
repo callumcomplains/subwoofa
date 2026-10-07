@@ -37,7 +37,15 @@
     </div>
     <div id="presets" class="chips" role="group" aria-label="Bit rate presets"></div>
   </div>
-  <label class="f"><span>Dialnorm</span><select id="dialnorm"></select></label>
+  <div class="f dialnorm">
+    <label for="dialnormOn"><span>Dialnorm</span></label>
+    <div class="combo">
+      <label class="chk tight"><input type="checkbox" id="dialnormOn"><span>On</span></label>
+      <input id="dialnorm" type="number" min="-31" max="-1" step="1" value="-27" disabled aria-label="Dialnorm in dBFS">
+      <span class="unit">dBFS</span>
+    </div>
+    <small id="dialnormNote">off (-31)</small>
+  </div>
 </section>
 
 <div class="work">
@@ -63,6 +71,19 @@
       <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
       <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
     </div>
+
+    <details id="dm" class="dm">
+      <summary>Downmix &amp; clip check</summary>
+      <div class="dm-bar">
+        <label class="f small"><span>Target</span><select id="dmTarget"></select></label>
+        <button id="dmReset" class="plain">Reset</button>
+        <button id="dmSafe" class="plain">Safe trim</button>
+        <button id="dmCheck">Check clipping</button>
+        <span id="dmNote" class="hint"></span>
+      </div>
+      <div class="dm-scroll"><table id="dmTable" class="dmtable"></table></div>
+      <pre id="dmResult" class="dm-result"></pre>
+    </details>
   </section>
 </div>
 

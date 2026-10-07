@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use sw_core::{Channel, ChannelLayout, StreamType};
 
+pub mod downmix;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("no input file for channel {0}")]
@@ -37,7 +39,7 @@ pub struct Job {
 }
 
 /// FFmpeg channel-layout position name for a Subwoofa channel.
-fn ff_name(c: Channel) -> Option<&'static str> {
+pub(crate) fn ff_name(c: Channel) -> Option<&'static str> {
     use Channel::*;
     Some(match c {
         L | Lt => "FL",
@@ -81,17 +83,12 @@ pub fn supports(stream: StreamType) -> bool {
     codec_args(stream).is_ok()
 }
 
-/// Build the argument list (without the program name).
-pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
-    let (codec, extra) = codec_args(job.stream)?;
-    // FFmpeg's E-AC-3 and DTS core encoders stop at 5.1.
-    if matches!(job.stream, StreamType::Eac3 | StreamType::DtsDigitalSurround) && job.layout.channel_count() > 6 {
-        return Err(Error::Unsupported("more than 5.1 channels with FFmpeg's encoder for this format"));
-    }
-    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
-
+/// `-i` arguments for every channel file plus a filter that joins them into one multichannel
+/// stream with the layout's speaker positions, ending in the output pad `[label]`.
+pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String), Error> {
+    let mut args = Vec::new();
     let mut map = String::new();
-    let mut layout_names = Vec::new();
+    let mut names = Vec::new();
     for (i, ch) in job.layout.channels.iter().enumerate() {
         let path = job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?;
         if let Some(s) = job.start_secs {
@@ -101,18 +98,28 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
             args.extend(["-t".into(), d.to_string()]);
         }
         args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
-        let pos = ff_name(*ch).ok_or(Error::Unsupported("channel"))?;
         map.push_str(&format!("[{i}:a]"));
-        layout_names.push(pos);
+        names.push(ff_name(*ch).ok_or(Error::Unsupported("channel"))?);
     }
-    // 7.0/7.1 side+rear layouts map Lss/Rss onto SL/SR and Lsr/Rsr onto BL/BR.
     let n = job.layout.channel_count();
-    let layout_str = layout_names.join("+");
     let filter = if n == 1 {
-        format!("[0:a]anull[out]")
+        format!("[0:a]anull[{label}]")
     } else {
-        format!("{map}join=inputs={n}:channel_layout={layout_str}[out]")
+        format!("{map}join=inputs={n}:channel_layout={}[{label}]", names.join("+"))
     };
+    Ok((args, filter))
+}
+
+/// Build the argument list (without the program name).
+pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
+    let (codec, extra) = codec_args(job.stream)?;
+    // FFmpeg's E-AC-3 and DTS core encoders stop at 5.1.
+    if matches!(job.stream, StreamType::Eac3 | StreamType::DtsDigitalSurround) && job.layout.channel_count() > 6 {
+        return Err(Error::Unsupported("more than 5.1 channels with FFmpeg's encoder for this format"));
+    }
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+    let (input_args, filter) = join_inputs(job, "out")?;
+    args.extend(input_args);
     args.extend(["-filter_complex".into(), filter, "-map".into(), "[out]".into()]);
     args.extend(["-c:a".into(), codec.into()]);
     args.extend(extra.iter().map(|s| s.to_string()));

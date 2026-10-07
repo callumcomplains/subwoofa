@@ -6,6 +6,7 @@
 
 pub mod autoimport;
 pub mod channel;
+pub mod downmix;
 pub mod formats;
 pub mod layout;
 

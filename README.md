@@ -16,6 +16,8 @@ Early foundation. What works today:
 | FFmpeg backend: AC-3, E-AC-3, DTS core | working |
 | FFmpeg backend: TrueHD / MLP | working; 5.1 verified bit-exact lossless on real PCM |
 | `--start` / `--duration` partial encodes | done |
+| Downmix matrices (Lo/Ro, 7.x to 5.1), safe trim, clip check (CLI `downmix-check` and GUI) | done |
+| Desktop GUI (Tauri): format cascade, layout picker, bit-rate presets, unlocked mode, downmix tab | done |
 | Native encoders, DTS-HD (HRA/MA/Express), downmix, queue, verify, StreamTools, GUI | planned — see `docs/ROADMAP.md` |
 | Dolby Atmos | deferred |
 

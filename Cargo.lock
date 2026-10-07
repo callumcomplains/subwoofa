@@ -3044,6 +3044,7 @@ dependencies = [
 name = "sw-backend-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sw-core",
  "thiserror 2.0.21",
 ]

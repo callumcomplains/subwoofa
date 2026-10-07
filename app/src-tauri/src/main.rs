@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use sw_backend_ffmpeg as ff;
 use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
+use sw_core::downmix::{Matrix, OFF};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
 #[derive(Serialize)]
@@ -122,13 +123,17 @@ struct Probe {
 fn probe(path: String) -> Result<Probe, String> {
     let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found")?;
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
-    let out = Command::new(ffprobe)
+    let out = Command::new(&ffprobe)
         .args(["-v", "error", "-select_streams", "a:0", "-show_entries",
                "stream=channels,sample_rate,bits_per_raw_sample,bits_per_sample:format=duration", "-of", "json", &path])
         .output()
         .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("ffprobe gave no JSON: {e}"))?;
     let s = &v["streams"][0];
+    if s.is_null() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("ffprobe found no audio stream in {path} (using {}): {}", ffprobe.display(), err.trim()));
+    }
     let num = |x: &serde_json::Value| x.as_str().and_then(|t| t.parse::<u32>().ok()).or_else(|| x.as_u64().map(|n| n as u32));
     let bits = num(&s["bits_per_raw_sample"]).filter(|b| *b > 0).or(num(&s["bits_per_sample"]).filter(|b| *b > 0));
     Ok(Probe {
@@ -189,10 +194,108 @@ async fn encode(req: EncodeRequest) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/* ---- downmix ---- */
+
+// serde_json turns -inf into null, so "off" is carried explicitly as `None`.
+#[derive(Serialize, Deserialize, Clone)]
+struct CellDto {
+    gain_db: Option<f32>,
+    invert: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct MatrixDto {
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+    cells: Vec<Vec<CellDto>>,
+}
+
+fn to_dto(m: &Matrix) -> MatrixDto {
+    MatrixDto {
+        inputs: m.inputs.iter().map(|c| c.short().to_string()).collect(),
+        outputs: m.outputs.iter().map(|c| c.short().to_string()).collect(),
+        cells: m
+            .cells
+            .iter()
+            .map(|r| r.iter().map(|c| CellDto { gain_db: (c.gain_db != OFF).then_some(c.gain_db), invert: c.invert }).collect())
+            .collect(),
+    }
+}
+
+fn from_dto(d: &MatrixDto) -> Result<Matrix, String> {
+    let ch = |v: &Vec<String>| v.iter().map(|s| Channel::from_id(s).ok_or(format!("unknown channel '{s}'"))).collect::<Result<Vec<_>, _>>();
+    let (inputs, outputs) = (ch(&d.inputs)?, ch(&d.outputs)?);
+    if d.cells.len() != outputs.len() || d.cells.iter().any(|r| r.len() != inputs.len()) {
+        return Err("matrix shape does not match its channels".into());
+    }
+    let mut m = Matrix::empty(&inputs, &outputs);
+    for (o, row) in d.cells.iter().enumerate() {
+        for (i, c) in row.iter().enumerate() {
+            m.cells[o][i] = sw_core::downmix::Cell { gain_db: c.gain_db.unwrap_or(OFF), invert: c.invert };
+        }
+    }
+    Ok(m)
+}
+
+#[tauri::command]
+fn downmix_default(layout: String, to: String) -> Result<MatrixDto, String> {
+    let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
+    match to.as_str() {
+        "stereo" => Ok(to_dto(&Matrix::lo_ro(l))),
+        "5.1" => Ok(to_dto(&Matrix::to_51(l))),
+        _ => Err("unknown downmix target".into()),
+    }
+}
+
+#[derive(Serialize)]
+struct SafeTrim {
+    trim_db: f32,
+    worst_case: f32,
+    matrix: MatrixDto,
+}
+
+/// Trim that keeps full-scale input from clipping, with the matrix already trimmed.
+#[tauri::command]
+fn downmix_safe(matrix: MatrixDto) -> Result<SafeTrim, String> {
+    let mut m = from_dto(&matrix)?;
+    let trim_db = m.safe_trim_db();
+    let worst_case = m.worst_case_gain().into_iter().fold(0.0, f32::max);
+    m.trim(trim_db);
+    Ok(SafeTrim { trim_db, worst_case, matrix: to_dto(&m) })
+}
+
+#[derive(Deserialize)]
+struct CheckRequest {
+    layout: String,
+    inputs: HashMap<String, String>,
+    matrix: MatrixDto,
+    start: Option<f64>,
+    duration: Option<f64>,
+}
+
+#[tauri::command]
+async fn downmix_check(req: CheckRequest) -> Result<ff::downmix::SatReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let layout = ChannelLayout::find(&req.layout).ok_or("unknown layout")?;
+        let m = from_dto(&req.matrix)?;
+        let inputs = req.inputs.iter().filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v)))).collect();
+        let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
+        let job = ff::Job {
+            stream: StreamType::Ac3, layout, inputs, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None,
+            dialnorm: None, start_secs: req.start, duration_secs: req.duration, ffmpeg,
+        };
+        ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![catalog, options, auto_import, probe, encode])
+        .invoke_handler(tauri::generate_handler![
+            catalog, options, auto_import, probe, encode, downmix_default, downmix_safe, downmix_check
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");
 }

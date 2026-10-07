@@ -75,7 +75,8 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .chips { max-width: 420px; }
 .f.small input { width: 82px; }
 .combo { display: flex; align-items: center; gap: 6px; }
-.combo input { width: 92px; }
+.combo input[type=number] { width: 92px; }
+.combo input[type=checkbox], .chk input { width: auto; accent-color: var(--lamp); }
 .unit { color: var(--dim); font: 11px var(--mono); }
 .chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
 .chips button { font: 11px var(--mono); padding: 1px 6px; color: var(--dim); }
@@ -119,7 +120,26 @@ tr.drop td { background: #1c1608; }
 tr.err td input, tr.err td.meta.fs { border-color: var(--bad); color: var(--bad); }
 .range { display: flex; align-items: flex-end; gap: 18px; margin-top: 14px; flex-wrap: wrap; }
 .chk { display: flex; align-items: center; gap: 7px; padding-bottom: 6px; }
+.chk.tight { padding: 0; }
+.dialnorm .combo input[type=number] { width: 66px; }
+.dialnorm small { color: var(--dim); font: 10.5px var(--mono); }
 .chk input { accent-color: var(--lamp); }
+
+/* downmix */
+.dm { margin-top: 18px; border-top: 1px solid var(--rule); padding-top: 10px; }
+.dm summary { cursor: pointer; font: 600 11px var(--label); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+.dm[open] summary { color: var(--ink); }
+.dm-bar { display: flex; align-items: flex-end; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.dm-bar .hint { align-self: center; }
+.dm-scroll { overflow-x: auto; }
+.dmtable { width: auto; }
+.dmtable th, .dmtable td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--rule); text-align: left; }
+.dmtable th.in { color: var(--lamp); font: 600 12px var(--mono); letter-spacing: 0; text-transform: none; text-align: center; }
+.dmtable td.out { color: var(--lamp); font: 600 12px var(--mono); padding-right: 12px; }
+.dmtable td input { width: 54px; text-align: right; font-size: 12px; padding: 3px 5px; }
+.dmtable td input.off { color: #4b575c; }
+.dm-result { margin: 10px 0 0; font: 11.5px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap; }
+.dm-result.bad { color: var(--bad); } .dm-result.ok { color: var(--ok); }
 
 /* output bar */
 .out { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 10px 16px; border-top: 1px solid var(--rule); align-items: center; }
