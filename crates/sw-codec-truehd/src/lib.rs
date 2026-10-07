@@ -279,7 +279,10 @@ impl Encoder {
         let shorten = if last { n - valid } else { 0 };
 
         // 1. analysis: per channel quantizer step, predictor and residual
-        let analyses: Vec<ChannelAnalysis> = (0..self.cfg.channels).map(|c| analyze_channel(&chans[c][..n], au)).collect();
+        let analyses: Vec<ChannelAnalysis> = std::thread::scope(|sc| {
+            let handles: Vec<_> = (0..self.cfg.channels).map(|c| sc.spawn(move || analyze_channel(&chans[c][..n], au))).collect();
+            handles.into_iter().map(|h| h.join().expect("analysis thread panicked")).collect()
+        });
 
         // 2. emit every access unit
         let mut out = Vec::new();
@@ -370,6 +373,8 @@ struct ChannelAnalysis {
     fir: Fir,
     /// Residual per sample (full scale, a multiple of 2^quant); the first 8 samples are raw.
     residual: Vec<i32>,
+    /// Exact entropy-coding choice for every block, `[access unit][block]` (two blocks in the first AU).
+    codings: Vec<Vec<Coding>>,
 }
 
 fn analyze_channel(x: &[i32], au: usize) -> ChannelAnalysis {
@@ -378,10 +383,10 @@ fn analyze_channel(x: &[i32], au: usize) -> ChannelAnalysis {
     let quant = if or_all == 0 { 0 } else { (or_all.trailing_zeros() as u8).min(15) };
     let mask = !((1i32 << quant) - 1);
 
-    // candidate predictors: none, and LPC of a few orders
+    // candidate predictors: none, and LPC of a few orders; judged with a cheap bit estimate
     let mut best_fir = Fir::default();
     let mut best_res: Vec<i32> = x.to_vec();
-    let mut best_cost = block_cost(&best_res, quant, au);
+    let mut best_cost = estimate_bits(&best_res, quant, au);
 
     if n > 64 {
         let xs: Vec<f64> = x.iter().map(|v| (*v >> quant) as f64).collect();
@@ -389,7 +394,7 @@ fn analyze_channel(x: &[i32], au: usize) -> ChannelAnalysis {
         for &order in &[2usize, 4, 8] {
             if let Some(fir) = quantize_fir(&lpcs[order]) {
                 let res = apply_fir(x, &fir, mask);
-                let cost = block_cost(&res, quant, au) + 40 + order * 14;
+                let cost = estimate_bits(&res, quant, au) + 40.0 + order as f64 * 14.0;
                 if cost < best_cost {
                     best_cost = cost;
                     best_fir = fir;
@@ -398,7 +403,37 @@ fn analyze_channel(x: &[i32], au: usize) -> ChannelAnalysis {
             }
         }
     }
-    ChannelAnalysis { quant, fir: best_fir, residual: best_res }
+
+    // exact coding choice for the real block layout (first AU = 8 priming samples + the rest)
+    let n_au = n / au;
+    let mut codings = Vec::with_capacity(n_au);
+    for a in 0..n_au {
+        let ranges: &[(usize, usize)] = if a == 0 { &[(0, 8), (8, 0)] } else { &[(0, 0)] };
+        let mut per_block = Vec::new();
+        if a == 0 {
+            for (start, len) in [(0usize, 8usize), (8, au - 8)] {
+                let v: Vec<i32> = best_res[start..start + len].iter().map(|r| r >> quant).collect();
+                per_block.push(best_coding(&v, quant));
+            }
+        } else {
+            let v: Vec<i32> = best_res[a * au..(a + 1) * au].iter().map(|r| r >> quant).collect();
+            per_block.push(best_coding(&v, quant));
+        }
+        let _ = ranges;
+        codings.push(per_block);
+    }
+    ChannelAnalysis { quant, fir: best_fir, residual: best_res, codings }
+}
+
+/// Cheap estimate of the bits needed to code `res` (about log2 of the mean magnitude per sample).
+fn estimate_bits(res: &[i32], quant: u8, au: usize) -> f64 {
+    let mut total = 0.0;
+    for chunk in res.chunks(au) {
+        let sum: u64 = chunk.iter().map(|r| ((r >> quant).unsigned_abs()) as u64).sum();
+        let mean = sum as f64 / chunk.len() as f64;
+        total += chunk.len() as f64 * ((mean + 1.0).log2() + 1.3);
+    }
+    total
 }
 
 /// Levinson-Durbin: returns predictor coefficients for every order 0..=max (x[n] ~ sum c[k] x[n-1-k]).
@@ -482,16 +517,6 @@ fn apply_fir(x: &[i32], fir: &Fir, mask: i32) -> Vec<i32> {
         res[i] = x[i].wrapping_sub(pred & mask);
     }
     res
-}
-
-/// Estimated bits to code `res` in blocks of one access unit.
-fn block_cost(res: &[i32], quant: u8, au: usize) -> usize {
-    let mut total = 0;
-    for chunk in res.chunks(au) {
-        let v: Vec<i32> = chunk.iter().map(|r| r >> quant).collect();
-        total += best_coding(&v, quant).bits;
-    }
-    total
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -610,12 +635,10 @@ fn plan_blocks(sub: &Substream, an: &[ChannelAnalysis], au_index: usize, au: usi
             want.quant[ch] = a.quant;
             // the priming block is unfiltered; later blocks use the interval's predictor
             let fir = if restart && bi == 0 { Fir::default() } else { a.fir };
-            let vals: Vec<i32> = a.residual[start..start + len].iter().map(|r| r >> a.quant).collect();
-            let c = best_coding(&vals, a.quant);
+            let c = a.codings[au_index][bi];
             codings[ch] = c;
             want.ch[ch] = ChParams { fir, codebook: c.codebook, lsbs: (c.lsb_bits + a.quant as u32) as u8 };
         }
-        // channels below this substream's range keep their quant step at 0 (written but unused)
         plans.push(BlockPlan { start, len, want, codings });
     }
     plans

@@ -62,12 +62,16 @@ pub fn encode_to_file(
     let mut bytes = 0u64;
     let nch = map.source_index.len();
     let mut chans: Vec<Vec<i32>> = vec![vec![0; chunk]; nch];
+    let (mut t_read, mut t_conv, mut t_enc) = (std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
         }
         let n = (remaining as usize).min(chunk);
+        let t0 = std::time::Instant::now();
         stems.read_planar(&mut planar, n)?;
+        t_read += t0.elapsed();
+        let t1 = std::time::Instant::now();
         let padded = n.div_ceil(enc.au_samples()) * enc.au_samples();
         for (coded, &src) in map.source_index.iter().enumerate() {
             let dst = &mut chans[coded];
@@ -77,14 +81,20 @@ pub fn encode_to_file(
             }
             debug_assert!(padded <= dst.len());
         }
+        t_conv += t1.elapsed();
         remaining -= n as u64;
         let last = remaining == 0;
+        let t2 = std::time::Instant::now();
         let data = enc.encode_interval(&chans, n, last);
+        t_enc += t2.elapsed();
         out.write_all(&data)?;
         bytes += data.len() as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     out.flush()?;
+    if std::env::var_os("SW_TIMING").is_some() {
+        eprintln!("truehd timing: read {:?}, convert {:?}, encode {:?}", t_read, t_conv, t_enc);
+    }
     on_progress(1.0);
     Ok(Stats { frames: want, bytes })
 }
