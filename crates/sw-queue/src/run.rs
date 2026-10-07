@@ -1,0 +1,178 @@
+//! Executes one encode job and writes its log.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+use sw_backend_ffmpeg as ff;
+use sw_core::formats::{validate, Destination, StreamType};
+use sw_core::{Channel, ChannelLayout};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodeSpec {
+    pub dest: String,
+    pub stream: String,
+    pub layout: String,
+    pub sample_rate: u32,
+    pub bitrate: Option<u32>,
+    pub dialnorm: Option<u8>,
+    pub start: Option<f64>,
+    pub duration: Option<f64>,
+    pub inputs: HashMap<String, String>,
+    pub output: String,
+    /// Skip spec validation (custom bit rates, sample rates, unusual combinations).
+    #[serde(default)]
+    pub unlocked: bool,
+}
+
+impl EncodeSpec {
+    pub fn display_name(&self) -> String {
+        let file = self.output.rsplit(['\\', '/']).next().unwrap_or(&self.output);
+        file.to_string()
+    }
+
+    /// `<output without extension>_log.txt`
+    pub fn log_path(&self) -> String {
+        let p = std::path::Path::new(&self.output);
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("encode");
+        p.with_file_name(format!("{stem}_log.txt")).to_string_lossy().into_owned()
+    }
+}
+
+pub struct Outcome {
+    pub message: String,
+    pub verified: bool,
+}
+
+pub enum Failure {
+    Canceled,
+    Error(String),
+}
+
+impl From<String> for Failure {
+    fn from(s: String) -> Self {
+        Failure::Error(s)
+    }
+}
+impl From<&str> for Failure {
+    fn from(s: &str) -> Self {
+        Failure::Error(s.to_string())
+    }
+}
+impl From<ff::Error> for Failure {
+    fn from(e: ff::Error) -> Self {
+        match e {
+            ff::Error::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        }
+    }
+}
+
+fn fmt_secs(s: f64) -> String {
+    format!("{:02}:{:02}:{:06.3}", (s / 3600.0) as u64, ((s % 3600.0) / 60.0) as u64, s % 60.0)
+}
+
+pub fn execute(
+    spec: &EncodeSpec,
+    verify: bool,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(f32, bool),
+) -> Result<Outcome, Failure> {
+    let t0 = Instant::now();
+    let mut log = String::new();
+    let result = execute_inner(spec, verify, cancel, on_progress, &mut log, t0);
+    // Always leave a log next to the output, whatever happened.
+    let status = match &result {
+        Ok(o) => format!("RESULT: {}", o.message),
+        Err(Failure::Canceled) => "RESULT: canceled".to_string(),
+        Err(Failure::Error(m)) => format!("RESULT: FAILED\n{m}"),
+    };
+    log.push_str(&format!("\n{status}\nTotal time: {:.1} s\n", t0.elapsed().as_secs_f64()));
+    let _ = std::fs::write(spec.log_path(), log);
+    result
+}
+
+fn execute_inner(
+    spec: &EncodeSpec,
+    verify: bool,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(f32, bool),
+    log: &mut String,
+    t0: Instant,
+) -> Result<Outcome, Failure> {
+    let dest = Destination::from_id(&spec.dest).ok_or("unknown destination")?;
+    let stream = StreamType::from_id(&spec.stream).ok_or("unknown stream type")?;
+    let layout: &'static ChannelLayout = ChannelLayout::find(&spec.layout).ok_or("unknown layout")?;
+    if !spec.unlocked {
+        validate(dest, stream, layout, spec.sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
+    }
+    let inputs: HashMap<Channel, PathBuf> = spec
+        .inputs
+        .iter()
+        .filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v))))
+        .collect();
+
+    // Read the real format of the inputs natively (rate, bit depth, length, timecode).
+    let stems = sw_pcm::StemSet::open(layout, &inputs).map_err(|e| e.to_string())?;
+    if !spec.unlocked && stems.sample_rate != spec.sample_rate {
+        return Err(format!("input files are {} Hz but the encode is set to {} Hz", stems.sample_rate, spec.sample_rate).into());
+    }
+    let start = spec.start.unwrap_or(0.0);
+    let total_src = stems.frames as f64 / stems.sample_rate as f64;
+    let span = spec.duration.unwrap_or(total_src - start).min(total_src - start).max(0.0);
+    if span <= 0.0 {
+        return Err("nothing to encode: the start time is at or past the end of the input".into());
+    }
+
+    log.push_str("Subwoofa encode log\n");
+    log.push_str(&format!("Output:       {}\n", spec.output));
+    log.push_str(&format!("Format:       {} / {} / {}\n", dest.display_name(), stream.display_name(), layout.name));
+    log.push_str(&format!("Sample rate:  {} Hz   Source bit depth: {}-bit   Bit rate: {}\n", spec.sample_rate, stems.bits, spec.bitrate.map(|b| format!("{b} kbps")).unwrap_or_else(|| "variable".into())));
+    log.push_str(&format!("Dialnorm:     {}\n", spec.dialnorm.map(|d| format!("-{d} dBFS")).unwrap_or_else(|| "n/a".into())));
+    log.push_str(&format!("Span:         start {}  length {}  (source {})\n", fmt_secs(start), fmt_secs(span), fmt_secs(total_src)));
+    if let Some(t) = stems.time_reference {
+        log.push_str(&format!("Broadcast time reference: {} samples ({})\n", t, fmt_secs(t as f64 / stems.sample_rate as f64)));
+    }
+    log.push_str(&format!("Unlocked:     {}\n", spec.unlocked));
+    for ch in layout.channels {
+        if let Some(p) = inputs.get(ch) {
+            log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
+        }
+    }
+    drop(stems);
+
+    let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
+    let job = ff::Job {
+        stream,
+        layout,
+        inputs,
+        output: PathBuf::from(&spec.output),
+        bitrate_kbps: spec.bitrate,
+        sample_rate: Some(spec.sample_rate),
+        dialnorm: spec.dialnorm,
+        start_secs: spec.start,
+        duration_secs: Some(span).filter(|_| spec.start.is_some() || spec.duration.is_some()),
+        ffmpeg,
+    };
+    log.push_str("Engine:       FFmpeg\n");
+
+    ff::run_progress(&job, span, cancel, &mut |p| on_progress(p, false))?;
+    let enc_secs = t0.elapsed().as_secs_f64();
+    let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
+    let avg_kbps = size as f64 * 8.0 / span / 1000.0;
+    log.push_str(&format!("\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n", fmt_secs(span), enc_secs, span / enc_secs.max(0.001), size as f64 / 1e6, avg_kbps));
+
+    if !verify {
+        return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
+    }
+    on_progress(1.0, true);
+    let bits = sw_pcm::StemSet::open(layout, &job.inputs).map(|s| s.bits).unwrap_or(24);
+    match ff::verify(&job, bits, span) {
+        Ok(msg) => {
+            log.push_str(&format!("Verify: {msg}\n"));
+            Ok(Outcome { message: msg, verified: true })
+        }
+        Err(e) => Err(Failure::from(e)),
+    }
+}

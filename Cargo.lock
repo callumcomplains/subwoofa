@@ -3035,6 +3035,8 @@ dependencies = [
  "serde_json",
  "sw-backend-ffmpeg",
  "sw-core",
+ "sw-pcm",
+ "sw-queue",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3075,6 +3077,16 @@ dependencies = [
  "serde",
  "sw-core",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sw-queue"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sw-backend-ffmpeg",
+ "sw-core",
+ "sw-pcm",
 ]
 
 [[package]]

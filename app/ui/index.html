@@ -87,6 +87,15 @@
   </section>
 </div>
 
+<section id="queue" class="queue" aria-label="Encode queue" hidden>
+  <div class="queue-head">
+    <h2>Queue</h2>
+    <span id="qCount" class="hint"></span>
+    <button id="qClear" class="plain">Clear finished</button>
+  </div>
+  <ul id="qList"></ul>
+</section>
+
 <footer class="out">
   <div class="dest-path">
     <button id="browse" class="plain">Output folder…</button>
@@ -108,6 +117,10 @@
         <small>Turns off the spec checks. Any bit rate or sample rate can be typed, every layout is offered for every format, and any stream type can go to any destination. The encoder may reject combinations it cannot make, and results may not play on real hardware.</small>
       </span>
     </label>
+    <div class="opt-row">
+      <label class="f small"><span>Max concurrent encodes</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
+      <label class="opt inline"><input type="checkbox" id="optVerify" checked><span><b>Auto verify</b><small>Lossless encodes are decoded and compared with the source (MD5); lossy ones must decode cleanly.</small></span></label>
+    </div>
     <menu><button value="close" class="go small">Done</button></menu>
   </form>
 </dialog>

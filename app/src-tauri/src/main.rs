@@ -7,6 +7,8 @@ use std::process::Command;
 use sw_backend_ffmpeg as ff;
 use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
 use sw_core::downmix::{Matrix, OFF};
+use sw_queue::{EncodeSpec, Queue};
+use tauri::{Emitter, Manager};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
 #[derive(Serialize)]
@@ -117,11 +119,28 @@ struct Probe {
     sample_rate: Option<u32>,
     bits: Option<u32>,
     duration: Option<f64>,
+    /// Broadcast-WAV start time in seconds since midnight, if the file carries one.
+    start_secs: Option<f64>,
 }
 
+/// Read file info natively (WAV/BWF/RF64/AIFF); fall back to ffprobe for other containers.
 #[tauri::command]
 fn probe(path: String) -> Result<Probe, String> {
-    let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found")?;
+    match sw_pcm::PcmReader::open(&path) {
+        Ok(r) => {
+            let i = r.info();
+            return Ok(Probe {
+                channels: Some(i.channels as u32),
+                sample_rate: Some(i.sample_rate),
+                bits: Some(i.bits as u32),
+                duration: Some(i.duration_secs()),
+                start_secs: i.start_secs(),
+            });
+        }
+        Err(sw_pcm::Error::NotPcm(_)) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let ffmpeg = ff::find_ffmpeg().ok_or("not a WAV/AIFF file, and ffmpeg is not available to read it")?;
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
     let out = Command::new(&ffprobe)
         .args(["-v", "error", "-select_streams", "a:0", "-show_entries",
@@ -131,8 +150,7 @@ fn probe(path: String) -> Result<Probe, String> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("ffprobe gave no JSON: {e}"))?;
     let s = &v["streams"][0];
     if s.is_null() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("ffprobe found no audio stream in {path} (using {}): {}", ffprobe.display(), err.trim()));
+        return Err(format!("no audio stream found in {path}: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let num = |x: &serde_json::Value| x.as_str().and_then(|t| t.parse::<u32>().ok()).or_else(|| x.as_u64().map(|n| n as u32));
     let bits = num(&s["bits_per_raw_sample"]).filter(|b| *b > 0).or(num(&s["bits_per_sample"]).filter(|b| *b > 0));
@@ -141,57 +159,39 @@ fn probe(path: String) -> Result<Probe, String> {
         sample_rate: num(&s["sample_rate"]),
         bits,
         duration: v["format"]["duration"].as_str().and_then(|d| d.parse().ok()),
+        start_secs: None,
     })
 }
 
-#[derive(Deserialize)]
-struct EncodeRequest {
-    dest: String,
-    stream: String,
-    layout: String,
-    sample_rate: u32,
-    bitrate: Option<u32>,
-    dialnorm: Option<u8>,
-    start: Option<f64>,
-    duration: Option<f64>,
-    inputs: HashMap<String, String>,
-    output: String,
-    /// Skip spec validation (custom bit rates, sample rates, unusual combinations).
-    #[serde(default)]
-    unlocked: bool,
-}
+/* ---- queue ---- */
 
 #[tauri::command]
-async fn encode(req: EncodeRequest) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (d, s) = parse(&req.dest, &req.stream)?;
-        let layout = ChannelLayout::find(&req.layout).ok_or("unknown layout")?;
-        if !req.unlocked {
-            validate(d, s, layout, req.sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
-        }
-        let inputs = req
-            .inputs
-            .iter()
-            .filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v))))
-            .collect();
-        let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
-        let job = ff::Job {
-            stream: s,
-            layout,
-            inputs,
-            output: PathBuf::from(&req.output),
-            bitrate_kbps: req.bitrate,
-            sample_rate: Some(req.sample_rate),
-            dialnorm: req.dialnorm,
-            start_secs: req.start,
-            duration_secs: req.duration,
-            ffmpeg,
-        };
-        ff::run(&job).map_err(|e| e.to_string())?;
-        Ok(format!("wrote {}", req.output))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+fn queue_add(queue: tauri::State<Queue>, spec: EncodeSpec, verify: bool) -> Result<u64, String> {
+    queue.enqueue(spec, verify)
+}
+#[tauri::command]
+fn queue_list(queue: tauri::State<Queue>) -> Vec<sw_queue::JobView> {
+    queue.snapshot()
+}
+#[tauri::command]
+fn queue_cancel(queue: tauri::State<Queue>, id: u64) {
+    queue.cancel(id)
+}
+#[tauri::command]
+fn queue_remove(queue: tauri::State<Queue>, id: u64) {
+    queue.remove(id)
+}
+#[tauri::command]
+fn queue_clear(queue: tauri::State<Queue>) {
+    queue.clear_finished()
+}
+#[tauri::command]
+fn queue_set_concurrency(queue: tauri::State<Queue>, n: usize) {
+    queue.set_concurrency(n)
+}
+#[tauri::command]
+fn read_log(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
 }
 
 /* ---- downmix ---- */
@@ -293,8 +293,18 @@ async fn downmix_check(req: CheckRequest) -> Result<ff::downmix::SatReport, Stri
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let default_jobs = std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(1).clamp(1, 4));
+            let queue = Queue::new(default_jobs, std::sync::Arc::new(move |snap| {
+                let _ = handle.emit("queue", snap);
+            }));
+            app.manage(queue);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            catalog, options, auto_import, probe, encode, downmix_default, downmix_safe, downmix_check
+            catalog, options, auto_import, probe, downmix_default, downmix_safe, downmix_check,
+            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");

@@ -1,0 +1,11 @@
+[package]
+name = "sw-queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+sw-backend-ffmpeg = { path = "../sw-backend-ffmpeg" }
+sw-pcm = { path = "../sw-pcm" }
+serde.workspace = true

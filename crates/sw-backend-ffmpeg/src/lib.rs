@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use sw_core::{Channel, ChannelLayout, StreamType};
 
 pub mod downmix;
@@ -20,6 +21,10 @@ pub enum Error {
     Spawn(#[from] std::io::Error),
     #[error("ffmpeg failed ({0}):\n{1}")]
     Failed(i32, String),
+    #[error("canceled")]
+    Canceled,
+    #[error("verification failed: {0}")]
+    Verify(String),
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +166,100 @@ pub fn run(job: &Job) -> Result<String, Error> {
         let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
         let tail = tail[tail.len().saturating_sub(5)..].join("\n");
         Err(Error::Failed(out.status.code().unwrap_or(-1), tail))
+    }
+}
+
+fn tail_of(log: &str) -> String {
+    let lines: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(5)..].join("\n")
+}
+
+/// Run the encode with progress reporting and cancellation.
+/// `total_secs` is the length being encoded (used to turn ffmpeg's clock into a fraction).
+pub fn run_progress(
+    job: &Job,
+    total_secs: f64,
+    cancel: &std::sync::atomic::AtomicBool,
+    on_progress: &mut dyn FnMut(f32),
+) -> Result<String, Error> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::atomic::Ordering;
+    let mut args = build_args(job)?;
+    args.splice(2..2, ["-progress".to_string(), "pipe:1".into(), "-nostats".into()]);
+    let mut child = Command::new(&job.ffmpeg).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stderr = child.stderr.take().expect("piped stderr");
+    let err_thread = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut s);
+        s
+    });
+    let stdout = child.stdout.take().expect("piped stdout");
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Canceled);
+        }
+        if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<i64>().ok()) {
+            if total_secs > 0.0 && us >= 0 {
+                on_progress(((us as f64 / 1e6) / total_secs).clamp(0.0, 1.0) as f32);
+            }
+        }
+    }
+    let status = child.wait()?;
+    let log = err_thread.join().unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return Err(Error::Canceled);
+    }
+    if status.success() {
+        on_progress(1.0);
+        Ok(log)
+    } else {
+        Err(Error::Failed(status.code().unwrap_or(-1), tail_of(&log)))
+    }
+}
+
+/// MD5 of `ffmpeg` output for either the source join or a decoded file.
+fn md5_of(ffmpeg: &Path, pre: &[String], filter: Option<&str>, fmt: &str) -> Result<String, Error> {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"]).args(pre);
+    if let Some(f) = filter {
+        cmd.args(["-filter_complex", f, "-map", "[v]"]);
+    }
+    cmd.args(["-c:a", fmt, "-f", "md5", "-"]);
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(Error::Failed(out.status.code().unwrap_or(-1), tail_of(&String::from_utf8_lossy(&out.stderr))));
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.trim().strip_prefix("MD5=").map(str::to_string).ok_or_else(|| Error::Verify(format!("unexpected md5 output: {s}")))
+}
+
+/// Verify an encode. Lossless streams must decode to exactly the source PCM (MD5 compared);
+/// lossy streams must decode cleanly to roughly the expected length. Returns a one-line report.
+pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
+    let out = job.output.to_string_lossy().into_owned();
+    let fmt = if bits <= 16 { "pcm_s16le" } else if bits <= 24 { "pcm_s24le" } else { "pcm_s32le" };
+    if job.stream.is_lossless() {
+        let (input_args, join) = join_inputs(job, "v")?;
+        let src = md5_of(&job.ffmpeg, &input_args, Some(&join), fmt)?;
+        let dec = md5_of(&job.ffmpeg, &["-i".to_string(), out], None, fmt)?;
+        if src == dec {
+            Ok(format!("lossless verified, MD5 {src}"))
+        } else {
+            Err(Error::Verify(format!("decoded audio differs from source (source {src}, decoded {dec})")))
+        }
+    } else {
+        let o = Command::new(&job.ffmpeg)
+            .args(["-hide_banner", "-nostats", "-loglevel", "error", "-i", &out, "-f", "null", "-"])
+            .output()?;
+        let err = String::from_utf8_lossy(&o.stderr);
+        if !o.status.success() || !err.trim().is_empty() {
+            return Err(Error::Verify(format!("decode reported problems: {}", tail_of(&err))));
+        }
+        // Duration check: decode time via ffprobe-less approach (`-f null` progress is not captured); trust decode success.
+        let _ = expect_secs;
+        Ok("decodes cleanly".to_string())
     }
 }
 

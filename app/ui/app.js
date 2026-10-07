@@ -336,20 +336,48 @@ function update() {
 
 async function encode() {
   const entire = $("entire").checked;
-  $("go").disabled = true;
-  log("Encoding…");
   try {
-    const r = await invoke("encode", { req: {
+    const id = await invoke("queue_add", { verify: autoVerify, spec: {
       dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
       sample_rate: curRate(),
       bitrate: $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
       dialnorm: dialnormValue(), unlocked,
       start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
-      inputs, output: `${outDir}\\${$("outname").value.trim()}${$("ext").textContent}`,
+      inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
     }});
-    log(r, "ok");
+    log(`Queued as job ${id}.`, "ok");
   } catch (e) { log(String(e), "bad"); }
-  update();
+}
+
+/* ---------- queue ---------- */
+
+let autoVerify = true;
+const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function renderQueue(jobs) {
+  $("queue").hidden = jobs.length === 0;
+  const active = jobs.filter((j) => !["passed", "completed", "failed", "canceled"].includes(j.state)).length;
+  $("qCount").textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}${active ? `, ${active} active` : ""}`;
+  const ul = $("qList");
+  ul.innerHTML = "";
+  for (const j of jobs) {
+    const li = document.createElement("li");
+    const done = j.state === "passed" || j.state === "completed";
+    const fail = j.state === "failed" || j.state === "canceled";
+    const live = j.state === "running" || j.state === "verifying";
+    const label = { pending: "Waiting", running: "Encoding", verifying: "Verifying", passed: "Passed", completed: "Done", failed: "Failed", canceled: "Canceled" }[j.state];
+    li.innerHTML = `<span class="qstate ${j.state}">${label}</span>
+      <span class="qname" title="${j.output.replace(/"/g, "&quot;")}">${j.name}${j.message ? `<small class="${j.state === "failed" ? "bad" : ""}" title="${j.message.replace(/"/g, "&quot;")}">${j.message.split(String.fromCharCode(10))[0]}</small>` : ""}</span>
+      <span class="bar-track"><span class="bar-fill ${done ? "done" : fail ? "fail" : ""}" style="display:block;width:${Math.round(j.progress * 100)}%"></span></span>
+      <span class="qtime">${live || done || fail ? fmtClock(j.elapsed_secs) : ""}</span>
+      <span class="qbtns"></span>`;
+    const btns = li.querySelector(".qbtns");
+    const add = (txt, title, fn) => { const b = document.createElement("button"); b.textContent = txt; b.title = title; b.className = "plain"; b.onclick = fn; btns.append(b); };
+    if (j.state === "pending" || live) add("Cancel", "Cancel this job", () => invoke("queue_cancel", { id: j.id }));
+    if (!live) add("Log", "Show this job's log", async () => { try { log(await invoke("read_log", { path: j.log_path })); } catch (e) { log(String(e), "bad"); } });
+    if (!live) add("✕", "Remove from the list", () => invoke("queue_remove", { id: j.id }));
+    ul.append(li);
+  }
 }
 
 function setUnlocked(v) {
@@ -386,6 +414,16 @@ async function init() {
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };
   $("go").onclick = encode;
+  $("qClear").onclick = () => invoke("queue_clear");
+  const conc = Number(store.get("conc")) || 2;
+  $("optConc").value = conc;
+  invoke("queue_set_concurrency", { n: conc });
+  $("optConc").onchange = () => { const n = Math.max(1, Math.min(8, Number($("optConc").value) || 1)); $("optConc").value = n; store.set("conc", n); invoke("queue_set_concurrency", { n }); };
+  autoVerify = store.get("verify") !== "0";
+  $("optVerify").checked = autoVerify;
+  $("optVerify").onchange = () => { autoVerify = $("optVerify").checked; store.set("verify", autoVerify ? "1" : "0"); };
+  await window.__TAURI__.event.listen("queue", (e) => renderQueue(e.payload));
+  renderQueue(await invoke("queue_list"));
   $("openSettings").onclick = () => $("settings").showModal();
   $("dmTarget").onchange = () => dmLoad(true);
   $("dmReset").onclick = () => dmLoad(true);
