@@ -40,6 +40,10 @@ pub struct Job {
     /// Encode only this span of the source (seconds): start offset and length.
     pub start_secs: Option<f64>,
     pub duration_secs: Option<f64>,
+    /// Exact number of sample frames to encode (per channel, at the source rate). When set the
+    /// inputs are padded and the joined stream is trimmed to exactly this length, which avoids
+    /// FFmpeg's `join` filter occasionally dropping the final partial frame.
+    pub frames: Option<u64>,
     pub ffmpeg: PathBuf,
 }
 
@@ -92,8 +96,14 @@ pub fn supports(stream: StreamType) -> bool {
 /// stream with the layout's speaker positions, ending in the output pad `[label]`.
 pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String), Error> {
     let mut args = Vec::new();
-    let mut map = String::new();
     let mut names = Vec::new();
+    let n = job.layout.channel_count();
+    // with a known length, each input is padded so no input can run dry before the trim
+    let (pads, pad_pad): (Vec<String>, &str) = match job.frames {
+        Some(_) => ((0..n).map(|i| format!("[{i}:a]apad=pad_len=16384[p{i}]")).collect(), "p"),
+        None => (Vec::new(), ""),
+    };
+    let mut map = String::new();
     for (i, ch) in job.layout.channels.iter().enumerate() {
         let path = job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?;
         if let Some(s) = job.start_secs {
@@ -103,16 +113,32 @@ pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String
             args.extend(["-t".into(), d.to_string()]);
         }
         args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
-        map.push_str(&format!("[{i}:a]"));
+        if pad_pad.is_empty() {
+            map.push_str(&format!("[{i}:a]"));
+        } else {
+            map.push_str(&format!("[p{i}]"));
+        }
         names.push(ff_name(*ch).ok_or(Error::Unsupported("channel"))?);
     }
-    let n = job.layout.channel_count();
-    let filter = if n == 1 {
-        format!("[0:a]anull[{label}]")
+    let trim = job.frames.map(|f| format!("atrim=end_sample={f}"));
+    let mut parts: Vec<String> = pads;
+    if n == 1 {
+        let src = if pad_pad.is_empty() { "[0:a]".to_string() } else { "[p0]".to_string() };
+        parts.push(match &trim {
+            Some(t) => format!("{src}{t}[{label}]"),
+            None => format!("{src}anull[{label}]"),
+        });
     } else {
-        format!("{map}join=inputs={n}:channel_layout={}[{label}]", names.join("+"))
-    };
-    Ok((args, filter))
+        let joined = match &trim {
+            Some(_) => "jx".to_string(),
+            None => label.to_string(),
+        };
+        parts.push(format!("{map}join=inputs={n}:channel_layout={}[{joined}]", names.join("+")));
+        if let Some(t) = &trim {
+            parts.push(format!("[jx]{t}[{label}]"));
+        }
+    }
+    Ok((args, parts.join(";")))
 }
 
 /// Build the argument list (without the program name).
@@ -220,11 +246,14 @@ pub fn run_progress(
 }
 
 /// MD5 of `ffmpeg` output for either the source join or a decoded file.
-fn md5_of(ffmpeg: &Path, pre: &[String], filter: Option<&str>, fmt: &str) -> Result<String, Error> {
+fn md5_of(ffmpeg: &Path, pre: &[String], filter: Option<&str>, trim_to: Option<u64>, fmt: &str) -> Result<String, Error> {
     let mut cmd = Command::new(ffmpeg);
     cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"]).args(pre);
     if let Some(f) = filter {
         cmd.args(["-filter_complex", f, "-map", "[v]"]);
+    } else if let Some(n) = trim_to {
+        // a lossless codec may pad its last frame with zeros; compare only the real samples
+        cmd.args(["-af", &format!("atrim=end_sample={n}")]);
     }
     cmd.args(["-c:a", fmt, "-f", "md5", "-"]);
     let out = cmd.output()?;
@@ -242,8 +271,8 @@ pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
     let fmt = if bits <= 16 { "pcm_s16le" } else if bits <= 24 { "pcm_s24le" } else { "pcm_s32le" };
     if job.stream.is_lossless() {
         let (input_args, join) = join_inputs(job, "v")?;
-        let src = md5_of(&job.ffmpeg, &input_args, Some(&join), fmt)?;
-        let dec = md5_of(&job.ffmpeg, &["-i".to_string(), out], None, fmt)?;
+        let src = md5_of(&job.ffmpeg, &input_args, Some(&join), None, fmt)?;
+        let dec = md5_of(&job.ffmpeg, &["-i".to_string(), out], None, job.frames, fmt)?;
         if src == dec {
             Ok(format!("lossless verified, MD5 {src}"))
         } else {
@@ -278,7 +307,7 @@ mod tests {
     fn job(stream: StreamType) -> Job {
         let layout = ChannelLayout::find("5.1").unwrap();
         let inputs = layout.channels.iter().map(|c| (*c, PathBuf::from(format!("{}.wav", c.short())))).collect();
-        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, ffmpeg: "ffmpeg".into() }
+        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, frames: None, ffmpeg: "ffmpeg".into() }
     }
 
     #[test]

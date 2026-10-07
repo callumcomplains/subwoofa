@@ -54,8 +54,8 @@ fn catalog() -> Catalog {
                     name: s.display_name(),
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
-                    available: ff::supports(*s) || *s == StreamType::Ac3,
-                    native: *s == StreamType::Ac3,
+                    available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3),
+                    native: matches!(*s, StreamType::Ac3 | StreamType::Eac3),
                 })
                 .collect(),
         })
@@ -67,8 +67,8 @@ fn catalog() -> Catalog {
             name: s.display_name(),
             lossless: s.is_lossless(),
             sample_rates: s.sample_rates(),
-            available: ff::supports(*s) || *s == StreamType::Ac3,
-            native: *s == StreamType::Ac3,
+            available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3),
+            native: matches!(*s, StreamType::Ac3 | StreamType::Eac3),
         })
         .collect();
     Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }
@@ -286,7 +286,7 @@ async fn downmix_check(req: CheckRequest) -> Result<ff::downmix::SatReport, Stri
         let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
         let job = ff::Job {
             stream: StreamType::Ac3, layout, inputs, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None,
-            dialnorm: None, start_secs: req.start, duration_secs: req.duration, ffmpeg,
+            dialnorm: None, start_secs: req.start, duration_secs: req.duration, frames: None, ffmpeg,
         };
         ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())
     })

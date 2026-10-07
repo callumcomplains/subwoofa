@@ -111,14 +111,21 @@ fn native_engine_runs_in_the_queue() {
     q.enqueue(s, true).unwrap();
     let snap = wait_until(&q, |s| s.iter().all(|j| j.state.is_final()));
     assert_eq!(snap[0].state, State::Passed, "{:?}", snap[0]);
-    assert!(std::fs::read_to_string(dir.join("n_log.txt")).unwrap().contains("Subwoofa native AC-3"));
+    assert!(std::fs::read_to_string(dir.join("n_log.txt")).unwrap().contains("Subwoofa native encoder"));
+    // E-AC-3 through the native engine, at a bit rate AC-3 cannot express
+    let mut e = spec(&dir, "n.eac3", "eac3", &inputs);
+    e.engine = "native".into();
+    e.bitrate = Some(300);
+    q.enqueue(e, true).unwrap();
+    let snap = wait_until(&q, |s| s.len() == 2 && s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[1].state, State::Passed, "{:?}", snap[1]);
     // native engine refuses formats it cannot make
     let mut bad = spec(&dir, "m.thd", "truehd", &inputs);
     bad.engine = "native".into();
     q.enqueue(bad, false).unwrap();
-    let snap = wait_until(&q, |s| s.len() == 2 && s.iter().all(|j| j.state.is_final()));
-    assert_eq!(snap[1].state, State::Failed);
-    assert!(snap[1].message.contains("native engine"), "{}", snap[1].message);
+    let snap = wait_until(&q, |s| s.len() == 3 && s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[2].state, State::Failed);
+    assert!(snap[2].message.contains("native engine"), "{}", snap[2].message);
     q.shutdown();
 }
 

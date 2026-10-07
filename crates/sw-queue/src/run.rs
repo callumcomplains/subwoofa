@@ -144,7 +144,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && stream != StreamType::Ac3 {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -163,9 +163,10 @@ fn execute_inner(
         dialnorm: spec.dialnorm,
         start_secs: spec.start,
         duration_secs: Some(span).filter(|_| spec.start.is_some() || spec.duration.is_some()),
+        frames: Some((span * stems.sample_rate as f64).round() as u64),
         ffmpeg: ffmpeg.clone().unwrap_or_default(),
     };
-    log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native AC-3" } else { "FFmpeg" }));
+    log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
 
     if native {
         let req = sw_codec_ac3::native::Request {
@@ -175,6 +176,7 @@ fn execute_inner(
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
+            eac3: stream == StreamType::Eac3,
         };
         sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_ac3::native::NativeError::Canceled => Failure::Canceled,

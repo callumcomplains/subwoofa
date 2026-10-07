@@ -26,6 +26,8 @@ pub struct Request<'a> {
     pub start_secs: f64,
     pub duration_secs: Option<f64>,
     pub output: &'a Path,
+    /// Write E-AC-3 instead of AC-3.
+    pub eac3: bool,
 }
 
 pub struct Stats {
@@ -50,6 +52,7 @@ pub fn encode_to_file(
         dialnorm: req.dialnorm,
         dolby_surround: map.dolby_surround,
         bandwidth_hz: None,
+        eac3: req.eac3,
     })?;
     let first = ((req.start_secs * rate as f64) as u64).min(stems.frames);
     stems.seek_frame(first)?;

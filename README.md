@@ -14,7 +14,7 @@ Early foundation. What works today:
 | Destination / stream type / sample rate / bit-rate validation matrix | done (first pass) |
 | CLI `subwoofa layouts / formats / encode` | done |
 | FFmpeg backend: AC-3, E-AC-3, DTS core | working |
-| Native AC-3 encoder (own MDCT, exponent coding, bit allocation, CRCs), 1.0 to 5.1 | working; verified against a reference decoder, about 70x real time |
+| Native AC-3 and E-AC-3 (Dolby Digital Plus) encoders, 1.0 to 5.1, any E-AC-3 bit rate 8 to 1024 kbps | working; verified against a reference decoder, about 70x real time |
 | Native WAV / BWF / RF64 / AIFF reader, stem-set channel mapping | done |
 | Encode queue: progress, cancel, concurrency, auto-verify (lossless MD5), per-job logs | done |
 | FFmpeg backend: TrueHD / MLP | working; 5.1 verified bit-exact lossless on real PCM |

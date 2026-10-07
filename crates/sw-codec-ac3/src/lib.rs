@@ -55,6 +55,8 @@ pub struct Config {
     pub dolby_surround: bool,
     /// Override the automatic low-pass (Hz).
     pub bandwidth_hz: Option<u32>,
+    /// Write Enhanced AC-3 (Dolby Digital Plus) frames instead of AC-3.
+    pub eac3: bool,
 }
 
 /// How a layout maps onto AC-3 channels.
@@ -317,10 +319,19 @@ impl Encoder {
             32_000 => 2,
             r => return Err(Error::Unsupported(format!("AC-3 supports 48, 44.1 and 32 kHz, not {r} Hz"))),
         };
-        let size_idx = BITRATES
-            .iter()
-            .position(|b| *b == cfg.bitrate_kbps)
-            .ok_or_else(|| Error::Unsupported(format!("{} kbps is not a standard AC-3 bit rate ({:?})", cfg.bitrate_kbps, BITRATES)))?;
+        let size_idx = if cfg.eac3 {
+            // E-AC-3 frames are sized in whole 16-bit words, so any bit rate is possible
+            // within a single independent substream.
+            if !(8..=1024).contains(&cfg.bitrate_kbps) {
+                return Err(Error::Unsupported(format!("{} kbps is outside the single-substream E-AC-3 range (8 to 1024)", cfg.bitrate_kbps)));
+            }
+            0
+        } else {
+            BITRATES
+                .iter()
+                .position(|b| *b == cfg.bitrate_kbps)
+                .ok_or_else(|| Error::Unsupported(format!("{} kbps is not a standard AC-3 bit rate ({:?})", cfg.bitrate_kbps, BITRATES)))?
+        };
         if !(1..=7).contains(&cfg.acmod) {
             return Err(Error::Unsupported("unsupported audio coding mode".into()));
         }
@@ -387,6 +398,13 @@ impl Encoder {
     }
 
     fn frame_words(&mut self) -> (usize, u32) {
+        if self.cfg.eac3 {
+            // any word count works, so track the fraction to hit the average bit rate exactly
+            let exact = self.cfg.bitrate_kbps as f64 * 1000.0 * SAMPLES_PER_FRAME as f64 / self.cfg.sample_rate as f64 / 16.0 + self.frac;
+            let words = exact.floor();
+            self.frac = exact - words;
+            return ((words as usize).clamp(8, 2048), 0);
+        }
         let base = FRAME_SIZE_WORDS[self.size_idx * 2 * 3 + self.fscod] as usize;
         if self.fscod == 1 {
             // 44.1 kHz frame sizes alternate so the average bit rate is exact
@@ -508,53 +526,138 @@ impl Encoder {
     fn write_frame(&self, chans: &[ChannelPlan], frmsizecod: u32, words: usize, v: u32, measure_only: bool) -> (usize, Vec<u8>) {
         let cfg = &self.cfg;
         let mut w = BitWriter::new();
-        // syncinfo
-        w.put(0x0B77, 16);
-        w.put(0, 16); // crc1, patched below
-        w.put(self.fscod as u32, 2);
-        w.put(frmsizecod, 6);
-        // bsi
-        w.put(8, 5); // bsid
-        w.put(0, 3); // bsmod
-        w.put(cfg.acmod as u32, 3);
-        if cfg.acmod & 1 != 0 && cfg.acmod != 1 {
-            w.put(0, 2); // cmixlev -3 dB
+        // Frame-level exponent strategy (E-AC-3 only): usable when every channel's six-block
+        // pattern appears in the standard's table of 32 combinations.
+        let pattern = |cp: &ChannelPlan| -> [u8; 6] {
+            let mut p = [0u8; 6];
+            for &(first, _) in &self.sets {
+                p[first] = cp.strat.code() as u8;
+            }
+            p
+        };
+        let frame_expstr: Option<Vec<u32>> = if cfg.eac3 {
+            chans
+                .iter()
+                .take(self.nfch)
+                .map(|cp| EAC3_FRM_EXPSTR.iter().position(|r| *r == pattern(cp)).map(|i| i as u32))
+                .collect()
+        } else {
+            None
+        };
+        let (csnr, fsnr) = (v >> 4, v & 15);
+        if cfg.eac3 {
+            w.put(0x0B77, 16);
+            w.put(0, 2); // strmtyp: independent
+            w.put(0, 3); // substreamid
+            w.put(words as u32 - 1, 11);
+            w.put(self.fscod as u32, 2);
+            w.put(3, 2); // numblkscod: six blocks
+            w.put(cfg.acmod as u32, 3);
+            w.put(u32::from(cfg.lfe), 1);
+            w.put(16, 5); // bsid
+            w.put(cfg.dialnorm.clamp(1, 31) as u32, 5);
+            w.put(0, 1); // compre
+            w.put(0, 1); // mixmdate
+            w.put(0, 1); // infomdate
+            w.put(0, 1); // addbsie
+            // audio frame header
+            w.put(u32::from(frame_expstr.is_none()), 1); // expstre: per-block strategies
+            w.put(0, 1); // ahte
+            w.put(0, 2); // snroffststr: one offset for the frame
+            w.put(0, 1); // transproce
+            w.put(0, 1); // blkswe
+            w.put(1, 1); // dithflage: per-block dither flags follow (all zero)
+            w.put(0, 1); // bamode
+            w.put(0, 1); // frmfgaincode
+            w.put(0, 1); // dbaflde
+            w.put(0, 1); // skipflde
+            w.put(0, 1); // spxattene
+            if cfg.acmod > 1 {
+                w.put(0, 1); // cplinu, block 0
+                for _ in 1..BLOCKS {
+                    w.put(0, 1); // cplstre
+                }
+            }
+            match &frame_expstr {
+                Some(idx) => {
+                    for i in idx {
+                        w.put(*i, 5);
+                    }
+                }
+                None => {
+                    for blk in 0..BLOCKS {
+                        let new_exps = self.sets.iter().any(|&(f, _)| f == blk);
+                        for cp in chans.iter().take(self.nfch) {
+                            w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
+                        }
+                    }
+                }
+            }
+            if cfg.lfe {
+                for blk in 0..BLOCKS {
+                    w.put(u32::from(self.sets.iter().any(|&(f, _)| f == blk)), 1);
+                }
+            }
+            for ch in 0..self.nfch {
+                w.put(frame_expstr.as_ref().map_or(0, |i| i[ch]), 5); // convexpstr
+            }
+            w.put(csnr, 6);
+            w.put(fsnr, 4);
+            w.put(0, 1); // blkstrtinfoe
+        } else {
+            // syncinfo
+            w.put(0x0B77, 16);
+            w.put(0, 16); // crc1, patched below
+            w.put(self.fscod as u32, 2);
+            w.put(frmsizecod, 6);
+            // bsi
+            w.put(8, 5); // bsid
+            w.put(0, 3); // bsmod
+            w.put(cfg.acmod as u32, 3);
+            if cfg.acmod & 1 != 0 && cfg.acmod != 1 {
+                w.put(0, 2); // cmixlev -3 dB
+            }
+            if cfg.acmod & 4 != 0 {
+                w.put(0, 2); // surmixlev -3 dB
+            }
+            if cfg.acmod == 2 {
+                w.put(if cfg.dolby_surround { 2 } else { 0 }, 2);
+            }
+            w.put(u32::from(cfg.lfe), 1);
+            w.put(cfg.dialnorm.clamp(1, 31) as u32, 5);
+            w.put(0, 1); // compre
+            w.put(0, 1); // langcode
+            w.put(0, 1); // audprodie
+            w.put(0, 1); // copyrightb
+            w.put(1, 1); // origbs
+            w.put(0, 1); // timecod1e
+            w.put(0, 1); // timecod2e
+            w.put(0, 1); // addbsie
         }
-        if cfg.acmod & 4 != 0 {
-            w.put(0, 2); // surmixlev -3 dB
-        }
-        if cfg.acmod == 2 {
-            w.put(if cfg.dolby_surround { 2 } else { 0 }, 2);
-        }
-        w.put(u32::from(cfg.lfe), 1);
-        w.put(cfg.dialnorm.clamp(1, 31) as u32, 5);
-        w.put(0, 1); // compre
-        w.put(0, 1); // langcode
-        w.put(0, 1); // audprodie
-        w.put(0, 1); // copyrightb
-        w.put(1, 1); // origbs
-        w.put(0, 1); // timecod1e
-        w.put(0, 1); // timecod2e
-        w.put(0, 1); // addbsie
 
         let baps: Vec<Vec<Vec<u8>>> = if measure_only {
             Vec::new()
         } else {
             chans.iter().map(|cp| (0..self.sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect()
         };
-        let (csnr, fsnr) = (v >> 4, v & 15);
 
         for blk in 0..BLOCKS {
             let set = self.sets.iter().position(|&(f, c)| blk >= f && blk < f + c).unwrap();
             let new_exps = self.sets[set].0 == blk;
-            for _ in 0..self.nfch {
-                w.put(0, 1); // blksw
+            if !cfg.eac3 {
+                for _ in 0..self.nfch {
+                    w.put(0, 1); // blksw
+                }
             }
+            // dither off: zero-bit bins decode as silence rather than noise (explicit in both
+            // syntaxes; E-AC-3 enables the per-block flags through dithflage in the frame header)
             for _ in 0..self.nfch {
                 w.put(0, 1); // dithflag
             }
             w.put(0, 1); // dynrnge
-            if blk == 0 {
+            if cfg.eac3 {
+                w.put(0, 1); // spxinu
+            } else if blk == 0 {
                 w.put(1, 1); // cplstre
                 w.put(0, 1); // cplinu
             } else {
@@ -562,17 +665,21 @@ impl Encoder {
             }
             if cfg.acmod == 2 {
                 if blk == 0 {
-                    w.put(1, 1); // rematstr
+                    if !cfg.eac3 {
+                        w.put(1, 1); // rematstr
+                    }
                     w.put(0, 4); // no band rematrixed
                 } else {
                     w.put(0, 1);
                 }
             }
-            for cp in chans.iter().take(self.nfch) {
-                w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
-            }
-            if cfg.lfe {
-                w.put(u32::from(new_exps), 1);
+            if !cfg.eac3 {
+                for cp in chans.iter().take(self.nfch) {
+                    w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
+                }
+                if cfg.lfe {
+                    w.put(u32::from(new_exps), 1);
+                }
             }
             if new_exps {
                 for cp in chans.iter().take(self.nfch) {
@@ -585,25 +692,29 @@ impl Encoder {
                     }
                 }
             }
-            if blk == 0 {
-                w.put(1, 1); // baie
-                w.put(SDCYCOD as u32, 2);
-                w.put(FDCYCOD as u32, 2);
-                w.put(SGAINCOD as u32, 2);
-                w.put(DBPBCOD as u32, 2);
-                w.put(FLOORCOD as u32, 3);
-                w.put(1, 1); // snroffste
-                w.put(csnr, 6);
-                for _ in 0..chans.len() {
-                    w.put(fsnr, 4);
-                    w.put(FGAINCOD as u32, 3);
-                }
+            if cfg.eac3 {
+                w.put(0, 1); // convsnroffste
             } else {
-                w.put(0, 1); // baie
-                w.put(0, 1); // snroffste
+                if blk == 0 {
+                    w.put(1, 1); // baie
+                    w.put(SDCYCOD as u32, 2);
+                    w.put(FDCYCOD as u32, 2);
+                    w.put(SGAINCOD as u32, 2);
+                    w.put(DBPBCOD as u32, 2);
+                    w.put(FLOORCOD as u32, 3);
+                    w.put(1, 1); // snroffste
+                    w.put(csnr, 6);
+                    for _ in 0..chans.len() {
+                        w.put(fsnr, 4);
+                        w.put(FGAINCOD as u32, 3);
+                    }
+                } else {
+                    w.put(0, 1); // baie
+                    w.put(0, 1); // snroffste
+                }
+                w.put(0, 1); // deltbaie
+                w.put(0, 1); // skiple
             }
-            w.put(0, 1); // deltbaie
-            w.put(0, 1); // skiple
 
             if !measure_only {
                 // mantissas: collect the block's quantized values, then emit them with the grouped
@@ -631,14 +742,22 @@ impl Encoder {
         let total = words * 16;
         let mut bytes = w.finish_padded(total - 16);
         bytes.extend_from_slice(&[0, 0]);
-        // crc1 covers the first 5/8 of the frame and must be in place before crc2 is computed,
-        // because crc2 covers everything after the sync word, crc1 included.
         let fs = total / 8;
-        let f58 = ((fs >> 2) + (fs >> 4)) << 1;
-        let after = crc16(&bytes[4..f58]);
-        let c1 = crc1_field(after, f58 - 2);
-        bytes[2..4].copy_from_slice(&c1.to_be_bytes());
-        let crc2 = crc16(&bytes[2..fs - 2]);
+        if !cfg.eac3 {
+            // crc1 covers the first 5/8 of the frame and must be in place before crc2 is computed,
+            // because crc2 covers everything after the sync word, crc1 included.
+            let f58 = ((fs >> 2) + (fs >> 4)) << 1;
+            let after = crc16(&bytes[4..f58]);
+            let c1 = crc1_field(after, f58 - 2);
+            bytes[2..4].copy_from_slice(&c1.to_be_bytes());
+        }
+        let mut crc2 = crc16(&bytes[2..fs - 2]);
+        if crc2 == 0x0B77 {
+            // never let the CRC imitate a sync word: flip the reserved bit (x^16+x^15+x^2+1 xor
+            // 0x8005 leaves the residual unchanged)
+            bytes[fs - 3] ^= 1;
+            crc2 ^= 0x8005;
+        }
         bytes[fs - 2..].copy_from_slice(&crc2.to_be_bytes());
         (side_bits, bytes)
     }
@@ -794,7 +913,7 @@ mod tests {
 
     #[test]
     fn frame_has_correct_size_and_valid_crcs() {
-        let cfg = Config { acmod: 7, lfe: true, sample_rate: 48_000, bitrate_kbps: 448, dialnorm: 31, dolby_surround: false, bandwidth_hz: None };
+        let cfg = Config { acmod: 7, lfe: true, sample_rate: 48_000, bitrate_kbps: 448, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false };
         let mut enc = Encoder::new(cfg).unwrap();
         let sig: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
         let chans: Vec<&[f32]> = (0..6).map(|_| &sig[..]).collect();
@@ -808,7 +927,10 @@ mod tests {
 
     #[test]
     fn rejects_non_standard_bitrates() {
-        let cfg = Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 300, dialnorm: 31, dolby_surround: false, bandwidth_hz: None };
-        assert!(Encoder::new(cfg).is_err());
+        let cfg = Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 300, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false };
+        assert!(Encoder::new(cfg.clone()).is_err());
+        // ...but E-AC-3 takes any rate in range
+        assert!(Encoder::new(Config { eac3: true, ..cfg.clone() }).is_ok());
+        assert!(Encoder::new(Config { eac3: true, bitrate_kbps: 2000, ..cfg }).is_err());
     }
 }

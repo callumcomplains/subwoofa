@@ -38,6 +38,10 @@ fn bass(n: usize, level: f32) -> Vec<f32> {
 }
 
 fn run(acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[usize], min_snr: f32) {
+    run_codec(false, acmod, lfe, bitrate, decoded_order, min_snr)
+}
+
+fn run_codec(eac3: bool, acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[usize], min_snr: f32) {
     if !have_ffmpeg() {
         eprintln!("ffmpeg missing, skipping");
         return;
@@ -49,7 +53,7 @@ fn run(acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[usize], min_snr: f32
     let sigs: Vec<Vec<f32>> = (0..nch)
         .map(|c| if lfe && c == nfch { bass(n, 0.6) } else { signal(c, n, 0.6) })
         .collect();
-    let cfg = Config { acmod, lfe, sample_rate: 48_000, bitrate_kbps: bitrate, dialnorm: 31, dolby_surround: false, bandwidth_hz: None };
+    let cfg = Config { acmod, lfe, sample_rate: 48_000, bitrate_kbps: bitrate, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3 };
     let mut enc = Encoder::new(cfg).unwrap();
     let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
     let mut bytes = Vec::new();
@@ -61,9 +65,9 @@ fn run(acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[usize], min_snr: f32
         let refs: Vec<&[f32]> = chunk.iter().map(|v| v.as_slice()).collect();
         bytes.extend(enc.encode_frame(&refs));
     }
-    let dir = std::env::temp_dir().join(format!("sw_ac3_rt_{}_{}_{}", std::process::id(), acmod, lfe));
+    let dir = std::env::temp_dir().join(format!("sw_ac3_rt_{}_{}_{}_{}_{}", std::process::id(), acmod, lfe, eac3, bitrate));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("t.ac3");
+    let path = dir.join(if eac3 { "t.eac3" } else { "t.ac3" });
     std::fs::write(&path, &bytes).unwrap();
 
     let out = Command::new("ffmpeg")
@@ -88,7 +92,11 @@ fn run(acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[usize], min_snr: f32
             err += (a - b) * (a - b);
         }
         let snr = 10.0 * (sig / err.max(1e-30)).log10();
-        assert!(snr >= min_snr as f64, "acmod {acmod} channel {src_ch}: SNR {snr:.1} dB < {min_snr} dB");
+        // the LFE carries seven bins of near-pure bass tones: at low rates it legitimately
+        // gets fewer dB than the full-bandwidth channels, so it has a looser floor
+        let is_lfe = lfe && src_ch == nfch;
+        let floor = if is_lfe { min_snr as f64 - 6.0 } else { min_snr as f64 };
+        assert!(snr >= floor, "acmod {acmod} channel {src_ch}: SNR {snr:.1} dB < {floor} dB");
     }
 }
 
@@ -117,4 +125,37 @@ fn five_one_448() {
 #[test]
 fn five_one_192_low_rate() {
     run(7, true, 192, &[0, 2, 1, 4, 5, 3], 12.0);
+}
+
+// ---- Enhanced AC-3 (Dolby Digital Plus) ----
+
+#[test]
+fn eac3_stereo_192() {
+    run_codec(true, 2, false, 192, &[0, 1], 20.0);
+}
+
+#[test]
+fn eac3_five_one_448() {
+    run_codec(true, 7, true, 448, &[0, 2, 1, 4, 5, 3], 20.0);
+}
+
+#[test]
+fn eac3_five_one_odd_bitrate_300() {
+    // not a legal AC-3 rate; E-AC-3 sizes frames in words so any rate works
+    run_codec(true, 7, true, 300, &[0, 2, 1, 4, 5, 3], 18.0);
+}
+
+#[test]
+fn eac3_five_one_1024() {
+    run_codec(true, 7, true, 1024, &[0, 2, 1, 4, 5, 3], 28.0);
+}
+
+#[test]
+fn eac3_five_one_low_rate_160() {
+    run_codec(true, 7, true, 160, &[0, 2, 1, 4, 5, 3], 10.0);
+}
+
+#[test]
+fn eac3_mono_64() {
+    run_codec(true, 1, false, 64, &[0], 18.0);
 }
