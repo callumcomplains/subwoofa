@@ -1,0 +1,15 @@
+[package]
+name = "sw-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "subwoofa"
+path = "src/main.rs"
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+sw-backend-ffmpeg = { path = "../sw-backend-ffmpeg" }
+clap.workspace = true
+serde_json.workspace = true

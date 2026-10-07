@@ -1,0 +1,164 @@
+//! FFmpeg backend: builds an `ffmpeg` command that joins per-channel mono/stereo files into
+//! one multichannel stream and encodes it with the requested codec.
+//!
+//! This is the day-one engine; native encoders replace it format by format.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use sw_core::{Channel, ChannelLayout, StreamType};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("no input file for channel {0}")]
+    MissingChannel(&'static str),
+    #[error("{0} is not supported by the FFmpeg backend")]
+    Unsupported(&'static str),
+    #[error("could not run ffmpeg: {0}")]
+    Spawn(#[from] std::io::Error),
+    #[error("ffmpeg failed ({0}):\n{1}")]
+    Failed(i32, String),
+}
+
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub stream: StreamType,
+    pub layout: &'static ChannelLayout,
+    pub inputs: HashMap<Channel, PathBuf>,
+    pub output: PathBuf,
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate: Option<u32>,
+    /// DTS-style dialog normalisation as a positive attenuation in dB (0..=31); AC-3 `-dialnorm`.
+    pub dialnorm: Option<u8>,
+    pub ffmpeg: PathBuf,
+}
+
+/// FFmpeg channel-layout position name for a Subwoofa channel.
+fn ff_name(c: Channel) -> Option<&'static str> {
+    use Channel::*;
+    Some(match c {
+        L | Lt => "FL",
+        R | Rt => "FR",
+        C => "FC",
+        Lfe => "LFE",
+        Ls => "SL",
+        Rs => "SR",
+        Cs => "BC",
+        Lsr => "BL",
+        Rsr => "BR",
+        Lss => "SL",
+        Rss => "SR",
+        Lw => "FLC",
+        Rw => "FRC",
+        Lh | Lhs => "TFL",
+        Rh | Rhs => "TFR",
+        Ch => "TFC",
+        Oh => "TC",
+    })
+}
+
+/// FFmpeg encoder name and extra args for a stream type.
+fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), Error> {
+    Ok(match stream {
+        StreamType::Ac3 => ("ac3", vec![]),
+        StreamType::Eac3 => ("eac3", vec![]),
+        StreamType::DtsDigitalSurround => ("dca", vec!["-strict", "-2"]),
+        StreamType::TrueHd => ("truehd", vec!["-strict", "-2"]),
+        StreamType::Mlp => ("mlp", vec!["-strict", "-2"]),
+        StreamType::DtsHdMa => return Err(Error::Unsupported("DTS-HD Master Audio")),
+        StreamType::DtsHdHra => return Err(Error::Unsupported("DTS-HD High Resolution")),
+        StreamType::DtsEs => return Err(Error::Unsupported("DTS-ES")),
+        StreamType::Dts9624 => return Err(Error::Unsupported("DTS 96/24")),
+        StreamType::DtsExpress => return Err(Error::Unsupported("DTS Express")),
+    })
+}
+
+/// Build the argument list (without the program name).
+pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
+    let (codec, extra) = codec_args(job.stream)?;
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+
+    let mut map = String::new();
+    let mut layout_names = Vec::new();
+    for (i, ch) in job.layout.channels.iter().enumerate() {
+        let path = job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?;
+        args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
+        let pos = ff_name(*ch).ok_or(Error::Unsupported("channel"))?;
+        map.push_str(&format!("[{i}:a]"));
+        layout_names.push(pos);
+    }
+    // 7.0/7.1 side+rear layouts map Lss/Rss onto SL/SR and Lsr/Rsr onto BL/BR.
+    let n = job.layout.channel_count();
+    let layout_str = layout_names.join("+");
+    let filter = if n == 1 {
+        format!("[0:a]anull[out]")
+    } else {
+        format!("{map}join=inputs={n}:channel_layout={layout_str}[out]")
+    };
+    args.extend(["-filter_complex".into(), filter, "-map".into(), "[out]".into()]);
+    args.extend(["-c:a".into(), codec.into()]);
+    args.extend(extra.iter().map(|s| s.to_string()));
+    if let Some(b) = job.bitrate_kbps {
+        args.extend(["-b:a".into(), format!("{b}k")]);
+    }
+    if let Some(sr) = job.sample_rate {
+        args.extend(["-ar".into(), sr.to_string()]);
+    }
+    if let (Some(d), StreamType::Ac3 | StreamType::Eac3) = (job.dialnorm, job.stream) {
+        // AC-3 dialnorm is 1..=31 (dB below full scale); 31 == no attenuation.
+        args.extend(["-dialnorm".into(), d.clamp(1, 31).to_string()]);
+    }
+    if matches!(job.stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::DtsDigitalSurround) {
+        args.extend(["-f".into(), match job.stream {
+            StreamType::Ac3 => "ac3",
+            StreamType::Eac3 => "eac3",
+            _ => "dts",
+        }.into()]);
+    }
+    args.push(job.output.to_string_lossy().into_owned());
+    Ok(args)
+}
+
+/// Run the encode. Returns ffmpeg's stderr log on success.
+pub fn run(job: &Job) -> Result<String, Error> {
+    let args = build_args(job)?;
+    let out = Command::new(&job.ffmpeg).args(&args).output()?;
+    let log = String::from_utf8_lossy(&out.stderr).into_owned();
+    if out.status.success() {
+        Ok(log)
+    } else {
+        Err(Error::Failed(out.status.code().unwrap_or(-1), log))
+    }
+}
+
+/// Locate ffmpeg on PATH.
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    std::env::var_os("PATH").and_then(|p| {
+        std::env::split_paths(&p).map(|d| d.join(exe)).find(|c: &PathBuf| Path::new(c).is_file())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(stream: StreamType) -> Job {
+        let layout = ChannelLayout::find("5.1").unwrap();
+        let inputs = layout.channels.iter().map(|c| (*c, PathBuf::from(format!("{}.wav", c.short())))).collect();
+        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), ffmpeg: "ffmpeg".into() }
+    }
+
+    #[test]
+    fn ac3_args() {
+        let a = build_args(&job(StreamType::Ac3)).unwrap().join(" ");
+        assert!(a.contains("join=inputs=6:channel_layout=FL+FR+FC+LFE+SL+SR"));
+        assert!(a.contains("-c:a ac3"));
+        assert!(a.contains("-b:a 448k"));
+    }
+
+    #[test]
+    fn dtshd_is_unsupported() {
+        assert!(matches!(build_args(&job(StreamType::DtsHdMa)), Err(Error::Unsupported(_))));
+    }
+}
