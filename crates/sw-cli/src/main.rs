@@ -19,6 +19,14 @@ enum Cmd {
     Layouts,
     /// List destinations and the stream types each allows.
     Formats,
+    /// Show format info for a WAV/AIFF file (and RMS of a span, to cross-check readers).
+    Info {
+        path: PathBuf,
+        #[arg(long)]
+        start: Option<f64>,
+        #[arg(long)]
+        duration: Option<f64>,
+    },
     /// Check a downmix for clipping (three or more consecutive full-scale samples).
     DownmixCheck {
         #[arg(long, default_value = "5.1")]
@@ -99,6 +107,27 @@ fn run() -> Result<(), String> {
                 for s in d.stream_types() {
                     println!("    {:<12} {} [.{}]", s.id(), s.display_name(), d.extension(*s));
                 }
+            }
+        }
+        Cmd::Info { path, start, duration } => {
+            let mut r = sw_pcm::PcmReader::open(&path).map_err(|e| e.to_string())?;
+            let i = r.info().clone();
+            println!("{:?}  {} ch  {} Hz  {}-bit{}  {} frames ({:.3} s)", i.container, i.channels, i.sample_rate, i.bits, if i.float { " float" } else { "" }, i.frames, i.duration_secs());
+            if let Some(t) = i.start_secs() {
+                println!("broadcast start: {t:.3} s since midnight");
+            }
+            if start.is_some() || duration.is_some() {
+                r.seek_frame((start.unwrap_or(0.0) * i.sample_rate as f64) as u64).map_err(|e| e.to_string())?;
+                let want = (duration.unwrap_or(10.0) * i.sample_rate as f64) as usize;
+                let (mut sum, mut n, mut buf) = (0f64, 0usize, Vec::new());
+                while n < want {
+                    buf.clear();
+                    let got = r.read_f32(&mut buf, (want - n).min(1 << 16)).map_err(|e| e.to_string())?;
+                    if got == 0 { break; }
+                    sum += buf.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+                    n += got * i.channels as usize;
+                }
+                println!("RMS over span: {:.3} dBFS", 10.0 * (sum / n.max(1) as f64).log10());
             }
         }
         Cmd::DownmixCheck { layout, to, auto_import, inputs, trim_db, safe, start, duration, ffmpeg } => {
