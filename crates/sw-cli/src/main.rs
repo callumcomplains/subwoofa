@@ -84,6 +84,9 @@ enum Cmd {
         output: PathBuf,
         #[arg(long)]
         ffmpeg: Option<PathBuf>,
+        /// Native TrueHD only: leave out the stereo downmix substream (channels coded directly).
+        #[arg(long)]
+        no_downmix: bool,
         /// Encoder engine: `ffmpeg` (default) or `native` (Subwoofa's own, AC-3 only for now).
         #[arg(long, default_value = "ffmpeg")]
         engine: String,
@@ -161,7 +164,7 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix } => {
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             let layout: &'static ChannelLayout =
@@ -178,6 +181,7 @@ fn run() -> Result<(), String> {
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
+                        downmix: !no_downmix,
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))
@@ -185,6 +189,9 @@ fn run() -> Result<(), String> {
                     let secs = stats.frames as f64 / stems.sample_rate as f64;
                     let pcm = stats.frames as f64 * layout.channel_count() as f64 * 3.0;
                     println!("wrote {} ({:.1} MB, {:.1}% of PCM) in {:.1} s = {:.0}x real time", output.display(), stats.bytes as f64 / 1e6, 100.0 * stats.bytes as f64 / pcm, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    if stats.downmix_overflows > 0 {
+                        println!("note: {} stereo-presentation samples exceed 24 bits (a stereo-only decoder will clip them)", stats.downmix_overflows);
+                    }
                     return Ok(());
                 }
                 if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {

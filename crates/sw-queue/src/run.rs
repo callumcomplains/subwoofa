@@ -27,6 +27,13 @@ pub struct EncodeSpec {
     /// "ffmpeg" (default) or "native" (Subwoofa's own encoder, AC-3 only for now).
     #[serde(default)]
     pub engine: String,
+    /// Native TrueHD: include the stereo downmix substream (default on).
+    #[serde(default = "yes")]
+    pub downmix: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl EncodeSpec {
@@ -174,11 +181,16 @@ fn execute_inner(
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
+            downmix: spec.downmix,
         };
-        sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+        let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_truehd::native::NativeError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
         })?;
+        log.push_str(&format!("TrueHD stereo downmix substream: {}\n", if spec.downmix && layout.channel_count() > 2 { "yes" } else { "no" }));
+        if stats.downmix_overflows > 0 {
+            log.push_str(&format!("Warning: {} stereo-presentation samples exceed 24 bits; stereo-only decoders will clip them\n", stats.downmix_overflows));
+        }
     } else if native {
         let req = sw_codec_ac3::native::Request {
             layout,

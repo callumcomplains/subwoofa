@@ -1,6 +1,6 @@
 //! File-level driver: stems in, raw `.thd` elementary stream out.
 
-use crate::{map_layout, Config, Encoder, Error, DEFAULT_RESTART_INTERVAL};
+use crate::{default_downmix, map_layout, Config, Encoder, Error, DEFAULT_RESTART_INTERVAL};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,11 +26,15 @@ pub struct Request<'a> {
     pub start_secs: f64,
     pub duration_secs: Option<f64>,
     pub output: &'a Path,
+    /// Include the stereo downmix substream (recommended; ignored for mono/stereo layouts).
+    pub downmix: bool,
 }
 
 pub struct Stats {
     pub frames: u64,
     pub bytes: u64,
+    /// Samples of the stereo presentation that exceed 24 bits.
+    pub downmix_overflows: u64,
 }
 
 #[inline]
@@ -46,7 +50,7 @@ pub fn encode_to_file(
 ) -> Result<Stats, NativeError> {
     let map = map_layout(req.layout)?;
     let rate = stems.sample_rate;
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: map.chanmap, channels: map.source_index.len(), restart_interval: DEFAULT_RESTART_INTERVAL })?;
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: map.chanmap, channels: map.source_index.len(), restart_interval: DEFAULT_RESTART_INTERVAL, downmix: if req.downmix { default_downmix(req.layout, &map) } else { None } })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
@@ -96,5 +100,5 @@ pub fn encode_to_file(
         eprintln!("truehd timing: read {:?}, convert {:?}, encode {:?}", t_read, t_conv, t_enc);
     }
     on_progress(1.0);
-    Ok(Stats { frames: want, bytes })
+    Ok(Stats { frames: want, bytes, downmix_overflows: enc.downmix_overflows })
 }

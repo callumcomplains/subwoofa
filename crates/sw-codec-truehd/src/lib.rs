@@ -90,6 +90,26 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
     Ok(LayoutMap { chanmap, source_index: items.into_iter().map(|(_, i)| i).collect() })
 }
 
+/// Stereo downmix carried in substream 0 (coded channels 0 and 1).
+///
+/// With `dest = D` (2.14 fixed point, `1 << 14` = unity up to 32767 ~ 2.0) coded channel 0 becomes
+/// `Lo = (L*2^14 + sum(lo[j] * x[j])) / D`, and channel 1 likewise for `Ro`, summing over the other
+/// channels `j >= 2`. `D > 2^14` attenuates the mix by `2^14 / D` for headroom. A full decoder
+/// recovers L exactly as `((D*Lo - sum(lo[j] * x[j])) >> 14) + b`, where `b` is one stored bit per
+/// sample (the "LSB bypass") that absorbs the rounding of `Lo`. With `D == 2^14` no bit is needed.
+/// For eight channels the rear pair (coded 6 and 7) is first folded into the side surrounds
+/// (coded 4 and 5) with unit gain by `fold`, which defines the 6-channel presentation.
+#[derive(Debug, Clone, Default)]
+pub struct Downmix {
+    /// Coefficient of each coded channel into Lo (indexes 0 and 1 are ignored).
+    pub lo: Vec<i32>,
+    pub ro: Vec<i32>,
+    /// 2.14 coefficient folding Lrs/Rrs into Ls/Rs (7.1 only).
+    pub fold: i32,
+    /// Decoder-side gain of the front channels in 2.14 (16384 to 32767).
+    pub dest: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub sample_rate: u32,
@@ -97,6 +117,62 @@ pub struct Config {
     pub channels: usize,
     /// Access units per restart interval (8..=128).
     pub restart_interval: usize,
+    /// Stereo downmix substream; `None` codes the channels directly (L/R in substream 0).
+    pub downmix: Option<Downmix>,
+}
+
+/// One primitive matrix: rewrites channel `out` from a weighted sum of all channels (2.14).
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct MatrixSpec {
+    out: usize,
+    coeff: Vec<i32>,
+    lsb_bypass: bool,
+}
+
+/// Round-up division by 2^14 used by the downmix (the exact inverse of the decoder's floor shift).
+#[inline]
+fn ceil14(y: i64) -> i64 {
+    (y + 16383) >> 14
+}
+
+/// Default ITU-style Lo/Ro downmix for a layout: centre and surrounds at -3 dB, LFE omitted.
+/// Returns `None` for layouts where a downmix cannot be expressed (mono, stereo, unusual 7ch/8ch).
+pub fn default_downmix(layout: &ChannelLayout, map: &LayoutMap) -> Option<Downmix> {
+    let n = map.source_index.len();
+    if n <= 2 {
+        return None;
+    }
+    let m = sw_core::downmix::Matrix::lo_ro(layout);
+    // the front pair must be exactly L and R in coded slots 0 and 1
+    let l = layout.channels[map.source_index[0]];
+    let r = layout.channels[map.source_index[1]];
+    if !matches!(l, Channel::L | Channel::Lt) || !matches!(r, Channel::R | Channel::Rt) {
+        return None;
+    }
+    // half-level mix for headroom: a stereo-only decoder must be able to hold L + 0.7C + 0.7Ls in 24 bits
+    let mut dm = Downmix { lo: vec![0; n], ro: vec![0; n], fold: 0, dest: 32767 };
+    let q = |db: f32| -> i32 {
+        if db == sw_core::downmix::OFF { 0 } else { (10f64.powf(db as f64 / 20.0) * 16384.0).round() as i32 }
+    };
+    let gain = |from: Channel, to: Channel| m.in_idx(from).zip(m.out_idx(to)).map(|(i, o)| m.cells[o][i].gain_db).unwrap_or(sw_core::downmix::OFF);
+    if n > 6 {
+        // eight channels: only L R C LFE Ls Rs Lrs Rrs (side + rear surrounds) is supported
+        if n != 8 {
+            return None;
+        }
+        let rear_l = layout.channels[map.source_index[6]];
+        let rear_r = layout.channels[map.source_index[7]];
+        if !matches!(rear_l, Channel::Lsr) || !matches!(rear_r, Channel::Rsr) {
+            return None;
+        }
+        dm.fold = q(-3.0103);
+    }
+    for j in 2..n.min(6) {
+        let ch = layout.channels[map.source_index[j]];
+        dm.lo[j] = q(gain(ch, Channel::L));
+        dm.ro[j] = q(gain(ch, Channel::R));
+    }
+    Some(dm)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -123,18 +199,21 @@ struct DecState {
     blocksize: usize,
     quant: [u8; MAX_CHANNELS],
     ch: [ChParams; MAX_CHANNELS],
+    matrices: Vec<MatrixSpec>,
 }
 
 impl DecState {
     fn restart() -> DecState {
-        DecState { blocksize: 8, quant: [0; MAX_CHANNELS], ch: [DEFAULT_CH; MAX_CHANNELS] }
+        DecState { blocksize: 8, quant: [0; MAX_CHANNELS], ch: [DEFAULT_CH; MAX_CHANNELS], matrices: Vec::new() }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Substream {
     min: usize,
     max: usize,
+    /// Primitive matrices this substream carries.
+    matrices: Vec<MatrixSpec>,
 }
 
 pub struct Encoder {
@@ -147,6 +226,8 @@ pub struct Encoder {
     /// Running XOR over output samples since the last restart, per substream.
     lossless: Vec<u32>,
     sync_count: usize,
+    /// Stereo-presentation samples that exceed 24 bits (a stereo-only decoder would wrap or clip them).
+    pub downmix_overflows: u64,
 }
 
 fn number_sbits(n: i32) -> u32 {
@@ -173,12 +254,55 @@ impl Encoder {
             return Err(Error::Unsupported("restart interval must be 8 to 128 access units".into()));
         }
         let n = cfg.channels;
+        if let Some(dm) = &cfg.downmix {
+            if !(1 << 14..=32767).contains(&dm.dest) {
+                return Err(Error::Unsupported("downmix gain must be between 16384 and 32767 (2.14)".into()));
+            }
+            if n <= 2 || dm.lo.len() != n || dm.ro.len() != n {
+                return Err(Error::Unsupported("downmix needs more than two channels and one coefficient per channel".into()));
+            }
+            if n > 6 && n != 8 {
+                return Err(Error::Unsupported("the stereo downmix supports up to 6 channels, or exactly 8".into()));
+            }
+        }
+        let front = |dm: &Downmix, max: usize| -> Vec<MatrixSpec> {
+            [(0usize, &dm.lo), (1usize, &dm.ro)]
+                .into_iter()
+                .map(|(dest, q)| {
+                    let mut c = vec![0i32; max + 1];
+                    c[dest] = dm.dest;
+                    for j in 2..=max.min(5) {
+                        c[j] = -q[j];
+                    }
+                    MatrixSpec { out: dest, coeff: c, lsb_bypass: dm.dest != 1 << 14 }
+                })
+                .collect()
+        };
+        let dm = cfg.downmix.as_ref();
+        let none = || Vec::new();
         let subs = if n <= 2 {
-            vec![Substream { min: 0, max: n - 1 }]
+            vec![Substream { min: 0, max: n - 1, matrices: none() }]
         } else if n <= 6 {
-            vec![Substream { min: 0, max: 1 }, Substream { min: 2, max: n - 1 }]
+            vec![
+                Substream { min: 0, max: 1, matrices: none() },
+                Substream { min: 2, max: n - 1, matrices: dm.map(|d| front(d, n - 1)).unwrap_or_default() },
+            ]
         } else {
-            vec![Substream { min: 0, max: 1 }, Substream { min: 2, max: 5 }, Substream { min: 6, max: n - 1 }]
+            let mut full = dm.map(|d| front(d, 7)).unwrap_or_default();
+            if let Some(d) = dm {
+                // undo the rear fold after the front matrices have read the folded surrounds
+                for (dest, rear) in [(4usize, 6usize), (5, 7)] {
+                    let mut c = vec![0i32; 8];
+                    c[dest] = 1 << 14;
+                    c[rear] = -d.fold;
+                    full.push(MatrixSpec { out: dest, coeff: c, lsb_bypass: false });
+                }
+            }
+            vec![
+                Substream { min: 0, max: 1, matrices: none() },
+                Substream { min: 2, max: 5, matrices: dm.map(|d| front(d, 5)).unwrap_or_default() },
+                Substream { min: 6, max: n - 1, matrices: full },
+            ]
         };
         let nsub = subs.len();
         Ok(Encoder {
@@ -189,6 +313,7 @@ impl Encoder {
             output_timing: 0,
             lossless: vec![0; nsub],
             sync_count: 0,
+            downmix_overflows: 0,
             cfg,
         })
     }
@@ -278,9 +403,34 @@ impl Encoder {
         }
         let shorten = if last { n - valid } else { 0 };
 
+        // 0. coded domain: with a downmix, channels 0/1 carry Lo/Ro (and 4/5 the folded surrounds of 7.1)
+        let coded_store: Vec<Vec<i32>>;
+        let mut bypass: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
+        let coded: &[Vec<i32>] = match &self.cfg.downmix {
+            Some(dm) => {
+                let (c, b) = apply_downmix(chans, n, dm, self.cfg.channels);
+                coded_store = c;
+                bypass = b;
+                &coded_store
+            }
+            None => chans,
+        };
+        if self.cfg.downmix.is_some() {
+            self.downmix_overflows += coded[0][..n].iter().chain(coded[1][..n].iter()).filter(|v| v.unsigned_abs() >= 1 << 23).count() as u64;
+        }
+        // channels written by a matrix keep a zero quantizer step: the decoder masks matrix outputs
+        let matrix_dest: Vec<bool> = (0..self.cfg.channels)
+            .map(|c| self.subs.iter().any(|s| s.matrices.iter().any(|m| m.out == c)))
+            .collect();
+
         // 1. analysis: per channel quantizer step, predictor and residual
         let analyses: Vec<ChannelAnalysis> = std::thread::scope(|sc| {
-            let handles: Vec<_> = (0..self.cfg.channels).map(|c| sc.spawn(move || analyze_channel(&chans[c][..n], au))).collect();
+            let handles: Vec<_> = (0..self.cfg.channels)
+                .map(|c| {
+                    let force_q0 = matrix_dest[c];
+                    sc.spawn(move || analyze_channel(&coded[c][..n], au, force_q0))
+                })
+                .collect();
             handles.into_iter().map(|h| h.join().expect("analysis thread panicked")).collect()
         });
 
@@ -310,7 +460,7 @@ impl Encoder {
                     self.output_timing,
                     check_for_header[si],
                     max_bits,
-                    &chans.iter().map(|c| &c[..n]).collect::<Vec<_>>(),
+                    &bypass,
                 );
                 sub_data.push(data);
                 // accumulate the lossless check over this AU
@@ -359,6 +509,43 @@ impl Encoder {
     }
 }
 
+/// Coded-domain channels and LSB-bypass bits for the downmix layout (see [`Downmix`]).
+fn apply_downmix(chans: &[Vec<i32>], n: usize, dm: &Downmix, nch: usize) -> (Vec<Vec<i32>>, [Vec<u8>; 2]) {
+    let mut v: Vec<Vec<i32>> = chans.iter().map(|c| c[..n].to_vec()).collect();
+    if nch == 8 {
+        for i in 0..n {
+            v[4][i] = (chans[4][i] as i64 + ceil14(dm.fold as i64 * chans[6][i] as i64)) as i32;
+            v[5][i] = (chans[5][i] as i64 + ceil14(dm.fold as i64 * chans[7][i] as i64)) as i32;
+        }
+    }
+    let last = nch.min(6);
+    let d = dm.dest as i64;
+    let unity = dm.dest == 1 << 14;
+    let mut bits = [vec![0u8; n], vec![0u8; n]];
+    for i in 0..n {
+        let (mut y0, mut y1) = (0i64, 0i64);
+        for j in 2..last {
+            y0 += dm.lo[j] as i64 * v[j][i] as i64;
+            y1 += dm.ro[j] as i64 * v[j][i] as i64;
+        }
+        for (k, (orig, y)) in [(chans[0][i] as i64, y0), (chans[1][i] as i64, y1)].into_iter().enumerate() {
+            let coded = if unity {
+                orig + ceil14(y)
+            } else {
+                // smallest s with D*s - y >= (orig - 1) * 2^14, so that (D*s - y) >> 14 is orig or orig - 1
+                let target = ((orig - 1) << 14) + y;
+                let s = target.div_euclid(d) + i64::from(target.rem_euclid(d) != 0);
+                let l_hat = (d * s - y) >> 14;
+                debug_assert!(orig - l_hat == 0 || orig - l_hat == 1, "bypass bit out of range");
+                bits[k][i] = (orig - l_hat) as u8;
+                s
+            };
+            v[k][i] = coded as i32;
+        }
+    }
+    (v, bits)
+}
+
 fn fold32(v: u32) -> u8 {
     let v = v ^ (v >> 16);
     (v ^ (v >> 8)) as u8
@@ -377,10 +564,10 @@ struct ChannelAnalysis {
     codings: Vec<Vec<Coding>>,
 }
 
-fn analyze_channel(x: &[i32], au: usize) -> ChannelAnalysis {
+fn analyze_channel(x: &[i32], au: usize, force_q0: bool) -> ChannelAnalysis {
     let n = x.len();
     let or_all = x.iter().fold(0i32, |a, v| a | v);
-    let quant = if or_all == 0 { 0 } else { (or_all.trailing_zeros() as u8).min(15) };
+    let quant = if or_all == 0 || force_q0 { 0 } else { (or_all.trailing_zeros() as u8).min(15) };
     let mask = !((1i32 << quant) - 1);
 
     // candidate predictors: none, and LPC of a few orders; judged with a cheap bit estimate
@@ -629,6 +816,7 @@ fn plan_blocks(sub: &Substream, an: &[ChannelAnalysis], au_index: usize, au: usi
     for (bi, (start, len)) in ranges.into_iter().enumerate() {
         let mut want = DecState::restart();
         want.blocksize = len;
+        want.matrices = sub.matrices.clone();
         let mut codings = [Coding { codebook: 0, lsb_bits: 0, bits: 0 }; MAX_CHANNELS];
         for ch in sub.min..=sub.max {
             let a = &an[ch];
@@ -656,7 +844,7 @@ fn write_substream_au(
     output_timing: u16,
     lossless_check: u8,
     max_output_bits: u32,
-    _raw: &[&[i32]],
+    bypass: &[Vec<u8>; 2],
 ) -> Vec<u8> {
     let mut w = BitWriter::new();
     let plans = plan_blocks(sub, an, au_index, au, restart);
@@ -680,7 +868,7 @@ fn write_substream_au(
         } else {
             w.put(0, 1);
         }
-        write_block_data(&mut w, sub, an, plan);
+        write_block_data(&mut w, sub, an, plan, bypass);
         w.put(u32::from(bi == nblocks - 1), 1); // last block of this access unit
     }
     w.align(16);
@@ -697,7 +885,7 @@ fn write_substream_au(
 }
 
 fn params_differ(sub: &Substream, cur: &DecState, want: &DecState) -> bool {
-    cur.blocksize != want.blocksize || cur.quant != want.quant || (sub.min..=sub.max).any(|c| cur.ch[c] != want.ch[c])
+    cur.blocksize != want.blocksize || cur.quant != want.quant || cur.matrices != want.matrices || (sub.min..=sub.max).any(|c| cur.ch[c] != want.ch[c])
 }
 
 fn write_restart_header(w: &mut BitWriter, sub: &Substream, output_timing: u16, lossless_check: u8, max_output_bits: u32, max_huff_lsbs: u32) {
@@ -733,6 +921,32 @@ fn write_restart_header(w: &mut BitWriter, sub: &Substream, output_timing: u16, 
     w.put(ck as u32, 8);
 }
 
+/// Matrix parameters: each primitive matrix rewrites one channel from a weighted sum of all channels.
+fn write_matrices(w: &mut BitWriter, sub: &Substream, mats: &[MatrixSpec]) {
+    // substreams ending at channel 5 or below use the sync word with two noise channels, which add
+    // two (always zero) coefficients per matrix; the 0x31EB variant has a noise shift instead
+    let noise_channels = sub.max <= 5;
+    w.put(mats.len() as u32, 4);
+    for m in mats {
+        w.put(m.out as u32, 4);
+        w.put(14, 4); // fractional bits
+        w.put(u32::from(m.lsb_bypass), 1);
+        let count = sub.max + 1 + if noise_channels { 2 } else { 0 };
+        for ch in 0..count {
+            let c = m.coeff.get(ch).copied().unwrap_or(0);
+            if c != 0 {
+                w.put(1, 1);
+                w.put_signed(c, 16);
+            } else {
+                w.put(0, 1);
+            }
+        }
+        if !noise_channels {
+            w.put(0, 4); // matrix noise shift
+        }
+    }
+}
+
 fn write_filter(w: &mut BitWriter, f: &Fir) {
     w.put(f.order as u32, 4);
     if f.order > 0 {
@@ -756,7 +970,12 @@ fn write_params(w: &mut BitWriter, sub: &Substream, cur: &DecState, want: &DecSt
     } else {
         w.put(0, 1);
     }
-    w.put(0, 1); // matrices unchanged
+    if cur.matrices != want.matrices {
+        w.put(1, 1);
+        write_matrices(w, sub, &want.matrices);
+    } else {
+        w.put(0, 1);
+    }
     w.put(0, 1); // output shift unchanged
     // quantizer steps cover channels 0..=max
     if cur.quant != want.quant {
@@ -786,8 +1005,14 @@ fn write_params(w: &mut BitWriter, sub: &Substream, cur: &DecState, want: &DecSt
     }
 }
 
-fn write_block_data(w: &mut BitWriter, sub: &Substream, an: &[ChannelAnalysis], plan: &BlockPlan) {
+fn write_block_data(w: &mut BitWriter, sub: &Substream, an: &[ChannelAnalysis], plan: &BlockPlan, bypass: &[Vec<u8>; 2]) {
     for i in 0..plan.len {
+        // one bypassed LSB per flagged matrix, ahead of the sample's channel data
+        for (mi, m) in plan.want.matrices.iter().enumerate() {
+            if m.lsb_bypass {
+                w.put(bypass[mi][plan.start + i] as u32, 1);
+            }
+        }
         for ch in sub.min..=sub.max {
             let a = &an[ch];
             let v = a.residual[plan.start + i] >> a.quant;

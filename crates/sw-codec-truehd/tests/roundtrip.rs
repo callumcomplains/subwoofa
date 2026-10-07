@@ -2,7 +2,7 @@
 //! Any decoder complaint (parity, checksum, length) on stderr fails the test.
 
 use std::process::Command;
-use sw_codec_truehd::{Config, Encoder};
+use sw_codec_truehd::{Config, Downmix, Encoder};
 
 fn have_ffmpeg() -> bool {
     Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
@@ -70,7 +70,7 @@ fn run_interval(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_or
         return;
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval }).unwrap();
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None }).unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -187,4 +187,176 @@ fn five_one_pure_tone_default_interval() {
 #[test]
 fn stereo_pure_tone() {
     run("tone_st", 48_000, STEREO, 2, &[0, 1], Kind::PureTone, 48_000 + 33);
+}
+
+/* ---- stereo downmix substream ---- */
+
+fn ceil14(y: i64) -> i64 {
+    -((-y) >> 14)
+}
+
+fn wrap24(x: i64) -> i32 {
+    ((x as i32) << 8) >> 8
+}
+
+/// Independent reimplementation of the downmix formula, used as the expected stereo presentation.
+/// A stereo-only decoder emits 24-bit samples, so anything beyond 24 bits wraps.
+fn expected_stereo(sigs: &[Vec<i32>], dm: &Downmix, n: usize) -> (Vec<i32>, Vec<i32>) {
+    let nch = sigs.len();
+    let mut v: Vec<Vec<i64>> = sigs.iter().map(|s| s.iter().map(|x| *x as i64).collect()).collect();
+    if nch == 8 {
+        for i in 0..n {
+            v[4][i] = sigs[4][i] as i64 + ceil14(dm.fold as i64 * sigs[6][i] as i64);
+            v[5][i] = sigs[5][i] as i64 + ceil14(dm.fold as i64 * sigs[7][i] as i64);
+        }
+    }
+    let mut lo = vec![0; n];
+    let mut ro = vec![0; n];
+    for i in 0..n {
+        let (mut a, mut b) = (0i64, 0i64);
+        for j in 2..nch.min(6) {
+            a += dm.lo[j] as i64 * v[j][i];
+            b += dm.ro[j] as i64 * v[j][i];
+        }
+        let d = dm.dest as i64;
+        let pick = |orig: i64, y: i64| -> i64 {
+            if dm.dest == 1 << 14 {
+                orig + ceil14(y)
+            } else {
+                let target = ((orig - 1) << 14) + y;
+                target.div_euclid(d) + i64::from(target.rem_euclid(d) != 0)
+            }
+        };
+        lo[i] = wrap24(pick(sigs[0][i] as i64, a));
+        ro[i] = wrap24(pick(sigs[1][i] as i64, b));
+    }
+    (lo, ro)
+}
+
+fn decode(path: &std::path::Path, stereo_only: bool) -> (std::process::Output, Vec<i32>) {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if stereo_only {
+        cmd.args(["-downmix", "stereo"]);
+    }
+    let out = cmd.arg("-i").arg(path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    let samples = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    (out, samples)
+}
+
+fn run_downmix(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize], dm: Downmix, n: usize, kind: Kind) {
+    if !have_ffmpeg() {
+        eprintln!("ffmpeg missing, skipping");
+        return;
+    }
+    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
+    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()) }).unwrap();
+    let chunk = enc.interval_samples();
+    let mut stream = Vec::new();
+    let mut pos = 0;
+    while pos < n {
+        let len = chunk.min(n - pos);
+        let part: Vec<Vec<i32>> = sigs
+            .iter()
+            .map(|s| {
+                let mut v = vec![0i32; chunk];
+                v[..len].copy_from_slice(&s[pos..pos + len]);
+                v
+            })
+            .collect();
+        pos += len;
+        stream.extend(enc.encode_interval(&part, len, pos >= n));
+    }
+    let dir = std::env::temp_dir().join(format!("sw_thd_dm_{}_{}", std::process::id(), name));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.thd");
+    std::fs::write(&path, &stream).unwrap();
+
+    // full presentation: every channel exactly as it went in
+    let (out, full) = decode(&path, false);
+    assert!(out.status.success() && out.stderr.is_empty(), "{name}: full decode: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(full.len(), n * channels, "{name}: full decode length");
+    for (d, &coded) in decoded_order.iter().enumerate() {
+        for i in 0..n {
+            assert_eq!(full[i * channels + d], sigs[coded][i], "{name}: channel {coded} differs at sample {i}");
+        }
+    }
+
+    // stereo presentation: substream 0 alone must equal the downmix formula
+    let (out, st) = decode(&path, true);
+    assert!(out.status.success() && out.stderr.is_empty(), "{name}: stereo decode: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(st.len(), n * 2, "{name}: stereo decode length (is the downmix substream really decoded alone?)");
+    let (lo, ro) = expected_stereo(&sigs, &dm, n);
+    for i in 0..n {
+        assert_eq!(st[i * 2], lo[i], "{name}: Lo differs at sample {i}");
+        assert_eq!(st[i * 2 + 1], ro[i], "{name}: Ro differs at sample {i}");
+    }
+}
+
+const C707: i32 = 11585; // -3 dB in 2.14
+
+fn five_one_downmix() -> Downmix {
+    //                 L  R  C     LFE Ls    Rs
+    Downmix { lo: vec![0, 0, C707, 0, C707, 0], ro: vec![0, 0, C707, 0, 0, C707], fold: 0, dest: 32767 }
+}
+
+#[test]
+fn downmix_five_one() {
+    run_downmix("dm51", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 * 2 + 29, Kind::Music);
+}
+
+#[test]
+fn downmix_five_one_loud() {
+    // loud material makes the downmix channels exceed 24 bits
+    run_downmix("dm51_loud", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 + 5, Kind::Loud);
+}
+
+#[test]
+fn downmix_five_one_with_lfe_in_the_mix() {
+    let mut dm = five_one_downmix();
+    dm.lo[3] = 5000;
+    dm.ro[3] = 5000;
+    run_downmix("dm51_lfe", FIVE_ONE, 6, &ID6, dm, 48_000 + 77, Kind::Music);
+}
+
+#[test]
+fn downmix_five_zero_and_three_zero() {
+    // 3.0 (L R C): only the centre feeds the downmix
+    run_downmix("dm30", 0b11, 3, &[0, 1, 2], Downmix { lo: vec![0, 0, C707], ro: vec![0, 0, C707], fold: 0, dest: 32767 }, 48_000 + 3, Kind::Music);
+}
+
+#[test]
+fn downmix_seven_one() {
+    // coded: L R C LFE Ls Rs Lrs Rrs; decoder emits FL FR FC LFE BL BR SL SR
+    let dm = Downmix { lo: vec![0, 0, C707, 0, C707, 0, 0, 0], ro: vec![0, 0, C707, 0, 0, C707, 0, 0], fold: C707, dest: 32767 };
+    run_downmix("dm71", SEVEN_ONE, 8, &[0, 1, 2, 3, 6, 7, 4, 5], dm, 48_000 + 19, Kind::Music);
+}
+
+#[test]
+fn downmix_unity_gain_without_bypass_bits() {
+    // unit front gain needs no LSB-bypass bits (but can overflow 24 bits on loud material)
+    let mut dm = five_one_downmix();
+    dm.dest = 1 << 14;
+    run_downmix("dm51_unity", FIVE_ONE, 6, &ID6, dm, 48_000 + 13, Kind::Music);
+}
+
+#[test]
+fn downmix_half_level_stays_inside_24_bits_on_loud_material() {
+    // headroom check: with the half-level default a loud mix must not wrap
+    let dm = five_one_downmix();
+    let n = 48_000;
+    let sigs: Vec<Vec<i32>> = (0..6).map(|c| signal(Kind::Loud, c, n)).collect();
+    let (lo, _) = expected_stereo(&sigs, &dm, n);
+    let raw: Vec<i64> = (0..n)
+        .map(|i| {
+            let y: i64 = (2..6).map(|j| dm.lo[j] as i64 * sigs[j][i] as i64).sum();
+            let target = ((sigs[0][i] as i64 - 1) << 14) + y;
+            target.div_euclid(dm.dest as i64) + i64::from(target.rem_euclid(dm.dest as i64) != 0)
+        })
+        .collect();
+    let over = raw.iter().filter(|v| v.abs() >= 1 << 23).count();
+    println!("{over} of {n} samples exceed 24 bits at half level on full-scale noise");
+    assert!(lo.len() == n);
+    // full-scale uncorrelated noise in four channels is far worse than any real mix
+    assert!(over * 50 < n, "too many overflows: {over}");
 }
