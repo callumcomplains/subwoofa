@@ -1,0 +1,19 @@
+[package]
+name = "subwoofa-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde.workspace = true
+serde_json.workspace = true
+sw-core = { path = "../../crates/sw-core" }
+sw-backend-ffmpeg = { path = "../../crates/sw-backend-ffmpeg" }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

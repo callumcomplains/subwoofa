@@ -79,6 +79,10 @@ fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), E
 /// Build the argument list (without the program name).
 pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
     let (codec, extra) = codec_args(job.stream)?;
+    // FFmpeg's E-AC-3 and DTS core encoders stop at 5.1.
+    if matches!(job.stream, StreamType::Eac3 | StreamType::DtsDigitalSurround) && job.layout.channel_count() > 6 {
+        return Err(Error::Unsupported("more than 5.1 channels with FFmpeg's encoder for this format"));
+    }
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
 
     let mut map = String::new();

@@ -207,7 +207,14 @@ pub enum Invalid {
     LayoutTooWide { max: usize },
     SampleRateUnsupported,
     LfeOnlyDvd,
+    LayoutNotSupported,
 }
+
+/// Layouts expressible as AC-3 audio coding modes (acmod) with optional LFE.
+const AC3_LAYOUTS: &[&str] = &[
+    "5.1", "5.0", "4.1-lcrs", "4.1-quad", "4.0-quad", "4.0-lcrs", "3.1", "3.1-lrs", "3.0", "3.0-lrs",
+    "2.1", "2.0", "2.0-ltrt", "1.0",
+];
 
 /// Validate a destination/stream/layout/sample-rate combination.
 pub fn validate(
@@ -228,6 +235,11 @@ pub fn validate(
     }
     if layout.id == "1.1" && dest != Destination::DvdVideo {
         return Err(Invalid::LfeOnlyDvd);
+    }
+    // AC-3 only defines the standard front/surround channel modes (up to 5.1); anything with
+    // 6.x/7.x, heights or wides needs E-AC-3 or a lossless format.
+    if stream == StreamType::Ac3 && !AC3_LAYOUTS.contains(&layout.id) {
+        return Err(Invalid::LayoutNotSupported);
     }
     Ok(())
 }
@@ -263,6 +275,15 @@ mod tests {
         let lay = l("5.1");
         assert_eq!(bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 96_000), Some((2046, 5760)));
         assert_eq!(bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 48_000), Some((2046, 5376)));
+    }
+
+    #[test]
+    fn ac3_rejects_six_zero() {
+        assert_eq!(
+            validate(Destination::Generic, StreamType::Ac3, l("6.0-discrete"), 48_000),
+            Err(Invalid::LayoutNotSupported)
+        );
+        assert!(validate(Destination::Generic, StreamType::Ac3, l("5.1"), 48_000).is_ok());
     }
 
     #[test]

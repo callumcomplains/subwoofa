@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sw-core", "crates/sw-backend-ffmpeg", "crates/sw-cli"]
+members = ["crates/sw-core", "crates/sw-backend-ffmpeg", "crates/sw-cli", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
