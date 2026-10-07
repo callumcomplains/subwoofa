@@ -1,0 +1,10 @@
+[package]
+name = "sw-codec-dts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+sw-pcm = { path = "../sw-pcm" }
+thiserror.workspace = true

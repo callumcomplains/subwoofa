@@ -3074,6 +3074,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sw-codec-dts"
+version = "0.1.0"
+dependencies = [
+ "sw-core",
+ "sw-pcm",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "sw-codec-truehd"
 version = "0.1.0"
 dependencies = [
