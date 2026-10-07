@@ -42,6 +42,17 @@ pub struct MaStats {
     pub bytes: u64,
 }
 
+fn lossless_frames(e: &mut MaEncoder, pcm: &[Vec<i32>], got: usize, n: usize) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos < got {
+        let part: Vec<Vec<i32>> = pcm.iter().map(|c| { let mut v = c[pos..(pos + n).min(c.len())].to_vec(); v.resize(n, 0); v }).collect();
+        out.push(e.encode_frame(&part));
+        pos += n;
+    }
+    out
+}
+
 enum Enc {
     Core(MaCoreEncoder),
     Lossless(MaEncoder),
@@ -49,8 +60,8 @@ enum Enc {
 
 pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<MaStats, MaError> {
     let rate = stems.sample_rate;
-    if !matches!(rate, 44_100 | 48_000) {
-        return Err(MaError::Unsupported(format!("{rate} Hz: only 44.1 and 48 kHz are implemented so far")));
+    if !matches!(rate, 44_100 | 48_000 | 88_200 | 96_000) {
+        return Err(MaError::Unsupported(format!("{rate} Hz: only 44.1, 48, 88.2 and 96 kHz are implemented so far")));
     }
     let bit_res = (stems.bits as u32).clamp(16, 24);
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
@@ -91,12 +102,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let mut remaining = want;
     let mut bytes = 0u64;
     let mut frames = 0u64;
-    let mut pcm: Vec<Vec<i32>> = vec![vec![0; n]; nch];
+    // several frames per push so the lossless stage can run in parallel
+    let chunk = n * 16;
+    let mut pcm: Vec<Vec<i32>> = vec![vec![0; chunk]; nch];
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {
             return Err(MaError::Canceled);
         }
-        let got = (remaining as usize).min(n);
+        let got = (remaining as usize).min(chunk);
         stems.read_planar(&mut planar, got)?;
         for (j, &lc) in map.order.iter().enumerate() {
             let dst = &mut pcm[j];
@@ -107,8 +120,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         }
         remaining -= got as u64;
         let ready: Vec<Vec<u8>> = match &mut enc {
-            Enc::Core(e) => e.push(&pcm),
-            Enc::Lossless(e) => vec![e.encode_frame(&pcm)],
+            Enc::Core(e) => {
+                let part: Vec<Vec<i32>> = pcm.iter().map(|c| c[..got].to_vec()).collect();
+                e.push(&part)
+            }
+            Enc::Lossless(e) => pcm.iter().map(|c| c.len()).max().map_or(vec![], |_| lossless_frames(e, &pcm, got, n)),
         };
         for f in ready {
             file.write_all(&f)?;

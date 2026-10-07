@@ -87,6 +87,7 @@ pub struct Encoder {
     lfe_fir: Vec<f64>,
     /// 0 = equal noise level in every band (best SNR), 1 = noise follows the masking estimate.
     pub mask_weight: f64,
+    last_offset: f64,
     /// Bit-exact decoder emulation (needed by the lossless extension).
     exact: Option<ExactState>,
     /// PCM the reference decoder produces for the last frame (when emulation is on).
@@ -96,6 +97,7 @@ pub struct Encoder {
 struct ExactState {
     synth: Vec<FixedSynth>,
     lfe: FixedLfe,
+    x96: bool,
 }
 
 /// Everything decided for one frame.
@@ -143,15 +145,17 @@ impl Encoder {
             lfe_fir,
             mask_weight: std::env::var("SW_DTS_BETA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4),
             exact: None,
+            last_offset: 30.0,
             last_core_pcm: Vec::new(),
             cfg,
         })
     }
 
     /// Track the decoder's exact output (`last_core_pcm`) for every frame encoded from now on.
-    pub fn enable_exact_decode(&mut self) {
+    /// With `x96` the emulated decoder synthesises at twice the core rate (for 96 kHz lossless streams).
+    pub fn enable_exact_decode(&mut self, x96: bool) {
         let n = self.cfg.channels;
-        self.exact = Some(ExactState { synth: (0..n).map(|_| FixedSynth::new(false, false)).collect(), lfe: FixedLfe::new() });
+        self.exact = Some(ExactState { synth: (0..n).map(|_| FixedSynth::new(false, x96)).collect(), lfe: FixedLfe::new(), x96 });
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -217,14 +221,34 @@ impl Encoder {
                 p
             })
             .collect();
-        let (mut lo, mut hi) = (-120.0f64, 200.0f64);
+        // search around the previous frame's operating point: quality offsets vary slowly
+        let mut lo = self.last_offset - 12.0;
         let mut best = self.make_plan(sub, &power, &peak, lo);
-        // lo = coarsest quality always fits the budget (checked by the caller's minimum size); search upward
+        let mut guard = 0;
+        while best.bits > budget && lo > -200.0 {
+            lo -= 24.0;
+            best = self.make_plan(sub, &power, &peak, lo);
+            guard += 1;
+            if guard > 12 {
+                break;
+            }
+        }
         if best.bits > budget {
-            // fall back to the coarsest possible allocation
-            best = self.make_plan(sub, &power, &peak, -200.0);
+            lo = -200.0;
+            best = self.make_plan(sub, &power, &peak, lo);
         } else {
-            for _ in 0..14 {
+            let mut hi = lo + 24.0;
+            loop {
+                let p = self.make_plan(sub, &power, &peak, hi);
+                if p.bits <= budget && hi < 200.0 {
+                    lo = hi;
+                    best = p;
+                    hi += 24.0;
+                } else {
+                    break;
+                }
+            }
+            for _ in 0..6 {
                 let mid = 0.5 * (lo + hi);
                 let p = self.make_plan(sub, &power, &peak, mid);
                 if p.bits <= budget {
@@ -235,6 +259,7 @@ impl Encoder {
                 }
             }
         }
+        self.last_offset = lo;
         if std::env::var_os("SW_DTS_DEBUG").is_some() {
             let used: Vec<f64> = best.abits.iter().map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0).collect();
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
@@ -424,19 +449,20 @@ impl Encoder {
         }
         let mut out: Vec<Vec<i32>> = Vec::new();
         for ch in 0..nch {
-            let mut pcm = vec![0i32; blocks * 32];
+            let mult = if st.x96 { 2 } else { 1 };
+            let mut pcm = vec![0i32; blocks * 32 * mult];
             for blk in 0..blocks {
                 let mut input = [0i32; 32];
                 for b in 0..BANDS {
                     input[b] = deq[ch][b][blk];
                 }
-                st.synth[ch].step(&input, &mut pcm[blk * 32..blk * 32 + 32]);
+                st.synth[ch].step(&input, &mut pcm[blk * 32 * mult..(blk + 1) * 32 * mult]);
             }
             out.push(pcm);
         }
         if let Some((q, idx)) = lfe {
             let samples = dequantize_lfe(q, *idx as usize);
-            out.push(st.lfe.interpolate(&samples, false));
+            out.push(st.lfe.interpolate(&samples, st.x96));
         }
         self.last_core_pcm = out;
     }

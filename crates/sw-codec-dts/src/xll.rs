@@ -93,7 +93,16 @@ fn rc_value(idx: i32) -> i32 {
 /// Levinson-Durbin: reflection coefficients of the error filter `1 + sum a_k z^-k` up to `max_order`.
 fn reflection_coefficients(x: &[i32], max_order: usize) -> Vec<f64> {
     let n = x.len();
-    let xs: Vec<f64> = x.iter().map(|v| *v as f64).collect();
+    let taper: f64 = std::env::var("SW_TAPER").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3);
+    let xs: Vec<f64> = x
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let t = (i as f64 + 0.5) / n as f64;
+            let w = if taper > 0.0 { let e = t.min(1.0 - t); if e < taper / 2.0 { 0.5 - 0.5 * (std::f64::consts::PI * (2.0 * e / taper)).cos() } else { 1.0 } } else { 1.0 };
+            *v as f64 * w
+        })
+        .collect();
     let mut r = vec![0f64; max_order + 1];
     for lag in 0..=max_order {
         let mut s = 0.0;
@@ -122,6 +131,88 @@ fn reflection_coefficients(x: &[i32], max_order: usize) -> Vec<f64> {
         ks.push(k);
     }
     ks
+}
+
+/// Reflection coefficients from a covariance-method (windowless least squares) predictor, by step-down.
+fn covariance_reflection(x: &[i32], order: usize) -> Option<Vec<f64>> {
+    let n = x.len();
+    if n <= 4 * order {
+        return None;
+    }
+    let xs: Vec<f64> = x.iter().map(|v| *v as f64).collect();
+    let mut m = vec![vec![0f64; order]; order];
+    let mut r = vec![0f64; order];
+    for t in order..n {
+        for i in 0..order {
+            let xi = xs[t - 1 - i];
+            r[i] -= xi * xs[t];
+            for j in i..order {
+                m[i][j] += xi * xs[t - 1 - j];
+            }
+        }
+    }
+    let mut trace = 0.0;
+    for i in 0..order {
+        for j in 0..i {
+            m[i][j] = m[j][i];
+        }
+        trace += m[i][i];
+    }
+    if trace < 1.0 {
+        return None;
+    }
+    for i in 0..order {
+        m[i][i] += trace * 1e-10;
+    }
+    // Gaussian elimination
+    let mut a = m;
+    let mut b = r;
+    for col in 0..order {
+        let piv = (col..order).max_by(|&p, &q| a[p][col].abs().total_cmp(&a[q][col].abs()))?;
+        if a[piv][col].abs() < 1e-12 {
+            return None;
+        }
+        a.swap(col, piv);
+        b.swap(col, piv);
+        for row in col + 1..order {
+            let f = a[row][col] / a[col][col];
+            for c in col..order {
+                a[row][c] -= f * a[col][c];
+            }
+            b[row] -= f * b[col];
+        }
+    }
+    let mut coef = vec![0f64; order];
+    for row in (0..order).rev() {
+        let mut v = b[row];
+        for c in row + 1..order {
+            v -= a[row][c] * coef[c];
+        }
+        coef[row] = v / a[row][row];
+    }
+    // step down: coef[k-1] multiplies x[n-k]
+    let mut ks = vec![0f64; order];
+    let mut cur = coef;
+    for i in (0..order).rev() {
+        let k = cur[i];
+        if !k.is_finite() {
+            return None;
+        }
+        ks[i] = k.clamp(-0.9995, 0.9995);
+        if i == 0 {
+            break;
+        }
+        let d = 1.0 - k * k;
+        if d.abs() < 1e-9 {
+            return None;
+        }
+        let mut next = vec![0f64; i];
+        for j in 0..i {
+            next[j] = (cur[j] - k * cur[i - 1 - j]) / d;
+        }
+        cur = next;
+    }
+    Some(ks)
 }
 
 /// Rice parameter minimising the code length of `u`, and that length in bits.
@@ -183,7 +274,8 @@ pub struct XllEncoder {
     pub max_order: usize,
 }
 
-const NSEG: usize = 2;
+/// Segment count assumed while choosing predictors.
+const NSEG: usize = 4;
 
 impl XllEncoder {
     pub fn new(cfg: XllConfig) -> XllEncoder {
@@ -273,11 +365,18 @@ impl XllEncoder {
         }
         if max_order > 0 && x.iter().any(|v| *v != 0) {
             let ks = reflection_coefficients(&x, max_order);
-            for order in [2usize, 3, 4, 5, 6, 8, 10, 12, 15] {
+            for (cov, order) in [2usize, 3, 4, 5, 6, 8, 10, 12, 15].iter().flat_map(|o| [(false, *o), (true, *o)]) {
                 if order > max_order {
-                    break;
+                    continue;
                 }
-                let idx: Vec<i32> = ks[..order].iter().map(|k| quantize_rc(*k)).collect();
+                let idx: Vec<i32> = if cov {
+                    match covariance_reflection(&x, order) {
+                        Some(k) => k.iter().map(|k| quantize_rc(*k)).collect(),
+                        None => continue,
+                    }
+                } else {
+                    ks[..order].iter().map(|k| quantize_rc(*k)).collect()
+                };
                 let rcq: Vec<i32> = idx.iter().map(|i| rc_value(*i)).collect();
                 let coeff = lattice_to_direct(&rcq);
                 let res = predict(&x, &coeff);
@@ -296,7 +395,6 @@ impl XllEncoder {
         assert_eq!(pcm.len(), nch);
         let len = cfg.frame_samples;
         assert!(pcm.iter().all(|c| c.len() == len));
-        let seg_len = len / NSEG;
 
         let (orig_order, coeffs, coded) = if nch >= 2 { self.decorrelate(pcm) } else { (vec![0], vec![], pcm.to_vec()) };
         let any_decor = coeffs.iter().any(|c| *c != 0);
@@ -307,11 +405,17 @@ impl XllEncoder {
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
 
-        // band data: one block per segment
+        // band data: one block per segment; try several segment counts and keep the smallest frame
+        let mut best_frame: Option<Vec<u8>> = None;
+        for &nseg in &[1usize, 2, 4, 8] {
+            if len / nseg < 16 || len / nseg > if cfg.sample_rate > 48_000 { 512 } else { 256 } {
+                continue;
+            }
+            let seg_len = len / nseg;
         let nabits = self.nabits();
         let mut segs: Vec<Vec<u8>> = Vec::new();
         let mut prev: Option<Vec<(bool, u32)>> = None;
-        for seg in 0..NSEG {
+        for seg in 0..nseg {
             let mut w = BitWriter::new();
             // coding choices per channel
             let mut choice_b: Vec<Code> = Vec::new();
@@ -364,10 +468,15 @@ impl XllEncoder {
             w.align(8);
             segs.push(w.into_bytes());
         }
-        self.assemble(&plans, &orig_order, &coeffs, &segs, any_decor)
+        let frame = self.assemble(&plans, &orig_order, &coeffs, &segs, any_decor, nseg);
+        if best_frame.as_ref().map_or(true, |f| frame.len() < f.len()) {
+            best_frame = Some(frame);
+        }
+        }
+        best_frame.expect("no valid segmentation")
     }
 
-    fn assemble(&self, plans: &[ChannelPlan], orig_order: &[usize], coeffs: &[i32], segs: &[Vec<u8>], decor: bool) -> Vec<u8> {
+    fn assemble(&self, plans: &[ChannelPlan], orig_order: &[usize], coeffs: &[i32], segs: &[Vec<u8>], decor: bool, nseg: usize) -> Vec<u8> {
         let cfg = &self.cfg;
         let nch = cfg.channels;
         // ---- channel set sub-header
@@ -450,8 +559,8 @@ impl XllEncoder {
         tmp.put(fbits - 1, 5);
         tmp.put((frame_len - 1) as u32, fbits);
         tmp.put(0, 4); // one channel set
-        tmp.put(NSEG.trailing_zeros(), 4);
-        tmp.put((cfg.frame_samples / NSEG).trailing_zeros(), 4);
+        tmp.put(nseg.trailing_zeros(), 4);
+        tmp.put((cfg.frame_samples / nseg).trailing_zeros(), 4);
         tmp.put(nb4ssize - 1, 5);
         tmp.put(0, 2); // no band CRC
         tmp.put(0, 1); // no MSB/LSB split
