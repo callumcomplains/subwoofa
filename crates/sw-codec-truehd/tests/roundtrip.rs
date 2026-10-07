@@ -70,7 +70,7 @@ fn run_interval(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_or
         return;
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None }).unwrap();
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None, decorrelate: true }).unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -245,12 +245,17 @@ fn decode(path: &std::path::Path, stereo_only: bool) -> (std::process::Output, V
 }
 
 fn run_downmix(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize], dm: Downmix, n: usize, kind: Kind) {
+    run_downmix_bits(name, chanmap, channels, decoded_order, dm, n, kind, 0)
+}
+
+/// `zero_bits` low bits of every source sample are cleared (16/18-bit material in a 24-bit file).
+fn run_downmix_bits(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize], dm: Downmix, n: usize, kind: Kind, zero_bits: u32) {
     if !have_ffmpeg() {
         eprintln!("ffmpeg missing, skipping");
         return;
     }
-    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()) }).unwrap();
+    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n).into_iter().map(|v| (v >> zero_bits) << zero_bits).collect()).collect();
+    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()), decorrelate: true }).unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -287,9 +292,12 @@ fn run_downmix(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize
     assert!(out.status.success() && out.stderr.is_empty(), "{name}: stereo decode: {}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(st.len(), n * 2, "{name}: stereo decode length (is the downmix substream really decoded alone?)");
     let (lo, ro) = expected_stereo(&sigs, &dm, n);
+    // with unused low bits the stereo pair is coded on a coarser grid (error below about one grid step,
+    // plus the difference between the exact 1/2 scale used there and the 16383/32768-ish scale of the formula)
+    let tol = if zero_bits > 0 { (3i32 << zero_bits) / 2 + 2 } else { 0 };
     for i in 0..n {
-        assert_eq!(st[i * 2], lo[i], "{name}: Lo differs at sample {i}");
-        assert_eq!(st[i * 2 + 1], ro[i], "{name}: Ro differs at sample {i}");
+        assert!((st[i * 2] - lo[i]).abs() <= tol + lo[i].abs() / 20_000, "{name}: Lo differs at sample {i}: {} vs {}", st[i * 2], lo[i]);
+        assert!((st[i * 2 + 1] - ro[i]).abs() <= tol + ro[i].abs() / 20_000, "{name}: Ro differs at sample {i}: {} vs {}", st[i * 2 + 1], ro[i]);
     }
 }
 
@@ -303,6 +311,20 @@ fn five_one_downmix() -> Downmix {
 #[test]
 fn downmix_five_one() {
     run_downmix("dm51", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 * 2 + 29, Kind::Music);
+}
+
+#[test]
+fn downmix_five_one_on_a_coarse_grid() {
+    // 18-bit material: the stereo pair drops five bits, the 5.1 decode is still exact
+    run_downmix_bits("dm51_coarse", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 * 2 + 29, Kind::Music, 6);
+    run_downmix_bits("dm51_coarse1", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 + 7, Kind::Music, 1);
+}
+
+#[test]
+fn downmix_unity_on_a_coarse_grid() {
+    let mut dm = five_one_downmix();
+    dm.dest = 1 << 14;
+    run_downmix_bits("dm51_unity_coarse", FIVE_ONE, 6, &ID6, dm, 48_000 + 13, Kind::Music, 4);
 }
 
 #[test]

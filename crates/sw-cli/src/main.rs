@@ -27,6 +27,16 @@ enum Cmd {
         #[arg(long)]
         duration: Option<f64>,
     },
+    /// Analyse a TrueHD (.thd) stream: structure, coding tools and where the bits go.
+    StreamInfo {
+        path: PathBuf,
+        /// Only analyse this many restart intervals (default: all) ...
+        #[arg(long)]
+        count: Option<usize>,
+        /// ... starting at this restart interval
+        #[arg(long, default_value_t = 0)]
+        first: usize,
+    },
     /// Check a downmix for clipping (three or more consecutive full-scale samples).
     DownmixCheck {
         #[arg(long, default_value = "5.1")]
@@ -138,6 +148,10 @@ fn run() -> Result<(), String> {
                 }
                 println!("RMS over span: {:.3} dBFS", 10.0 * (sum / n.max(1) as f64).log10());
             }
+        }
+        Cmd::StreamInfo { path, count, first } => {
+            let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            print!("{}", sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary());
         }
         Cmd::DownmixCheck { layout, to, auto_import, inputs, trim_db, safe, start, duration, ffmpeg } => {
             let layout: &'static ChannelLayout = ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
