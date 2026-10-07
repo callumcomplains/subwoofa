@@ -6,6 +6,7 @@
 
 use crate::bits::BitWriter;
 use crate::qmf::{Analysis, BANDS};
+use crate::core_exact::{dequantize, dequantize_lfe, FixedLfe, FixedSynth};
 use crate::tables::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +87,15 @@ pub struct Encoder {
     lfe_fir: Vec<f64>,
     /// 0 = equal noise level in every band (best SNR), 1 = noise follows the masking estimate.
     pub mask_weight: f64,
+    /// Bit-exact decoder emulation (needed by the lossless extension).
+    exact: Option<ExactState>,
+    /// PCM the reference decoder produces for the last frame (when emulation is on).
+    pub last_core_pcm: Vec<Vec<i32>>,
+}
+
+struct ExactState {
+    synth: Vec<FixedSynth>,
+    lfe: FixedLfe,
 }
 
 /// Everything decided for one frame.
@@ -132,8 +142,16 @@ impl Encoder {
             lfe_decim,
             lfe_fir,
             mask_weight: std::env::var("SW_DTS_BETA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4),
+            exact: None,
+            last_core_pcm: Vec::new(),
             cfg,
         })
+    }
+
+    /// Track the decoder's exact output (`last_core_pcm`) for every frame encoded from now on.
+    pub fn enable_exact_decode(&mut self) {
+        let n = self.cfg.channels;
+        self.exact = Some(ExactState { synth: (0..n).map(|_| FixedSynth::new(false, false)).collect(), lfe: FixedLfe::new() });
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -221,7 +239,11 @@ impl Encoder {
             let used: Vec<f64> = best.abits.iter().map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0).collect();
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
         }
-        self.pack(&best, lfe.as_ref())
+        let bytes = self.pack(&best, lfe.as_ref());
+        if self.exact.is_some() {
+            self.emulate_decoder(&best, lfe.as_ref());
+        }
+        bytes
     }
 
     /// Decimated, quantizable LFE samples for this frame: (samples, scale index).
@@ -382,6 +404,41 @@ impl Encoder {
     fn header_bits(&self) -> usize {
         let nch = self.cfg.channels;
         104 + 7 + 5 * nch + 5 * nch + 3 * nch + 2 * nch + 3 * nch + 3 * nch + 5 + BANDS * nch
+    }
+
+    /// Run the decoder's integer arithmetic over this frame's coded data.
+    fn emulate_decoder(&mut self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) {
+        let nch = self.cfg.channels;
+        let blocks = self.cfg.blocks;
+        let st = self.exact.as_mut().unwrap();
+        let mut deq = vec![vec![vec![0i32; blocks]; BANDS]; nch];
+        for ch in 0..nch {
+            for b in 0..BANDS {
+                let k = plan.abits[ch][b] as usize;
+                if k == 0 {
+                    continue;
+                }
+                let scale = SCALE_7[plan.scale_idx[ch][b] as usize] as i32;
+                dequantize(&plan.q[ch][b], STEP_LOSSY[k] as i32, scale, &mut deq[ch][b]);
+            }
+        }
+        let mut out: Vec<Vec<i32>> = Vec::new();
+        for ch in 0..nch {
+            let mut pcm = vec![0i32; blocks * 32];
+            for blk in 0..blocks {
+                let mut input = [0i32; 32];
+                for b in 0..BANDS {
+                    input[b] = deq[ch][b][blk];
+                }
+                st.synth[ch].step(&input, &mut pcm[blk * 32..blk * 32 + 32]);
+            }
+            out.push(pcm);
+        }
+        if let Some((q, idx)) = lfe {
+            let samples = dequantize_lfe(q, *idx as usize);
+            out.push(st.lfe.interpolate(&samples, false));
+        }
+        self.last_core_pcm = out;
     }
 
     fn pack(&self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) -> Vec<u8> {
