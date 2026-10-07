@@ -16,6 +16,9 @@ Early foundation. What works today:
 | FFmpeg backend: AC-3, E-AC-3, DTS core | working |
 | Native AC-3 and E-AC-3 (Dolby Digital Plus) encoders, 1.0 to 5.1, any E-AC-3 bit rate 8 to 1024 kbps | working; verified against a reference decoder, about 70x real time |
 | Native TrueHD lossless encoder (up to 7.1, 44.1 to 192 kHz) with a real stereo-downmix substream (matrices + LSB bypass), bit-exact against a reference decoder | working; smaller than FFmpeg's on test material |
+| Native TrueHD analyser (`subwoofa stream-info file.thd`): where the bits go, which tools a stream uses | done |
+| Native DTS core (Digital Surround) encoder, 1.0 to 5.1 at 32 to 48 kHz (no ES/XCH, 96/24 or ADPCM/VQ yet), verified by decoding | working |
+| Native DTS-HD Master Audio (CBR core + lossless extension, 1.0 to 5.1, 44.1/48 kHz): bit-exact through FFmpeg, passes DTS's own verifier, `.dtshd` container | working; 96 kHz and 7.1 next |
 | Native WAV / BWF / RF64 / AIFF reader, stem-set channel mapping | done |
 | Encode queue: progress, cancel, concurrency, auto-verify (lossless MD5), per-job logs | done |
 | FFmpeg backend: TrueHD / MLP | working; 5.1 verified bit-exact lossless on real PCM |
