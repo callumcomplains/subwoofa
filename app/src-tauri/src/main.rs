@@ -19,6 +19,8 @@ struct StreamInfo {
     sample_rates: &'static [u32],
     /// Whether any installed backend can encode this stream type today.
     available: bool,
+    /// Whether Subwoofa's own encoder (no FFmpeg needed) can make it.
+    native: bool,
 }
 
 #[derive(Serialize)]
@@ -52,7 +54,8 @@ fn catalog() -> Catalog {
                     name: s.display_name(),
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
-                    available: ff::supports(*s),
+                    available: ff::supports(*s) || *s == StreamType::Ac3,
+                    native: *s == StreamType::Ac3,
                 })
                 .collect(),
         })
@@ -64,7 +67,8 @@ fn catalog() -> Catalog {
             name: s.display_name(),
             lossless: s.is_lossless(),
             sample_rates: s.sample_rates(),
-            available: ff::supports(*s),
+            available: ff::supports(*s) || *s == StreamType::Ac3,
+            native: *s == StreamType::Ac3,
         })
         .collect();
     Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }

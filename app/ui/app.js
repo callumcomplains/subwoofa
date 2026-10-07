@@ -341,7 +341,7 @@ async function encode() {
       dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
       sample_rate: curRate(),
       bitrate: $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
-      dialnorm: dialnormValue(), unlocked,
+      dialnorm: dialnormValue(), unlocked, engine: preferNative && curStream().native ? "native" : "ffmpeg",
       start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
       inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
     }});
@@ -352,6 +352,7 @@ async function encode() {
 /* ---------- queue ---------- */
 
 let autoVerify = true;
+let preferNative = false;
 const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 function renderQueue(jobs) {
@@ -421,6 +422,9 @@ async function init() {
   $("optConc").onchange = () => { const n = Math.max(1, Math.min(8, Number($("optConc").value) || 1)); $("optConc").value = n; store.set("conc", n); invoke("queue_set_concurrency", { n }); };
   autoVerify = store.get("verify") !== "0";
   $("optVerify").checked = autoVerify;
+  preferNative = store.get("native") === "1";
+  $("optNative").checked = preferNative;
+  $("optNative").onchange = () => { preferNative = $("optNative").checked; store.set("native", preferNative ? "1" : "0"); };
   $("optVerify").onchange = () => { autoVerify = $("optVerify").checked; store.set("verify", autoVerify ? "1" : "0"); };
   await window.__TAURI__.event.listen("queue", (e) => renderQueue(e.payload));
   renderQueue(await invoke("queue_list"));

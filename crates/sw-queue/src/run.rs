@@ -24,6 +24,9 @@ pub struct EncodeSpec {
     /// Skip spec validation (custom bit rates, sample rates, unusual combinations).
     #[serde(default)]
     pub unlocked: bool,
+    /// "ffmpeg" (default) or "native" (Subwoofa's own encoder, AC-3 only for now).
+    #[serde(default)]
+    pub engine: String,
 }
 
 impl EncodeSpec {
@@ -140,9 +143,16 @@ fn execute_inner(
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
     }
-    drop(stems);
+    let native = spec.engine == "native";
+    if native && stream != StreamType::Ac3 {
+        return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
+    }
+    let mut stems = stems;
 
-    let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
+    let ffmpeg = ff::find_ffmpeg();
+    if ffmpeg.is_none() && !native {
+        return Err("ffmpeg not found on PATH".into());
+    }
     let job = ff::Job {
         stream,
         layout,
@@ -153,11 +163,26 @@ fn execute_inner(
         dialnorm: spec.dialnorm,
         start_secs: spec.start,
         duration_secs: Some(span).filter(|_| spec.start.is_some() || spec.duration.is_some()),
-        ffmpeg,
+        ffmpeg: ffmpeg.clone().unwrap_or_default(),
     };
-    log.push_str("Engine:       FFmpeg\n");
+    log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native AC-3" } else { "FFmpeg" }));
 
-    ff::run_progress(&job, span, cancel, &mut |p| on_progress(p, false))?;
+    if native {
+        let req = sw_codec_ac3::native::Request {
+            layout,
+            bitrate_kbps: spec.bitrate.unwrap_or(448),
+            dialnorm: spec.dialnorm.unwrap_or(31),
+            start_secs: start,
+            duration_secs: Some(span),
+            output: std::path::Path::new(&spec.output),
+        };
+        sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+            sw_codec_ac3::native::NativeError::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        })?;
+    } else {
+        ff::run_progress(&job, span, cancel, &mut |p| on_progress(p, false))?;
+    }
     let enc_secs = t0.elapsed().as_secs_f64();
     let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
@@ -166,8 +191,12 @@ fn execute_inner(
     if !verify {
         return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
     }
+    if ffmpeg.is_none() {
+        log.push_str("Verify: skipped (ffmpeg not available to decode the result)\n");
+        return Ok(Outcome { message: format!("encoded {:.1} MB (not verified: no decoder available)", size as f64 / 1e6), verified: false });
+    }
     on_progress(1.0, true);
-    let bits = sw_pcm::StemSet::open(layout, &job.inputs).map(|s| s.bits).unwrap_or(24);
+    let bits = stems.bits;
     match ff::verify(&job, bits, span) {
         Ok(msg) => {
             log.push_str(&format!("Verify: {msg}\n"));

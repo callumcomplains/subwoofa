@@ -13,3 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+
+# Audio DSP in an unoptimised build is unusably slow; keep debug info but optimise.
+[profile.dev]
+opt-level = 2

@@ -3095,6 +3095,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "sw-backend-ffmpeg",
+ "sw-codec-ac3",
  "sw-core",
  "sw-pcm",
 ]

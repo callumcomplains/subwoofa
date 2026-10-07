@@ -8,4 +8,5 @@ license.workspace = true
 sw-core = { path = "../sw-core" }
 sw-backend-ffmpeg = { path = "../sw-backend-ffmpeg" }
 sw-pcm = { path = "../sw-pcm" }
+sw-codec-ac3 = { path = "../sw-codec-ac3" }
 serde.workspace = true

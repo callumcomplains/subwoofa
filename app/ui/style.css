@@ -177,7 +177,7 @@ dialog h2 { margin-bottom: 14px; }
 .opt input { margin-top: 3px; accent-color: var(--lamp); }
 .opt b { display: block; font: 600 13px var(--label); }
 .opt small { display: block; color: var(--dim); margin-top: 3px; font-size: 12px; line-height: 1.45; }
-.opt-row { display: flex; gap: 20px; align-items: flex-start; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.opt-row { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-start; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rule); }
 .opt.inline { flex: 1; }
 menu { margin: 16px 0 0; padding: 0; display: flex; justify-content: flex-end; }
 

@@ -51,7 +51,7 @@ fn spec(dir: &Path, name: &str, stream: &str, inputs: &HashMap<String, String>) 
     EncodeSpec {
         dest: "generic".into(), stream: stream.into(), layout: "5.1".into(), sample_rate: 48_000,
         bitrate: if stream == "ac3" { Some(448) } else { None }, dialnorm: Some(31), start: None, duration: None,
-        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false,
+        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false, engine: String::new(),
     }
 }
 
@@ -96,6 +96,29 @@ fn runs_jobs_verifies_lossless_and_writes_logs() {
     assert!(std::fs::read_to_string(dir.join("b_log.txt")).unwrap().contains("lossless verified"));
     assert!(std::fs::read_to_string(dir.join("c_log.txt")).unwrap().contains("FAILED"));
     assert!(*updates.lock().unwrap() > 6, "queue should push updates");
+    q.shutdown();
+}
+
+#[test]
+fn native_engine_runs_in_the_queue() {
+    if !have_ffmpeg() { eprintln!("ffmpeg missing, skipping"); return; }
+    let dir = tmpdir("native");
+    let inputs = stems(&dir, 4.0);
+    let q = Queue::new(1, Arc::new(|_| {}));
+    let mut s = spec(&dir, "n.ac3", "ac3", &inputs);
+    s.engine = "native".into();
+    s.bitrate = Some(448);
+    q.enqueue(s, true).unwrap();
+    let snap = wait_until(&q, |s| s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[0].state, State::Passed, "{:?}", snap[0]);
+    assert!(std::fs::read_to_string(dir.join("n_log.txt")).unwrap().contains("Subwoofa native AC-3"));
+    // native engine refuses formats it cannot make
+    let mut bad = spec(&dir, "m.thd", "truehd", &inputs);
+    bad.engine = "native".into();
+    q.enqueue(bad, false).unwrap();
+    let snap = wait_until(&q, |s| s.len() == 2 && s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[1].state, State::Failed);
+    assert!(snap[1].message.contains("native engine"), "{}", snap[1].message);
     q.shutdown();
 }
 
