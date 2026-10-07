@@ -144,7 +144,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -168,7 +168,18 @@ fn execute_inner(
     };
     log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
 
-    if native {
+    if native && stream == StreamType::TrueHd {
+        let req = sw_codec_truehd::native::Request {
+            layout,
+            start_secs: start,
+            duration_secs: Some(span),
+            output: std::path::Path::new(&spec.output),
+        };
+        sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+            sw_codec_truehd::native::NativeError::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        })?;
+    } else if native {
         let req = sw_codec_ac3::native::Request {
             layout,
             bitrate_kbps: spec.bitrate.unwrap_or(448),

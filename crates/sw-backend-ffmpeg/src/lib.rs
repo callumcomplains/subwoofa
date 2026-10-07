@@ -133,7 +133,10 @@ pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String
             Some(_) => "jx".to_string(),
             None => label.to_string(),
         };
-        parts.push(format!("{map}join=inputs={n}:channel_layout={}[{joined}]", names.join("+")));
+        // Explicit input -> output assignment: without `map`, join matches channel names carried in
+        // the input files' metadata, which scrambles plain WAVs that have no channel mask.
+        let assign: Vec<String> = names.iter().enumerate().map(|(i, name)| format!("{i}.0-{name}")).collect();
+        parts.push(format!("{map}join=inputs={n}:channel_layout={}:map={}[{joined}]", names.join("+"), assign.join("|")));
         if let Some(t) = &trim {
             parts.push(format!("[jx]{t}[{label}]"));
         }

@@ -119,13 +119,20 @@ fn native_engine_runs_in_the_queue() {
     q.enqueue(e, true).unwrap();
     let snap = wait_until(&q, |s| s.len() == 2 && s.iter().all(|j| j.state.is_final()));
     assert_eq!(snap[1].state, State::Passed, "{:?}", snap[1]);
+    // lossless TrueHD through the native engine: verification compares MD5 against the source
+    let mut t = spec(&dir, "n.thd", "truehd", &inputs);
+    t.engine = "native".into();
+    q.enqueue(t, true).unwrap();
+    let snap = wait_until(&q, |s| s.len() == 3 && s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[2].state, State::Passed, "{:?}", snap[2]);
+    assert!(snap[2].message.contains("lossless verified"), "{}", snap[2].message);
     // native engine refuses formats it cannot make
-    let mut bad = spec(&dir, "m.thd", "truehd", &inputs);
+    let mut bad = spec(&dir, "m.mlp", "mlp", &inputs);
     bad.engine = "native".into();
     q.enqueue(bad, false).unwrap();
-    let snap = wait_until(&q, |s| s.len() == 3 && s.iter().all(|j| j.state.is_final()));
-    assert_eq!(snap[2].state, State::Failed);
-    assert!(snap[2].message.contains("native engine"), "{}", snap[2].message);
+    let snap = wait_until(&q, |s| s.len() == 4 && s.iter().all(|j| j.state.is_final()));
+    assert_eq!(snap[3].state, State::Failed);
+    assert!(snap[3].message.contains("native engine"), "{}", snap[3].message);
     q.shutdown();
 }
 

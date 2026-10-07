@@ -54,8 +54,8 @@ fn catalog() -> Catalog {
                     name: s.display_name(),
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
-                    available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3),
-                    native: matches!(*s, StreamType::Ac3 | StreamType::Eac3),
+                    available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
+                    native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
                 })
                 .collect(),
         })
@@ -67,8 +67,8 @@ fn catalog() -> Catalog {
             name: s.display_name(),
             lossless: s.is_lossless(),
             sample_rates: s.sample_rates(),
-            available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3),
-            native: matches!(*s, StreamType::Ac3 | StreamType::Eac3),
+            available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
+            native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
         })
         .collect();
     Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }

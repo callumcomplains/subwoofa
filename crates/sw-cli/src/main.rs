@@ -171,8 +171,24 @@ fn run() -> Result<(), String> {
             let map = collect_inputs(layout, auto_import, inputs)?;
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
             if engine == "native" {
+                if stream == StreamType::TrueHd {
+                    let mut stems = sw_pcm::StemSet::open(layout, &map).map_err(|e| e.to_string())?;
+                    let req = sw_codec_truehd::native::Request {
+                        layout,
+                        start_secs: start.unwrap_or(0.0),
+                        duration_secs: duration,
+                        output: &output,
+                    };
+                    let t0 = std::time::Instant::now();
+                    let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))
+                        .map_err(|e| e.to_string())?;
+                    let secs = stats.frames as f64 / stems.sample_rate as f64;
+                    let pcm = stats.frames as f64 * layout.channel_count() as f64 * 3.0;
+                    println!("wrote {} ({:.1} MB, {:.1}% of PCM) in {:.1} s = {:.0}x real time", output.display(), stats.bytes as f64 / 1e6, 100.0 * stats.bytes as f64 / pcm, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    return Ok(());
+                }
                 if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
-                    return Err(format!("the native engine only encodes AC-3 and E-AC-3 so far, not {}", stream.display_name()));
+                    return Err(format!("the native engine encodes AC-3, E-AC-3 and TrueHD so far, not {}", stream.display_name()));
                 }
                 let mut stems = sw_pcm::StemSet::open(layout, &map).map_err(|e| e.to_string())?;
                 let req = sw_codec_ac3::native::Request {

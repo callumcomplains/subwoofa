@@ -9,4 +9,5 @@ sw-core = { path = "../sw-core" }
 sw-backend-ffmpeg = { path = "../sw-backend-ffmpeg" }
 sw-pcm = { path = "../sw-pcm" }
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
+sw-codec-truehd = { path = "../sw-codec-truehd" }
 serde.workspace = true
