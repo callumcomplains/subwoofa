@@ -1,0 +1,10 @@
+[package]
+name = "sw-codec-ac3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+thiserror.workspace = true
+sw-pcm = { path = "../sw-pcm" }

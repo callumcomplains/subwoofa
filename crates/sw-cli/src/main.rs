@@ -84,6 +84,9 @@ enum Cmd {
         output: PathBuf,
         #[arg(long)]
         ffmpeg: Option<PathBuf>,
+        /// Encoder engine: `ffmpeg` (default) or `native` (Subwoofa's own, AC-3 only for now).
+        #[arg(long, default_value = "ffmpeg")]
+        engine: String,
     },
 }
 
@@ -158,7 +161,7 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine } => {
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             let layout: &'static ChannelLayout =
@@ -167,6 +170,26 @@ fn run() -> Result<(), String> {
 
             let map = collect_inputs(layout, auto_import, inputs)?;
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
+            if engine == "native" {
+                if stream != StreamType::Ac3 {
+                    return Err(format!("the native engine only encodes AC-3 so far, not {}", stream.display_name()));
+                }
+                let mut stems = sw_pcm::StemSet::open(layout, &map).map_err(|e| e.to_string())?;
+                let req = sw_codec_ac3::native::Request {
+                    layout,
+                    bitrate_kbps: bitrate.unwrap_or(448),
+                    dialnorm: dialnorm.unwrap_or(31),
+                    start_secs: start.unwrap_or(0.0),
+                    duration_secs: duration,
+                    output: &output,
+                };
+                let t0 = std::time::Instant::now();
+                let stats = sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))
+                    .map_err(|e| e.to_string())?;
+                let secs = stats.input_frames as f64 / stems.sample_rate as f64;
+                println!("wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                return Ok(());
+            }
             let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
             let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, start_secs: start, duration_secs: duration, ffmpeg };
             ff::run(&job).map_err(|e| e.to_string())?;

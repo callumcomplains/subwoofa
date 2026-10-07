@@ -3058,8 +3058,18 @@ dependencies = [
  "clap",
  "serde_json",
  "sw-backend-ffmpeg",
+ "sw-codec-ac3",
  "sw-core",
  "sw-pcm",
+]
+
+[[package]]
+name = "sw-codec-ac3"
+version = "0.1.0"
+dependencies = [
+ "sw-core",
+ "sw-pcm",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
