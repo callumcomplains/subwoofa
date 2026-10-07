@@ -44,6 +44,9 @@ pub struct Job {
     /// inputs are padded and the joined stream is trimmed to exactly this length, which avoids
     /// FFmpeg's `join` filter occasionally dropping the final partial frame.
     pub frames: Option<u64>,
+    /// Source of each layout channel (file, channel inside the file). When `None`, `inputs` is used
+    /// with one mono file per channel.
+    pub slots: Option<Vec<(PathBuf, usize)>>,
     pub ffmpeg: PathBuf,
 }
 
@@ -95,48 +98,64 @@ pub fn supports(stream: StreamType) -> bool {
 /// `-i` arguments for every channel file plus a filter that joins them into one multichannel
 /// stream with the layout's speaker positions, ending in the output pad `[label]`.
 pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String), Error> {
-    let mut args = Vec::new();
-    let mut names = Vec::new();
     let n = job.layout.channel_count();
-    // with a known length, each input is padded so no input can run dry before the trim
-    let (pads, pad_pad): (Vec<String>, &str) = match job.frames {
-        Some(_) => ((0..n).map(|i| format!("[{i}:a]apad=pad_len=16384[p{i}]")).collect(), "p"),
-        None => (Vec::new(), ""),
-    };
-    let mut map = String::new();
-    for (i, ch) in job.layout.channels.iter().enumerate() {
-        let path = job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?;
+    // where each layout channel comes from: (file, channel inside the file)
+    let mut sources: Vec<(PathBuf, usize)> = Vec::with_capacity(n);
+    match &job.slots {
+        Some(slots) => sources.extend(slots.iter().cloned()),
+        None => {
+            for ch in job.layout.channels {
+                sources.push((job.inputs.get(ch).ok_or(Error::MissingChannel(ch.short()))?.clone(), 0));
+            }
+        }
+    }
+    if sources.len() != n {
+        return Err(Error::Unsupported("source list does not match the layout"));
+    }
+    // one ffmpeg input per distinct file (a multichannel file feeds several layout channels)
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut stream_of: Vec<usize> = Vec::with_capacity(n);
+    for (path, _) in &sources {
+        let idx = files.iter().position(|f| f == path).unwrap_or_else(|| {
+            files.push(path.clone());
+            files.len() - 1
+        });
+        stream_of.push(idx);
+    }
+    let mut args = Vec::new();
+    for f in &files {
         if let Some(s) = job.start_secs {
             args.extend(["-ss".into(), s.to_string()]);
         }
         if let Some(d) = job.duration_secs {
             args.extend(["-t".into(), d.to_string()]);
         }
-        args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
-        if pad_pad.is_empty() {
-            map.push_str(&format!("[{i}:a]"));
-        } else {
-            map.push_str(&format!("[p{i}]"));
-        }
-        names.push(ff_name(*ch).ok_or(Error::Unsupported("channel"))?);
+        args.extend(["-i".into(), f.to_string_lossy().into_owned()]);
     }
+    // with a known length, each input is padded so no input can run dry before the trim
+    let padded = job.frames.is_some();
+    let mut parts: Vec<String> = Vec::new();
+    let pad_label = |i: usize| if padded { format!("[p{i}]") } else { format!("[{i}:a]") };
+    if padded {
+        for i in 0..files.len() {
+            parts.push(format!("[{i}:a]apad=pad_len=16384[p{i}]"));
+        }
+    }
+    let names: Vec<&'static str> = job.layout.channels.iter().map(|c| ff_name(*c).ok_or(Error::Unsupported("channel"))).collect::<Result<_, _>>()?;
     let trim = job.frames.map(|f| format!("atrim=end_sample={f}"));
-    let mut parts: Vec<String> = pads;
     if n == 1 {
-        let src = if pad_pad.is_empty() { "[0:a]".to_string() } else { "[p0]".to_string() };
+        let src = pad_label(0);
         parts.push(match &trim {
             Some(t) => format!("{src}{t}[{label}]"),
             None => format!("{src}anull[{label}]"),
         });
     } else {
-        let joined = match &trim {
-            Some(_) => "jx".to_string(),
-            None => label.to_string(),
-        };
-        // Explicit input -> output assignment: without `map`, join matches channel names carried in
-        // the input files' metadata, which scrambles plain WAVs that have no channel mask.
-        let assign: Vec<String> = names.iter().enumerate().map(|(i, name)| format!("{i}.0-{name}")).collect();
-        parts.push(format!("{map}join=inputs={n}:channel_layout={}:map={}[{joined}]", names.join("+"), assign.join("|")));
+        let joined = if trim.is_some() { "jx".to_string() } else { label.to_string() };
+        let inputs: String = (0..files.len()).map(pad_label).collect();
+        // Explicit input channel -> output channel assignment: without `map`, join matches channel
+        // names carried in the files' metadata, which scrambles plain WAVs that have no channel mask.
+        let assign: Vec<String> = sources.iter().zip(&stream_of).zip(&names).map(|(((_, ch), s), name)| format!("{s}.{ch}-{name}")).collect();
+        parts.push(format!("{inputs}join=inputs={}:channel_layout={}:map={}[{joined}]", files.len(), names.join("+"), assign.join("|")));
         if let Some(t) = &trim {
             parts.push(format!("[jx]{t}[{label}]"));
         }
@@ -310,7 +329,7 @@ mod tests {
     fn job(stream: StreamType) -> Job {
         let layout = ChannelLayout::find("5.1").unwrap();
         let inputs = layout.channels.iter().map(|c| (*c, PathBuf::from(format!("{}.wav", c.short())))).collect();
-        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, frames: None, ffmpeg: "ffmpeg".into() }
+        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, frames: None, slots: None, ffmpeg: "ffmpeg".into() }
     }
 
     #[test]

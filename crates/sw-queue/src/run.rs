@@ -30,6 +30,9 @@ pub struct EncodeSpec {
     /// Native TrueHD: include the stereo downmix substream (default on).
     #[serde(default = "yes")]
     pub downmix: bool,
+    /// Multichannel-file channel order: "auto" (default), "mask" or "file".
+    #[serde(default)]
+    pub channel_order: String,
 }
 
 fn yes() -> bool {
@@ -124,7 +127,8 @@ fn execute_inner(
         .collect();
 
     // Read the real format of the inputs natively (rate, bit depth, length, timecode).
-    let stems = sw_pcm::StemSet::open(layout, &inputs).map_err(|e| e.to_string())?;
+    let order = sw_pcm::ChannelOrder::parse(&spec.channel_order).ok_or("channel order must be auto, mask or file")?;
+    let stems = sw_pcm::StemSet::open_ordered(layout, &inputs, order).map_err(|e| e.to_string())?;
     if !spec.unlocked && stems.sample_rate != spec.sample_rate {
         return Err(format!("input files are {} Hz but the encode is set to {} Hz", stems.sample_rate, spec.sample_rate).into());
     }
@@ -160,6 +164,7 @@ fn execute_inner(
     if ffmpeg.is_none() && !native {
         return Err("ffmpeg not found on PATH".into());
     }
+    let slots = sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())?;
     let job = ff::Job {
         stream,
         layout,
@@ -171,6 +176,7 @@ fn execute_inner(
         start_secs: spec.start,
         duration_secs: Some(span).filter(|_| spec.start.is_some() || spec.duration.is_some()),
         frames: Some((span * stems.sample_rate as f64).round() as u64),
+        slots: Some(slots),
         ffmpeg: ffmpeg.clone().unwrap_or_default(),
     };
     log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));

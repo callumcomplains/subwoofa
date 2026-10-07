@@ -111,6 +111,10 @@ fn options(dest: String, stream: String, layout: String, sample_rate: u32, unloc
 #[tauri::command]
 fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>, String> {
     let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
+    // one multichannel file for every channel of the layout
+    if let Some(all) = sw_pcm::multichannel_inputs(l, std::path::Path::new(&first)) {
+        return Ok(all.into_iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect());
+    }
     Ok(autoimport::auto_import(&PathBuf::from(first), l)
         .into_iter()
         .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
@@ -286,7 +290,7 @@ async fn downmix_check(req: CheckRequest) -> Result<ff::downmix::SatReport, Stri
         let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
         let job = ff::Job {
             stream: StreamType::Ac3, layout, inputs, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None,
-            dialnorm: None, start_secs: req.start, duration_secs: req.duration, frames: None, ffmpeg,
+            dialnorm: None, start_secs: req.start, duration_secs: req.duration, frames: None, slots: None, ffmpeg,
         };
         ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())
     })

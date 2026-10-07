@@ -84,6 +84,9 @@ enum Cmd {
         output: PathBuf,
         #[arg(long)]
         ffmpeg: Option<PathBuf>,
+        /// Channel order inside a multichannel input file: auto (default), mask or file.
+        #[arg(long, default_value = "auto")]
+        channel_order: String,
         /// Native TrueHD only: leave out the stereo downmix substream (channels coded directly).
         #[arg(long)]
         no_downmix: bool,
@@ -153,7 +156,7 @@ fn run() -> Result<(), String> {
             }
             let map = collect_inputs(layout, auto_import, inputs)?;
             let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
-            let job = ff::Job { stream: StreamType::Ac3, layout, inputs: map, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None, dialnorm: None, start_secs: start, duration_secs: duration, frames: None, ffmpeg };
+            let job = ff::Job { stream: StreamType::Ac3, layout, inputs: map, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None, dialnorm: None, start_secs: start, duration_secs: duration, frames: None, slots: None, ffmpeg };
             let rep = ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())?;
             println!("analysed {} frames ({:.1} s at 48 kHz)", rep.frames, rep.frames as f64 / 48_000.0);
             for (c, p) in rep.channels.iter().zip(&rep.peak_db) {
@@ -164,7 +167,8 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order } => {
+            let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             let layout: &'static ChannelLayout =
@@ -175,7 +179,7 @@ fn run() -> Result<(), String> {
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
             if engine == "native" {
                 if stream == StreamType::TrueHd {
-                    let mut stems = sw_pcm::StemSet::open(layout, &map).map_err(|e| e.to_string())?;
+                    let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_truehd::native::Request {
                         layout,
                         start_secs: start.unwrap_or(0.0),
@@ -197,7 +201,7 @@ fn run() -> Result<(), String> {
                 if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
                     return Err(format!("the native engine encodes AC-3, E-AC-3 and TrueHD so far, not {}", stream.display_name()));
                 }
-                let mut stems = sw_pcm::StemSet::open(layout, &map).map_err(|e| e.to_string())?;
+                let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                 let req = sw_codec_ac3::native::Request {
                     layout,
                     bitrate_kbps: bitrate.unwrap_or(448),
@@ -215,7 +219,8 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
             let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
-            let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, start_secs: start, duration_secs: duration, frames: None, ffmpeg };
+            let slots = sw_pcm::slot_map(layout, &map, order).ok();
+            let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, start_secs: start, duration_secs: duration, frames: None, slots, ffmpeg };
             ff::run(&job).map_err(|e| e.to_string())?;
             println!("wrote {}", output.display());
         }
@@ -230,7 +235,11 @@ fn collect_inputs(
 ) -> Result<HashMap<Channel, PathBuf>, String> {
     let mut map: HashMap<Channel, PathBuf> = HashMap::new();
     if let Some(first) = auto_import {
-        map.extend(autoimport::auto_import(&first, layout));
+        // a single file holding every channel (e.g. an 8-channel WAV) feeds the whole layout
+        match sw_pcm::multichannel_inputs(layout, &first) {
+            Some(all) => map.extend(all),
+            None => map.extend(autoimport::auto_import(&first, layout)),
+        }
     }
     for spec in inputs {
         let (ch, file) = spec.split_once('=').ok_or("--input must be CH=FILE")?;

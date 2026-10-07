@@ -120,6 +120,7 @@
     <div class="opt-row">
       <label class="f small"><span>Max concurrent encodes</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
       <label class="opt inline"><input type="checkbox" id="optNative"><span><b>Use native encoders</b><small>Where Subwoofa has its own encoder (AC-3 so far) use it instead of FFmpeg. Experimental.</small></span></label>
+      <label class="f small"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
       <label class="opt inline"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b><small>Native TrueHD only: add a stereo substream so stereo-only players get a proper downmix. Makes the file roughly 5 to 8% larger.</small></span></label>
       <label class="opt inline"><input type="checkbox" id="optVerify" checked><span><b>Auto verify</b><small>Lossless encodes are decoded and compared with the source (MD5); lossy ones must decode cleanly.</small></span></label>
     </div>
