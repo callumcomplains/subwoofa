@@ -1,7 +1,7 @@
 # Roadmap
 
 1. **Foundation** — workspace, layout/format matrix, CLI, FFmpeg backend, GUI, PCM reader, queue, downmix. *(done)*
-   - Next: PCM reader crate (WAV/BWF/AIFF, stereo-file channel splitting), job queue, settings save/recall, Tauri GUI shell (requires Node.js, not yet installed here).
+   - Remaining: settings save/recall (`.swsettings`), folder-based batch encoding, BWF timecode fields in the GUI.
 2. **Dolby non-Atmos native** — AC-3 *(done: long blocks only; next: block switching, coupling, rematrixing, exponent-strategy optimisation)*, then E-AC-3, MLP/TrueHD lossless 2.0–7.1.
 3. **DTS** — core (Digital Surround, 96/24, ES), DTS-HD container + HRA, DTSHDMASE legacy backend, Express/LBR.
 4. **DTS-HD MA (XLL)** native, plus StreamTools (join/append/trim/split/restripe/silence/info/verify/PBR).
