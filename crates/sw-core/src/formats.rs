@@ -201,6 +201,30 @@ pub fn bitrate_range_kbps(
     }
 }
 
+/// Common bit rates (kbps) worth offering as one-click presets, clipped to the legal range.
+/// Users can still type any value; these are shortcuts, not limits.
+pub fn bitrate_presets(
+    dest: Destination,
+    stream: StreamType,
+    layout: &ChannelLayout,
+    sample_rate: u32,
+) -> Vec<u32> {
+    let Some((lo, hi)) = bitrate_range_kbps(dest, stream, layout, sample_rate) else {
+        return Vec::new();
+    };
+    let common: &[u32] = match stream {
+        StreamType::Ac3 => &[96, 128, 192, 224, 256, 320, 384, 448, 512, 576, 640],
+        StreamType::Eac3 => &[192, 256, 384, 448, 640, 768, 1024, 1536, 2048, 3024, 6144],
+        StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsHdMa => {
+            &[192, 256, 384, 448, 512, 768, 1024, 1411, 1509]
+        }
+        StreamType::DtsHdHra => &[2046, 2500, 3018, 3500, 4000, 4500, 5000, 5376, 5760],
+        StreamType::DtsExpress => &[48, 64, 96, 128, 192, 256, 384, 510],
+        _ => &[],
+    };
+    common.iter().copied().filter(|b| (lo..=hi).contains(b)).collect()
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Invalid {
     StreamNotInDestination,
@@ -284,6 +308,14 @@ mod tests {
             Err(Invalid::LayoutNotSupported)
         );
         assert!(validate(Destination::Generic, StreamType::Ac3, l("5.1"), 48_000).is_ok());
+    }
+
+    #[test]
+    fn presets_stay_in_range() {
+        let p = bitrate_presets(Destination::Generic, StreamType::Ac3, l("5.1"), 48_000);
+        assert!(p.contains(&448) && p.contains(&640) && p.contains(&96));
+        assert!(p.iter().all(|b| (32..=640).contains(b)));
+        assert!(bitrate_presets(Destination::Generic, StreamType::TrueHd, l("5.1"), 48_000).is_empty());
     }
 
     #[test]

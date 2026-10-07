@@ -76,6 +76,11 @@ fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), E
     })
 }
 
+/// True if this backend has an encoder for the stream type.
+pub fn supports(stream: StreamType) -> bool {
+    codec_args(stream).is_ok()
+}
+
 /// Build the argument list (without the program name).
 pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
     let (codec, extra) = codec_args(job.stream)?;
@@ -118,8 +123,8 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
         args.extend(["-ar".into(), sr.to_string()]);
     }
     if let (Some(d), StreamType::Ac3 | StreamType::Eac3) = (job.dialnorm, job.stream) {
-        // AC-3 dialnorm is 1..=31 (dB below full scale); 31 == no attenuation.
-        args.extend(["-dialnorm".into(), d.clamp(1, 31).to_string()]);
+        // FFmpeg takes dialnorm as a negative dBFS value in -31..=-1; -31 means no attenuation.
+        args.extend(["-dialnorm".into(), format!("-{}", d.clamp(1, 31))]);
     }
     // Raw elementary-stream muxers, independent of the output file extension.
     let muxer = match job.stream {
@@ -145,7 +150,10 @@ pub fn run(job: &Job) -> Result<String, Error> {
     if out.status.success() {
         Ok(log)
     } else {
-        Err(Error::Failed(out.status.code().unwrap_or(-1), log))
+        // The banner and per-input dump are noise; the reason is in the last few lines.
+        let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+        let tail = tail[tail.len().saturating_sub(5)..].join("\n");
+        Err(Error::Failed(out.status.code().unwrap_or(-1), tail))
     }
 }
 
@@ -173,6 +181,7 @@ mod tests {
         assert!(a.contains("join=inputs=6:channel_layout=FL+FR+FC+LFE+SL+SR"));
         assert!(a.contains("-c:a ac3"));
         assert!(a.contains("-b:a 448k"));
+        assert!(a.contains("-dialnorm -31"), "dialnorm must be negative: {a}");
     }
 
     #[test]

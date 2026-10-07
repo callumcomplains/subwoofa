@@ -7,55 +7,89 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <div class="brand"><span class="mark" aria-hidden="true"></span><b>Subwoofa</b><i>every channel, every codec</i></div>
-  <div id="engine" class="pill">checking engine…</div>
+<header class="bar">
+  <div class="brand">
+    <span class="meters" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <b>SUBWOOFA</b>
+  </div>
+  <div class="bar-right">
+    <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
+    <span id="engine" class="status"><i class="lamp"></i><span>checking engine</span></span>
+    <button id="openSettings" class="plain">Settings</button>
+  </div>
 </header>
 
-<main>
-  <section class="panel setup">
-    <h2>Format</h2>
-    <label>Destination<select id="dest"></select></label>
-    <label>Stream type<select id="stream"></select></label>
-    <label>Channel layout<select id="layout"></select></label>
-    <div class="row2">
-      <label>Sample rate<select id="rate"></select></label>
-      <label>Bit rate (kbps)<input id="bitrate" type="number" step="1"><small id="brange"></small></label>
+<section class="strip" aria-label="Format">
+  <label class="f"><span>Destination</span><select id="dest"></select></label>
+  <label class="f wide"><span>Stream type</span><select id="stream"></select></label>
+  <div class="f rate">
+    <label for="rate"><span>Sample rate</span></label>
+    <div class="combo">
+      <select id="rate"></select>
+      <input id="ratecustom" type="number" min="1" step="1" placeholder="Hz" hidden>
     </div>
-    <label>Dialog normalisation
-      <select id="dialnorm"></select>
-    </label>
-    <svg id="speakers" viewBox="-110 -110 220 220" role="img" aria-label="Speaker layout"></svg>
+  </div>
+  <div class="f bitrate">
+    <label for="bitrate"><span>Bit rate <em id="brange"></em></span></label>
+    <div class="combo">
+      <input id="bitrate" type="number" min="1" step="1" inputmode="numeric">
+      <span class="unit">kbps</span>
+    </div>
+    <div id="presets" class="chips" role="group" aria-label="Bit rate presets"></div>
+  </div>
+  <label class="f"><span>Dialnorm</span><select id="dialnorm"></select></label>
+</section>
+
+<div class="work">
+  <section class="layouts" aria-label="Channel layout">
+    <h2>Channel layout</h2>
+    <svg id="speakers" viewBox="-110 -105 220 210" role="img" aria-label="Speaker layout"></svg>
+    <div id="families" class="families" role="tablist"></div>
+    <div id="variants" class="variants" role="listbox"></div>
   </section>
 
-  <section class="panel inputs">
-    <div class="head"><h2>Input files</h2><button id="clear" class="ghost">Clear all</button></div>
-    <p class="hint">Drop a file on any row, or drop the L file anywhere to auto-import the rest.</p>
+  <section class="inputs" aria-label="Input files">
+    <div class="inputs-head">
+      <h2>Input files</h2>
+      <span class="hint">Drop a file on a row, or drop the L file anywhere to fill the rest</span>
+      <button id="clear" class="plain">Clear all</button>
+    </div>
     <table id="files">
-      <thead><tr><th>Ch</th><th>File</th><th>Ch#</th><th>Bits</th><th>Fs</th><th>Length</th></tr></thead>
+      <thead><tr><th>Ch</th><th>File</th><th>Src</th><th>Bits</th><th>Rate</th><th>Length</th></tr></thead>
       <tbody></tbody>
     </table>
-    <div class="time">
-      <label class="chk"><input type="checkbox" id="entire" checked> Encode entire file</label>
-      <label>From (s)<input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
-      <label>Length (s)<input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
+    <div class="range">
+      <label class="chk"><input type="checkbox" id="entire" checked><span>Encode entire file</span></label>
+      <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
+      <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
     </div>
   </section>
+</div>
 
-  <section class="panel output">
-    <h2>Output</h2>
-    <div class="outrow">
-      <input id="outdir" placeholder="Folder…" readonly>
-      <button id="browse" class="ghost">Browse</button>
-    </div>
-    <div class="outrow">
-      <input id="outname" value="SUBWOOFA" spellcheck="false">
-      <span id="ext" class="ext">.ac3</span>
-    </div>
-    <button id="go" class="primary" disabled>Encode</button>
-    <pre id="log" aria-live="polite">Ready.</pre>
-  </section>
-</main>
+<footer class="out">
+  <div class="dest-path">
+    <button id="browse" class="plain">Output folder…</button>
+    <input id="outdir" placeholder="No folder chosen" readonly>
+    <input id="outname" value="SUBWOOFA" spellcheck="false" aria-label="File name">
+    <span id="ext" class="ext">.ac3</span>
+  </div>
+  <button id="go" class="go" disabled>Encode</button>
+  <pre id="log" aria-live="polite">Ready.</pre>
+</footer>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <label class="opt">
+      <input type="checkbox" id="optUnlocked">
+      <span>
+        <b>Unlocked mode</b>
+        <small>Turns off the spec checks. Any bit rate or sample rate can be typed, every layout is offered for every format, and any stream type can go to any destination. The encoder may reject combinations it cannot make, and results may not play on real hardware.</small>
+      </span>
+    </label>
+    <menu><button value="close" class="go small">Done</button></menu>
+  </form>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>

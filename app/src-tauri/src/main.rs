@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use sw_backend_ffmpeg as ff;
-use sw_core::formats::{bitrate_range_kbps, validate, Destination, StreamType};
+use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
 #[derive(Serialize)]
@@ -14,6 +14,8 @@ struct StreamInfo {
     name: &'static str,
     lossless: bool,
     sample_rates: &'static [u32],
+    /// Whether any installed backend can encode this stream type today.
+    available: bool,
 }
 
 #[derive(Serialize)]
@@ -26,6 +28,8 @@ struct DestInfo {
 #[derive(Serialize)]
 struct Catalog {
     destinations: Vec<DestInfo>,
+    /// Every stream type, for unlocked mode where destination rules are bypassed.
+    all_streams: Vec<StreamInfo>,
     layouts: &'static [ChannelLayout],
     has_ffmpeg: bool,
 }
@@ -45,11 +49,22 @@ fn catalog() -> Catalog {
                     name: s.display_name(),
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
+                    available: ff::supports(*s),
                 })
                 .collect(),
         })
         .collect();
-    Catalog { destinations, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }
+    let all_streams = StreamType::ALL
+        .iter()
+        .map(|s| StreamInfo {
+            id: s.id(),
+            name: s.display_name(),
+            lossless: s.is_lossless(),
+            sample_rates: s.sample_rates(),
+            available: ff::supports(*s),
+        })
+        .collect();
+    Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }
 }
 
 fn parse(dest: &str, stream: &str) -> Result<(Destination, StreamType), String> {
@@ -65,17 +80,25 @@ struct Options {
     layouts: Vec<&'static str>,
     bitrate_min: Option<u32>,
     bitrate_max: Option<u32>,
+    presets: Vec<u32>,
     extension: &'static str,
 }
 
+/// `unlocked` bypasses the spec rules: every layout is offered and rates are not clipped.
 #[tauri::command]
-fn options(dest: String, stream: String, layout: String, sample_rate: u32) -> Result<Options, String> {
+fn options(dest: String, stream: String, layout: String, sample_rate: u32, unlocked: bool) -> Result<Options, String> {
     let (d, s) = parse(&dest, &stream)?;
-    let layouts = LAYOUTS.iter().filter(|l| validate(d, s, l, sample_rate).is_ok()).map(|l| l.id).collect();
-    let (bitrate_min, bitrate_max) = ChannelLayout::find(&layout)
+    let layouts = LAYOUTS
+        .iter()
+        .filter(|l| unlocked || validate(d, s, l, sample_rate).is_ok())
+        .map(|l| l.id)
+        .collect();
+    let lay = ChannelLayout::find(&layout);
+    let (bitrate_min, bitrate_max) = lay
         .and_then(|l| bitrate_range_kbps(d, s, l, sample_rate))
         .map_or((None, None), |(a, b)| (Some(a), Some(b)));
-    Ok(Options { layouts, bitrate_min, bitrate_max, extension: d.extension(s) })
+    let presets = lay.map(|l| bitrate_presets(d, s, l, sample_rate)).unwrap_or_default();
+    Ok(Options { layouts, bitrate_min, bitrate_max, presets, extension: d.extension(s) })
 }
 
 #[tauri::command]
@@ -128,6 +151,9 @@ struct EncodeRequest {
     duration: Option<f64>,
     inputs: HashMap<String, String>,
     output: String,
+    /// Skip spec validation (custom bit rates, sample rates, unusual combinations).
+    #[serde(default)]
+    unlocked: bool,
 }
 
 #[tauri::command]
@@ -135,7 +161,9 @@ async fn encode(req: EncodeRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (d, s) = parse(&req.dest, &req.stream)?;
         let layout = ChannelLayout::find(&req.layout).ok_or("unknown layout")?;
-        validate(d, s, layout, req.sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
+        if !req.unlocked {
+            validate(d, s, layout, req.sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
+        }
         let inputs = req
             .inputs
             .iter()

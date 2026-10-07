@@ -2,35 +2,60 @@ const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
 const $ = (id) => document.getElementById(id);
 
-let cat;               // catalog from the Rust side
-let inputs = {};       // channel short name -> path
-let meta = {};         // channel short name -> probe result
+let cat;                 // catalog from the Rust side
+let inputs = {};         // channel -> path
+let meta = {};           // channel -> probe result
 let outDir = "";
+let opts = null;         // last options() answer
+let unlocked = false;
 
-// Angle in degrees clockwise from front-centre, plus ring (0 = ear level, 1 = height).
+const COMMON_RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000];
+const DEFAULT_BITRATE = { ac3: 640, eac3: 1024, dts: 1509 };
+
+// Plain-language names for each layout variant (the id is stable; this is only for display).
+const VARIANT = {
+  "7.1-side-rear": "Side + rear surrounds", "7.1-ls-rs-lsr-rsr": "Surrounds + rear surrounds",
+  "7.1-height": "Front heights", "7.1-height-side": "Side heights", "7.1-cs-ch": "Center surround + center height",
+  "7.1-cs-oh": "Center surround + overhead", "7.1-wide": "Wide fronts", "7.0-side-rear": "Side + rear surrounds",
+  "6.1-discrete": "Discrete (ES)", "6.0-discrete": "Discrete", "6.1-matrix": "ES matrix", "6.0-matrix": "ES matrix",
+  "6.1-matrix-premixed": "ES matrix, pre-mixed", "6.0-matrix-premixed": "ES matrix, pre-mixed",
+  "5.1": "Standard", "5.0": "Standard", "4.1-lcrs": "L C R + surround", "4.1-quad": "Quad",
+  "4.0-quad": "Quad", "4.0-lcrs": "L C R + surround", "3.1": "L C R", "3.1-lrs": "L R + surround",
+  "3.0": "L C R", "3.0-lrs": "L R + surround", "2.1": "L R + sub", "2.0": "Stereo", "2.0-ltrt": "Lt/Rt matrix",
+  "1.1": "Mono + LFE (DVD only)", "1.0": "Mono",
+};
+
+// Angle in degrees clockwise from front-centre, plus ring (0 ear level, 1 height, 2 LFE, 3 overhead).
 const POS = {
   L: [-30, 0], R: [30, 0], C: [0, 0], LFE: [0, 2], Ls: [-110, 0], Rs: [110, 0], Cs: [180, 0],
   Lss: [-90, 0], Rss: [90, 0], Lsr: [-140, 0], Rsr: [140, 0], Lw: [-60, 0], Rw: [60, 0],
-  Lh: [-45, 1], Rh: [45, 1], Lhs: [-90, 1], Rhs: [90, 1], Ch: [0, 1], Oh: [0, 3],
-  Lt: [-30, 0], Rt: [30, 0],
+  Lh: [-45, 1], Rh: [45, 1], Lhs: [-90, 1], Rhs: [90, 1], Ch: [0, 1], Oh: [0, 3], Lt: [-30, 0], Rt: [30, 0],
 };
 
+const family = (l) => `${l.channels.filter((c) => c !== "LFE").length}.${l.channels.includes("LFE") ? 1 : 0}`;
 const layoutById = (id) => cat.layouts.find((l) => l.id === id);
-const curLayout = () => layoutById($("layout").value);
+const curLayoutId = () => $("variants").dataset.value;
+const curLayout = () => layoutById(curLayoutId());
 const curDest = () => cat.destinations.find((d) => d.id === $("dest").value);
-const curStream = () => curDest().streams.find((s) => s.id === $("stream").value);
-const fill = (sel, items, keep) => {
-  const old = keep ?? sel.value;
-  sel.innerHTML = "";
-  for (const [v, t] of items) sel.add(new Option(t, v));
-  if (items.some(([v]) => String(v) === String(old))) sel.value = old;
-};
+const curStream = () => cat.all_streams.find((s) => s.id === $("stream").value);
+const curRate = () => ($("rate").value === "custom" ? Number($("ratecustom").value) : Number($("rate").value));
 const base = (p) => p.split(/[\\/]/).pop();
+const fmtRate = (r) => `${r / 1000} kHz`;
 const fmtTime = (s) => {
   if (s == null) return "";
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${sec.toFixed(3).padStart(6, "0")}`;
 };
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage may be unavailable */ } },
+};
+
+function fill(sel, items, want) {
+  sel.innerHTML = "";
+  for (const [v, t] of items) sel.add(new Option(t, v));
+  if (items.some(([v]) => String(v) === String(want))) sel.value = want;
+}
 
 function log(msg, cls = "") {
   const el = $("log");
@@ -39,51 +64,91 @@ function log(msg, cls = "") {
   el.scrollTop = el.scrollHeight;
 }
 
-function drawSpeakers() {
-  const svg = $("speakers");
-  const l = curLayout();
-  let h = `<circle class="ring" r="45"/><circle class="ring" r="85"/>`;
-  h += `<path class="head" d="M0,-9 L7,6 L0,2 L-7,6 Z"/>`;
-  for (const ch of l.channels) {
-    const name = ch;
-    const [deg, ring] = POS[name] || [0, 0];
-    let r = ring === 1 ? 45 : 85, x, y;
-    if (ring === 2) { x = 0; y = -65; r = 0; }          // LFE: front, between the rings
-    else if (ring === 3) { x = 0; y = 0; r = 0; }       // overhead: centre
-    else { const a = (deg * Math.PI) / 180; x = r * Math.sin(a); y = -r * Math.cos(a); }
-    const height = ring === 1 || ring === 3;
-    h += `<circle class="spk ${height ? "height" : ""}" cx="${x}" cy="${y}" r="10"/>`;
-    h += `<text class="lbl" x="${x}" y="${y + (ring === 3 ? 18 : 0)}" ${height ? "" : 'style="fill:#1a0d00;font-weight:700"'}>${name}</text>`;
+/* ---------- channel layout picker ---------- */
+
+function renderLayoutPicker(validIds, chosen) {
+  const valid = cat.layouts.filter((l) => validIds.includes(l.id));
+  const fams = [...new Set(cat.layouts.map(family))];       // table order is richest first
+  const have = new Set(valid.map(family));
+  const sel = valid.find((l) => l.id === chosen) || valid.find((l) => l.id === "5.1") || valid[0];
+  $("variants").dataset.value = sel ? sel.id : "";
+  const selFam = sel ? family(sel) : "";
+
+  const fe = $("families");
+  fe.innerHTML = "";
+  for (const f of fams) {
+    const b = document.createElement("button");
+    b.textContent = f;
+    b.disabled = !have.has(f);
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(f === selFam));
+    b.onclick = () => pickLayout(valid.find((l) => family(l) === f).id);
+    fe.append(b);
   }
-  svg.innerHTML = h;
+  const ve = $("variants");
+  ve.innerHTML = "";
+  for (const l of valid.filter((l) => family(l) === selFam)) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "option");
+    b.setAttribute("aria-selected", String(l.id === sel.id));
+    // Pre-mixed ES matrix layouts carry one fewer discrete channel than their name suggests.
+    const name = l.id.includes("premixed") ? `${l.id.slice(0, 3)} ES matrix, centre surround pre-mixed` : `${selFam} ${VARIANT[l.id] || l.id}`;
+    b.innerHTML = `<span class="vn">${name}</span><span class="vc">${l.channels.join(" ")}</span>`;
+    b.onclick = () => pickLayout(l.id);
+    ve.append(b);
+  }
 }
+
+function pickLayout(id) {
+  inputs = {}; meta = {};
+  cascade("layout", id);
+}
+
+function drawSpeakers() {
+  const l = curLayout();
+  let h = `<circle class="ring" r="44"/><circle class="ring" r="82"/><path class="you" d="M0,-8 L6,6 L0,2.5 L-6,6 Z"/>`;
+  for (const ch of l.channels) {
+    const [deg, ring] = POS[ch] || [0, 0];
+    let x, y;
+    if (ring === 2) { x = 0; y = -21; }                      // LFE: inside the inner ring, clear of the speakers
+    else if (ring === 3) { x = 0; y = 0; }                   // overhead: above the listener
+    else { const r = ring === 1 ? 44 : 82, a = (deg * Math.PI) / 180; x = r * Math.sin(a); y = -r * Math.cos(a); }
+    const height = ring === 1 || ring === 3;
+    h += `<circle class="spk${height ? " height" : ""}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9.5"/>`;
+    h += `<text class="lbl${height ? " height" : ""}" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${ch}</text>`;
+  }
+  $("speakers").innerHTML = h;
+}
+
+/* ---------- inputs table ---------- */
 
 function renderFiles() {
   const tb = $("files").tBodies[0];
   tb.innerHTML = "";
+  const bad = rateMismatch();
   for (const ch of curLayout().channels) {
     const tr = tb.insertRow();
     tr.dataset.ch = ch;
     const m = meta[ch] || {};
-    tr.innerHTML = `<td class="ch">${ch}</td><td><input type="text" readonly placeholder="drop or double-click…" value="${inputs[ch] ? base(inputs[ch]) : ""}" title="${inputs[ch] || ""}"></td>
-      <td class="meta">${m.channels ? (m.channels === 1 ? "M" : m.channels) : ""}</td><td class="meta">${m.bits || ""}</td><td class="meta">${m.sample_rate || ""}</td><td class="meta">${fmtTime(m.duration)}</td>`;
+    tr.classList.toggle("err", bad.includes(ch));
+    tr.innerHTML = `<td class="ch">${ch}</td>
+      <td><input type="text" readonly placeholder="drop or double-click" value="${inputs[ch] ? base(inputs[ch]).replace(/"/g, "&quot;") : ""}" title="${(inputs[ch] || "").replace(/"/g, "&quot;")}"></td>
+      <td class="meta">${m.channels ? (m.channels === 1 ? "mono" : m.channels + " ch") : ""}</td>
+      <td class="meta">${m.bits ? m.bits + "-bit" : ""}</td><td class="meta fs">${m.sample_rate || ""}</td><td class="meta">${fmtTime(m.duration)}</td>`;
     tr.querySelector("input").addEventListener("dblclick", () => browseFor(ch));
     tr.addEventListener("contextmenu", (e) => { e.preventDefault(); delete inputs[ch]; delete meta[ch]; renderFiles(); update(); });
   }
-  const ok = checkMeta();
-  for (const tr of tb.rows) tr.classList.toggle("err", ok.bad.includes(tr.dataset.ch));
 }
 
-function checkMeta() {
-  const bad = [];
-  const rate = Number($("rate").value);
-  for (const [ch, m] of Object.entries(meta)) if (m.sample_rate && m.sample_rate !== rate) bad.push(ch);
-  return { bad };
+function rateMismatch() {
+  if (unlocked) return [];            // unlocked mode resamples sources to the chosen rate
+  const rate = curRate();
+  return Object.entries(meta).filter(([, m]) => m.sample_rate && m.sample_rate !== rate).map(([c]) => c);
 }
 
 async function setFile(ch, path) {
   inputs[ch] = path;
-  try { meta[ch] = await invoke("probe", { path }); } catch (e) { meta[ch] = {}; }
+  try { meta[ch] = await invoke("probe", { path }); } catch { meta[ch] = {}; }
   renderFiles();
   update();
 }
@@ -95,40 +160,81 @@ async function browseFor(ch) {
 }
 
 async function autoImport(path) {
-  const found = await invoke("auto_import", { first: path, layout: $("layout").value });
+  const found = await invoke("auto_import", { first: path, layout: curLayoutId() });
   const entries = Object.entries(found);
-  if (!entries.length) { log("No channel ID found in that file name; assign files by row instead.", "bad"); return; }
+  if (!entries.length) { log("No channel ID found in that file name. Assign files row by row instead.", "bad"); return; }
   await Promise.all(entries.map(([ch, p]) => setFile(ch, p)));
-  log(`Auto-import matched ${entries.length}/${curLayout().channels.length} channels.`);
+  log(`Auto-import matched ${entries.length} of ${curLayout().channels.length} channels.`);
 }
 
-async function refreshOptions() {
-  const o = await invoke("options", { dest: $("dest").value, stream: $("stream").value, layout: $("layout").value, sampleRate: Number($("rate").value) });
-  return o;
+/* ---------- format cascade ---------- */
+
+async function loadOptions() {
+  opts = await invoke("options", { dest: $("dest").value, stream: $("stream").value, layout: curLayoutId() || "5.1", sampleRate: curRate() || 48000, unlocked });
+  return opts;
 }
 
-async function cascade(from) {
-  if (from === "dest") {
-    fill($("stream"), curDest().streams.map((s) => [s.id, s.name]));
+function renderRates(want) {
+  const s = curStream();
+  const rates = unlocked ? [...new Set([...s.sample_rates, ...COMMON_RATES])].sort((a, b) => a - b) : s.sample_rates;
+  const items = rates.map((r) => [r, fmtRate(r)]);
+  if (unlocked) items.push(["custom", "Custom…"]);
+  const keep = rates.includes(want) || want === "custom" ? want : s.sample_rates.includes(48000) ? 48000 : s.sample_rates[0];
+  fill($("rate"), items, keep);
+  $("ratecustom").hidden = $("rate").value !== "custom";
+}
+
+function renderBitrate(from) {
+  const br = $("bitrate"), o = opts;
+  const lossless = o.bitrate_min == null;
+  br.disabled = lossless && !unlocked;
+  $("brange").textContent = lossless ? (unlocked ? "free entry" : "lossless / variable") : unlocked ? `spec ${o.bitrate_min}–${o.bitrate_max}` : `${o.bitrate_min}–${o.bitrate_max}`;
+  if (lossless && !unlocked) br.value = "";
+  else if (from === "dest" || from === "stream" || !br.value) {
+    br.value = lossless ? "" : (DEFAULT_BITRATE[$("stream").value] ?? o.bitrate_max);
+    if (!lossless) br.value = Math.min(o.bitrate_max, br.value);
+  } else if (from !== "bitrate" && !unlocked && !bitrateOk()) {
+    br.value = Math.min(o.bitrate_max, Math.max(o.bitrate_min, Number(br.value)));
   }
-  if (from === "dest" || from === "stream") {
-    fill($("rate"), curStream().sample_rates.map((r) => [r, `${r / 1000} kHz`]), $("rate").value || 48000);
+  const chips = $("presets");
+  chips.innerHTML = "";
+  for (const p of o.presets) {
+    const b = document.createElement("button");
+    b.textContent = p;
+    b.onclick = () => { br.value = p; syncChips(); update(); };
+    chips.append(b);
   }
-  let o = await refreshOptions();
-  // layouts valid for this combination; keep the choice when possible
-  const old = $("layout").value;
-  const valid = cat.layouts.filter((l) => o.layouts.includes(l.id));
-  fill($("layout"), valid.map((l) => [l.id, l.name]), valid.some((l) => l.id === old) ? old : "5.1");
-  if ($("layout").value !== old) o = await refreshOptions();
+  syncChips();
+}
+
+function syncChips() {
+  const v = Number($("bitrate").value);
+  for (const b of $("presets").children) b.setAttribute("aria-pressed", String(Number(b.textContent) === v));
+  $("bitrate").classList.toggle("bad", !bitrateOk());
+}
+
+function bitrateOk() {
   const br = $("bitrate");
-  if (o.bitrate_min == null) {
-    br.disabled = true; br.value = ""; $("brange").textContent = "lossless / variable";
-  } else {
-    br.disabled = false; br.min = o.bitrate_min; br.max = o.bitrate_max;
-    const cap = { ac3: 640, eac3: 1024 }[$("stream").value] ?? o.bitrate_max;
-    if (!br.value || from !== "bitrate") br.value = Math.min(o.bitrate_max, cap);
-    $("brange").textContent = `${o.bitrate_min}–${o.bitrate_max}`;
+  if (br.disabled) return true;
+  const v = Number(br.value);
+  if (!Number.isFinite(v) || v <= 0) return false;
+  return unlocked || opts.bitrate_min == null || (v >= opts.bitrate_min && v <= opts.bitrate_max);
+}
+
+async function cascade(from, wantLayout) {
+  if (from === "dest") {
+    const list = unlocked ? cat.all_streams : curDest().streams;
+    fill($("stream"), list.map((s) => [s.id, s.available ? s.name : `${s.name} (planned)`]), $("stream").value);
   }
+  if (from === "dest" || from === "stream" || from === "unlock") renderRates(curRate());
+  $("ratecustom").hidden = $("rate").value !== "custom";
+
+  const keepLayout = wantLayout || curLayoutId();
+  $("variants").dataset.value = keepLayout || "";
+  let o = await loadOptions();
+  renderLayoutPicker(o.layouts, keepLayout);
+  if (curLayoutId() !== (keepLayout || "")) o = await loadOptions();
+  renderBitrate(from);
   $("ext").textContent = "." + o.extension;
   drawSpeakers();
   renderFiles();
@@ -137,8 +243,11 @@ async function cascade(from) {
 
 function update() {
   const need = curLayout().channels;
-  const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !checkMeta().bad.length && cat.has_ffmpeg;
-  $("go").disabled = !ready;
+  const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && cat.has_ffmpeg && curRate() > 0;
+  const available = curStream().available;
+  $("go").disabled = !ready || !available;
+  if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
+  syncChips();
 }
 
 async function encode() {
@@ -146,12 +255,12 @@ async function encode() {
   $("go").disabled = true;
   log("Encoding…");
   try {
-    const dn = Number($("dialnorm").value);
     const r = await invoke("encode", { req: {
-      dest: $("dest").value, stream: $("stream").value, layout: $("layout").value,
-      sample_rate: Number($("rate").value),
-      bitrate: $("bitrate").disabled ? null : Number($("bitrate").value),
-      dialnorm: dn, start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
+      dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
+      sample_rate: curRate(),
+      bitrate: $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
+      dialnorm: Number($("dialnorm").value), unlocked,
+      start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
       inputs, output: `${outDir}\\${$("outname").value.trim()}${$("ext").textContent}`,
     }});
     log(r, "ok");
@@ -159,26 +268,40 @@ async function encode() {
   update();
 }
 
+function setUnlocked(v) {
+  unlocked = v;
+  store.set("unlocked", v ? "1" : "0");
+  $("optUnlocked").checked = v;
+  $("unlockedTag").hidden = !v;
+  $("bitrate").removeAttribute("min");
+}
+
 async function init() {
   cat = await invoke("catalog");
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
   cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c)) }));
-  $("engine").textContent = cat.has_ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found on PATH";
-  $("engine").classList.add(cat.has_ffmpeg ? "ok" : "bad");
+
+  const eng = $("engine");
+  eng.classList.add(cat.has_ffmpeg ? "ok" : "bad");
+  eng.lastElementChild.textContent = cat.has_ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found on PATH";
+
   fill($("dest"), cat.destinations.map((d) => [d.id, d.name]), "generic");
-  fill($("dialnorm"), Array.from({ length: 31 }, (_, i) => [31 - i, `-${31 - i} dBFS${i === 0 ? " (no attenuation)" : ""}`]), 31);
+  fill($("dialnorm"), Array.from({ length: 31 }, (_, i) => [31 - i, `-${31 - i} dBFS${i === 0 ? " (off)" : ""}`]), 31);
+  setUnlocked(store.get("unlocked") === "1");
   await cascade("dest");
 
   $("dest").onchange = () => cascade("dest");
   $("stream").onchange = () => cascade("stream");
-  $("layout").onchange = () => { inputs = {}; meta = {}; cascade("layout"); };
-  $("rate").onchange = () => cascade("rate");
-  $("bitrate").onchange = () => cascade("bitrate");
+  $("rate").onchange = () => { $("ratecustom").hidden = $("rate").value !== "custom"; cascade("rate"); };
+  $("ratecustom").oninput = () => cascade("rate");
+  $("bitrate").oninput = () => { syncChips(); update(); };
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };
   $("go").onclick = encode;
+  $("openSettings").onclick = () => $("settings").showModal();
+  $("optUnlocked").onchange = async () => { setUnlocked($("optUnlocked").checked); await cascade("dest"); await cascade("unlock"); };
 
   await window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (ev) => {
     const p = ev.payload;
