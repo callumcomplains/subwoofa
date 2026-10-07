@@ -6,6 +6,7 @@ pub mod encoder;
 pub mod exss;
 pub mod ma;
 pub mod ma_core;
+pub mod ma_native;
 pub mod native;
 pub mod qmf;
 pub mod tables;

@@ -212,6 +212,23 @@ fn run() -> Result<(), String> {
                     }
                     return Ok(());
                 }
+                if stream == StreamType::DtsHdMa {
+                    let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
+                    let req = sw_codec_dts::ma_native::MaRequest {
+                        layout,
+                        core_bitrate_kbps: bitrate.filter(|b| *b > 0).or(Some(1509)),
+                        dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+                        start_secs: start.unwrap_or(0.0),
+                        duration_secs: duration,
+                        output: &output,
+                        container: output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd")),
+                    };
+                    let t0 = std::time::Instant::now();
+                    let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let secs = (stats.frames * 512) as f64 / stems.sample_rate as f64;
+                    println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    return Ok(());
+                }
                 if stream == StreamType::DtsDigitalSurround {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::native::Request {
@@ -230,7 +247,7 @@ fn run() -> Result<(), String> {
                     return Ok(());
                 }
                 if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
-                    return Err(format!("the native engine encodes AC-3, E-AC-3, TrueHD and DTS core so far, not {}", stream.display_name()));
+                    return Err(format!("the native engine encodes AC-3, E-AC-3, TrueHD, DTS core and DTS-HD MA so far, not {}", stream.display_name()));
                 }
                 let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                 let req = sw_codec_ac3::native::Request {
