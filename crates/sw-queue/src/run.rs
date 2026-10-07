@@ -155,7 +155,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd) {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -197,6 +197,20 @@ fn execute_inner(
         if stats.downmix_overflows > 0 {
             log.push_str(&format!("Warning: {} stereo-presentation samples exceed 24 bits; stereo-only decoders will clip them\n", stats.downmix_overflows));
         }
+    } else if native && stream == StreamType::DtsDigitalSurround {
+        let req = sw_codec_dts::native::Request {
+            layout,
+            bitrate_kbps: spec.bitrate.unwrap_or(1509),
+            dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+            pcm_bits: (stems.bits as u32).clamp(16, 24),
+            start_secs: start,
+            duration_secs: Some(span),
+            output: std::path::Path::new(&spec.output),
+        };
+        sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+            sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        })?;
     } else if native {
         let req = sw_codec_ac3::native::Request {
             layout,

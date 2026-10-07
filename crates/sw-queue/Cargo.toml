@@ -10,4 +10,5 @@ sw-backend-ffmpeg = { path = "../sw-backend-ffmpeg" }
 sw-pcm = { path = "../sw-pcm" }
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
 sw-codec-truehd = { path = "../sw-codec-truehd" }
+sw-codec-dts = { path = "../sw-codec-dts" }
 serde.workspace = true
