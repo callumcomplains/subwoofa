@@ -55,7 +55,7 @@ fn catalog() -> Catalog {
                     id: s.id(),
                     name: s.display_name(),
                     lossless: s.is_lossless(),
-                    sample_rates: s.sample_rates(),
+                    sample_rates: sw_core::formats::sample_rates_for(*d, *s),
                     available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa | StreamType::DtsExpress),
                     native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa | StreamType::DtsExpress),
                     ffmpeg: ff::supports(*s),

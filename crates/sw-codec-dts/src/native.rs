@@ -115,7 +115,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let rate = stems.sample_rate;
     let nch = map.order.len();
-    let bitrate = req.bitrate_kbps * 1000;
+    // a DTS CD runs the stream at exactly the CD data rate
+    let bitrate = if rate == 44_100 && req.bitrate_kbps == 1411 { 1_411_200 } else { req.bitrate_kbps * 1000 };
+    let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if bitrate >= 700_000 || rate > 48_000 { 16 } else { 32 };
     let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: req.hra_kbps.is_some(), blocks })?;
@@ -141,6 +143,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     } else {
         0
     };
+    if wav {
+        out.write_all(&wav_header(rate, 0))?;
+    }
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
     let mut frames = 0u64;
@@ -180,9 +185,22 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         if let Some(h) = hra.as_mut() {
             data = h.wrap(data, &enc.last_residual);
         }
-        out.write_all(&data)?;
+        if wav {
+            // DTS in PCM: the stream's 16-bit words, byte-swapped into little-endian samples
+            let mut w = data.clone();
+            if w.len() % 2 == 1 {
+                w.push(0);
+            }
+            for pair in w.chunks_exact_mut(2) {
+                pair.swap(0, 1);
+            }
+            out.write_all(&w)?;
+            bytes += w.len() as u64;
+        } else {
+            out.write_all(&data)?;
+            bytes += data.len() as u64;
+        }
         frames += 1;
-        bytes += data.len() as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     out.flush()?;
@@ -194,7 +212,34 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         inner.seek(SeekFrom::Start(0))?;
         inner.write_all(&h)?;
         inner.flush()?;
+    } else if wav {
+        use std::io::{Seek, SeekFrom};
+        let pad = (4 - bytes % 4) % 4;
+        out.write_all(&vec![0u8; pad as usize])?;
+        out.flush()?;
+        let mut inner = out.into_inner().map_err(|e| e.into_error())?;
+        inner.seek(SeekFrom::Start(0))?;
+        inner.write_all(&wav_header(rate, bytes + pad))?;
+        inner.flush()?;
     }
     on_progress(1.0);
     Ok(Stats { frames, bytes })
+}
+
+/// Canonical 44-byte WAV header for 16-bit stereo PCM holding `data_len` bytes (a DTS stream in PCM).
+fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
+    let mut h = Vec::with_capacity(44);
+    h.extend_from_slice(b"RIFF");
+    h.extend_from_slice(&((36 + data_len).min(u32::MAX as u64) as u32).to_le_bytes());
+    h.extend_from_slice(b"WAVEfmt ");
+    h.extend_from_slice(&16u32.to_le_bytes());
+    h.extend_from_slice(&1u16.to_le_bytes());
+    h.extend_from_slice(&2u16.to_le_bytes());
+    h.extend_from_slice(&rate.to_le_bytes());
+    h.extend_from_slice(&(rate * 4).to_le_bytes());
+    h.extend_from_slice(&4u16.to_le_bytes());
+    h.extend_from_slice(&16u16.to_le_bytes());
+    h.extend_from_slice(b"data");
+    h.extend_from_slice(&(data_len.min(u32::MAX as u64) as u32).to_le_bytes());
+    h
 }

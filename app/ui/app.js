@@ -178,10 +178,12 @@ async function loadOptions() {
 
 function renderRates(want) {
   const s = curStream();
-  const rates = unlocked ? [...new Set([...s.sample_rates, ...COMMON_RATES])].sort((a, b) => a - b) : s.sample_rates;
+  const ds = (curDest().streams || []).find((x) => x.id === s.id);
+  const allowed = ds ? ds.sample_rates : s.sample_rates;
+  const rates = unlocked ? [...new Set([...s.sample_rates, ...COMMON_RATES])].sort((a, b) => a - b) : allowed;
   const items = rates.map((r) => [r, fmtRate(r)]);
   if (unlocked) items.push(["custom", "Custom…"]);
-  const keep = rates.includes(want) || want === "custom" ? want : s.sample_rates.includes(48000) ? 48000 : s.sample_rates[0];
+  const keep = rates.includes(want) || want === "custom" ? want : rates.includes(48000) ? 48000 : rates[0];
   fill($("rate"), items, keep);
   $("ratecustom").hidden = $("rate").value !== "custom";
 }

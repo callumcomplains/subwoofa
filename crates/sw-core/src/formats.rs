@@ -89,7 +89,8 @@ impl StreamType {
             StreamType::DtsHdMa => &[48_000, 96_000, 192_000],
             StreamType::DtsHdHra => &[48_000, 96_000],
             StreamType::Dts9624 => &[96_000],
-            StreamType::DtsEs | StreamType::DtsDigitalSurround | StreamType::DtsExpress => &[48_000],
+            StreamType::DtsEs | StreamType::DtsDigitalSurround => &[44_100, 48_000],
+            StreamType::DtsExpress => &[48_000],
             StreamType::Ac3 => &[32_000, 44_100, 48_000],
             StreamType::Eac3 => &[32_000, 44_100, 48_000],
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
@@ -192,7 +193,8 @@ pub fn bitrate_range_kbps(
         StreamType::DtsHdHra => Some((2046, if sample_rate >= 96_000 { 5760 } else { 5376 })),
         StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround => {
             let lo = if layout.main_channels() >= 5 { 754 } else { 255 };
-            Some((lo, 1509))
+            // a DTS CD carries the stream at the CD data rate (1411.2 kbit/s) or at half of it
+            Some(if dest == Destination::DtsMusicDisc { (754, 1411) } else { (lo, 1509) })
         }
         StreamType::DtsExpress => {
             // the native encoder needs about 108 kbps per channel pair, 36-48 for a lone channel, 3 for the LFE
@@ -240,6 +242,17 @@ pub enum Invalid {
     LayoutNotSupported,
 }
 
+/// Sample rates the stream type accepts on a given destination: a DTS Music Disc is a CD (44.1 kHz), the
+/// video discs and delivery formats use 48 kHz for the core formats.
+pub fn sample_rates_for(dest: Destination, stream: StreamType) -> &'static [u32] {
+    match (dest, stream) {
+        (Destination::DtsMusicDisc, StreamType::DtsEs | StreamType::DtsDigitalSurround) => &[44_100],
+        (Destination::DtsMusicDisc, StreamType::Dts9624) => &[96_000],
+        (_, StreamType::DtsEs | StreamType::DtsDigitalSurround) if dest != Destination::Generic => &[48_000],
+        _ => stream.sample_rates(),
+    }
+}
+
 /// Layouts expressible as AC-3 audio coding modes (acmod) with optional LFE.
 const AC3_LAYOUTS: &[&str] = &[
     "5.1", "5.0", "4.1-lcrs", "4.1-quad", "4.0-quad", "4.0-lcrs", "3.1", "3.1-lrs", "3.0", "3.0-lrs",
@@ -259,7 +272,7 @@ pub fn validate(
     if !dest.stream_types().contains(&stream) {
         return Err(Invalid::StreamNotInDestination);
     }
-    if !stream.sample_rates().contains(&sample_rate) {
+    if !sample_rates_for(dest, stream).contains(&sample_rate) {
         return Err(Invalid::SampleRateUnsupported);
     }
     let max = max_channels(dest, stream, sample_rate);

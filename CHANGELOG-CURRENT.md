@@ -95,3 +95,7 @@ Newest entries at the bottom. Started 2026-10-08.
 - The core's quality-offset search evaluates candidates in parallel on machines with 6+ cores (same 0.375 dB resolution; output unchanged).
 - 60 s of 5.1 film audio: MA 3.7x -> 7.6x real time, HRA 4x -> 7x, DTS core 7x -> 11x; 40 s of 96 kHz 5.1 in 96/24: 1x -> 3.7x. Output files are bit-identical to before for HRA and 96/24.
 - Auto-import also understands FFmpeg-style names (`ch1 FL_Front-Left`: `FL FR FC SL SR BL BR` and descriptive words such as Front/Left/Center are ignored when matching siblings).
+
+## DTS Music Disc (DTS-CD) output was a raw stream named .wav; now a real DTS-in-PCM WAV
+- Destination "DTS Music Disc" now writes a 16-bit stereo PCM WAV (44.1 kHz, or 48 kHz) whose samples are the stream's byte-swapped 16-bit words, with the CD data rate of exactly 1411.2 kbit/s (2048-byte core frames). FFmpeg identifies the file as "dts, 44100 Hz, 5.1, 1411 kb/s" and decodes it cleanly.
+- Sample rates are now per destination: DTS Music Disc 44.1 kHz, video discs/delivery 48 kHz for core DTS and ES (96 kHz for 96/24), and the GUI's rate list follows the destination. Bit-rate range for a music disc is 754 to 1411 kbps.
