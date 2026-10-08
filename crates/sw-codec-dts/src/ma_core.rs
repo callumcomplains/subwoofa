@@ -37,12 +37,12 @@ fn bessel_i0(x: f64) -> f64 {
     sum
 }
 
-fn decimator_taps() -> Vec<f64> {
+fn decimator_taps(frac: f64) -> Vec<f64> {
     let fc = 22_300.0 / 96_000.0; // cycles per sample
     let beta = 9.0;
     let mut h = Vec::with_capacity(2 * HALF + 1);
     for i in 0..=2 * HALF {
-        let m = i as f64 - HALF as f64;
+        let m = i as f64 - HALF as f64 - frac;
         let sinc = if m == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m) };
         let r = m / HALF as f64;
         let w = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
@@ -71,6 +71,7 @@ pub struct MaCoreEncoder {
     taps: Vec<f64>,
     /// Core-rate samples of advance and decimation phase.
     l48: usize,
+    /// Whole samples (at the source rate) of decimation phase; the fraction lives in the filter taps.
     phase: usize,
     emitted: usize,
     t_core: std::time::Duration,
@@ -123,12 +124,14 @@ impl MaCoreEncoder {
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
         let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0 };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
+        let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {
             (core.delay(), 0)
         } else {
-            let l48 = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(236);
-            let phase = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-            (l48, phase)
+            let l48 = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
+            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+            frac = phase - phase.floor();
+            (l48, phase.floor() as usize)
         };
         let lookahead = if ratio == 1 { l48 } else { 2 * (l48 + 1) + phase + HALF + 2 };
         Ok(MaCoreEncoder {
@@ -140,7 +143,7 @@ impl MaCoreEncoder {
             n,
             lookahead,
             ratio,
-            taps: if ratio == 2 { decimator_taps() } else { Vec::new() },
+            taps: if ratio == 2 { decimator_taps(frac) } else { Vec::new() },
             l48,
             phase,
             emitted: 0,
@@ -289,6 +292,16 @@ impl MaCoreEncoder {
                     )
                 }
                 None => resid.push((0..n).map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift)).collect()),
+            }
+        }
+        if let Some(path) = std::env::var_os("SW_DUMP_RESID") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                for r in &resid {
+                    for v in r {
+                        let _ = f.write_all(&v.to_le_bytes());
+                    }
+                }
             }
         }
         core_bytes.resize(core_bytes.len() + self.core_pad, 0);
