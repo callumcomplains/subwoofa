@@ -10,11 +10,11 @@ Early foundation. What works today:
 
 | Area | State |
 |---|---|
-| Channel layouts (29), channel-ID parsing, auto-import by file name | done |
+| Channel layouts (30, including NHK 22.2 as an input), channel-ID parsing, auto-import by file name | done |
 | Destination / stream type / sample rate / bit-rate validation matrix | done (first pass) |
 | CLI `subwoofa layouts / formats / encode` | done |
 | FFmpeg backend: AC-3, E-AC-3, DTS core | working |
-| Native AC-3 and E-AC-3 (Dolby Digital Plus) encoders, 1.0 to 5.1, any E-AC-3 bit rate 8 to 1024 kbps | working; verified against a reference decoder, about 70x real time |
+| Native AC-3 and E-AC-3 (Dolby Digital Plus) encoders, 1.0 to 5.1 (E-AC-3 also 7.1 / 7.0 through a dependent substream), any E-AC-3 bit rate 8 to 1024 kbps | working; verified against a reference decoder, about 50x real time |
 | Native TrueHD lossless encoder (up to 7.1, 44.1 to 192 kHz) with a real stereo-downmix substream (matrices + LSB bypass), bit-exact against a reference decoder | working; smaller than FFmpeg's on test material |
 | Native TrueHD analyser (`subwoofa stream-info file.thd`): where the bits go, which tools a stream uses | done |
 | Native DTS core (Digital Surround) encoder, 1.0 to 5.1 at 32 to 48 kHz (no ADPCM/VQ yet), verified by decoding | working |
@@ -34,7 +34,8 @@ Early foundation. What works today:
 | AC-3 block switching (spec transient detector) and 2/0 rematrixing | working |
 | NHK 22.2 input (24 mono files, auto-import) mixed down to any supported layout by panning | working |
 | StreamTools replace / insert (CLI and GUI) | working |
-| HRA/MA at 96/24 core and above 7.1, AC-3 coupling, E-AC-3 tools | planned - see `docs/ROADMAP.md` |
+| DTS Music Disc (DTS-in-PCM WAV at the CD rate), folder batch encode | working |
+| MA with a 96/24 core, HRA at 96 kHz and above 7.1, MA at 192 kHz, AC-3 coupling, Express band limiting | planned - see `docs/ROADMAP.md` |
 | Dolby Atmos | deferred |
 
 ## Build
