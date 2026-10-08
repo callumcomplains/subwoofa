@@ -320,6 +320,8 @@ pub struct Encoder {
     /// Rematrixing flags per block and band (2/0 mode, AC-3 only).
     cur_remat: Vec<[bool; 4]>,
     rematrixing: bool,
+    /// E-AC-3 dependent substream: the custom channel map (bit 15 = Left ... bit 0 = LFE) it carries.
+    dependent: Option<u16>,
 }
 
 impl Encoder {
@@ -381,6 +383,7 @@ impl Encoder {
             cur_blksw: vec![[false; BLOCKS]; nfch],
             cur_remat: vec![[false; 4]; BLOCKS],
             rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
+            dependent: None,
             cfg,
         })
     }
@@ -416,6 +419,11 @@ impl Encoder {
     /// 2/0 mode: allow sum/difference coding per band (on by default).
     pub fn set_rematrixing(&mut self, on: bool) {
         self.rematrixing = on;
+    }
+
+    /// Make this encoder write E-AC-3 dependent substream frames (strmtyp 1) with the given custom channel map.
+    pub fn set_dependent(&mut self, chanmap: u16) {
+        self.dependent = Some(chanmap);
     }
 
     pub fn channels(&self) -> usize {
@@ -654,7 +662,7 @@ impl Encoder {
         let (csnr, fsnr) = (v >> 4, v & 15);
         if cfg.eac3 {
             w.put(0x0B77, 16);
-            w.put(0, 2); // strmtyp: independent
+            w.put(u32::from(self.dependent.is_some()), 2); // strmtyp: independent (0) or dependent (1)
             w.put(0, 3); // substreamid
             w.put(words as u32 - 1, 11);
             w.put(self.fscod as u32, 2);
@@ -664,6 +672,10 @@ impl Encoder {
             w.put(16, 5); // bsid
             w.put(cfg.dialnorm.clamp(1, 31) as u32, 5);
             w.put(0, 1); // compre
+            if let Some(map) = self.dependent {
+                w.put(1, 1); // chanmape
+                w.put(map as u32, 16);
+            }
             w.put(0, 1); // mixmdate
             w.put(0, 1); // infomdate
             w.put(0, 1); // addbsie
@@ -705,8 +717,10 @@ impl Encoder {
                     w.put(u32::from(self.cur_sets.iter().any(|&(f, _)| f == blk)), 1);
                 }
             }
-            for ch in 0..self.nfch {
-                w.put(frame_expstr.as_ref().map_or(0, |i| i[ch]), 5); // convexpstr
+            if self.dependent.is_none() {
+                for ch in 0..self.nfch {
+                    w.put(frame_expstr.as_ref().map_or(0, |i| i[ch]), 5); // convexpstr (independent substreams only)
+                }
             }
             w.put(csnr, 6);
             w.put(fsnr, 4);
@@ -806,7 +820,9 @@ impl Encoder {
                 }
             }
             if cfg.eac3 {
-                w.put(0, 1); // convsnroffste
+                if self.dependent.is_none() {
+                    w.put(0, 1); // convsnroffste (independent substreams only)
+                }
             } else {
                 if blk == 0 {
                     w.put(1, 1); // baie

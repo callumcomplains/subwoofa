@@ -54,10 +54,16 @@ fn strip_numbering(s: &str) -> String {
     collapsed.trim_matches('_').to_string()
 }
 
+/// File names say `Ls`/`SL` for a side surround even in layouts that call it `Lss`.
+fn same_position(a: Channel, b: Channel) -> bool {
+    use Channel::*;
+    a == b || matches!((a, b), (Ls, Lss) | (Lss, Ls) | (Rs, Rss) | (Rss, Rs))
+}
+
 /// Find the channel ID token in `stem` that equals `ch` and return (prefix, suffix) around it.
 fn split_around(stem: &str, ch: Channel) -> Option<(String, String)> {
     for (s, e) in tokens(stem) {
-        if Channel::from_id(&stem[s..e]) == Some(ch) {
+        if Channel::from_id(&stem[s..e]).map_or(false, |c| same_position(c, ch)) {
             return Some((strip_numbering(&stem[..s]), strip_numbering(&stem[e..])));
         }
     }

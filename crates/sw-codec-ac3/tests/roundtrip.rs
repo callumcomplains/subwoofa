@@ -263,3 +263,72 @@ fn rematrixing_helps_joint_stereo() {
     println!("joint stereo at 96 kbps: L/R {off:.1} dB, rematrixed {on:.1} dB");
     assert!(on > off + 1.0, "{on} vs {off}");
 }
+
+/// 7.1 in E-AC-3: a 5.1 downmix substream plus a dependent substream with the true side and rear pairs.
+/// Every source channel carries its own tone; a 7.1 decoder must return each one in its own output channel.
+#[test]
+fn eac3_seven_one_uses_a_dependent_substream() {
+    if !have_ffmpeg() {
+        return;
+    }
+    use sw_codec_ac3::native::{encode_to_file, Request};
+    use sw_core::ChannelLayout;
+    let layout = ChannelLayout::find("7.1-ls-rs-lsr-rsr").unwrap(); // L R C LFE Ls Rs Lsr Rsr
+    let dir = std::env::temp_dir().join(format!("sw_eac3_71_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let n = 48_000 * 2;
+    let freqs = [330.0f32, 440.0, 550.0, 60.0, 660.0, 770.0, 880.0, 990.0];
+    let mut inputs = std::collections::HashMap::new();
+    for (i, ch) in layout.channels.iter().enumerate() {
+        let path = dir.join(format!("{}.wav", ch.short()));
+        let mut data = Vec::with_capacity(n * 3);
+        for k in 0..n {
+            let v = (0.4 * (2.0 * std::f32::consts::PI * freqs[i] * k as f32 / 48_000.0).sin() * 8_388_607.0) as i32;
+            data.extend_from_slice(&v.to_le_bytes()[..3]);
+        }
+        let mut f = Vec::new();
+        f.extend_from_slice(b"RIFF");
+        f.extend_from_slice(&((36 + data.len()) as u32).to_le_bytes());
+        f.extend_from_slice(b"WAVEfmt ");
+        f.extend_from_slice(&16u32.to_le_bytes());
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&48_000u32.to_le_bytes());
+        f.extend_from_slice(&(48_000u32 * 3).to_le_bytes());
+        f.extend_from_slice(&3u16.to_le_bytes());
+        f.extend_from_slice(&24u16.to_le_bytes());
+        f.extend_from_slice(b"data");
+        f.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        f.extend_from_slice(&data);
+        std::fs::write(&path, f).unwrap();
+        inputs.insert(*ch, path);
+    }
+    let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
+    let out = dir.join("t.eac3");
+    let req = Request { layout, bitrate_kbps: 768, dialnorm: 31, start_secs: 0.0, duration_secs: None, output: &out, eac3: true };
+    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
+    assert!(dec.status.success() && dec.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&dec.stderr));
+    let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    assert_eq!(y.len() % 8, 0);
+    let frames = y.len() / 8;
+    assert!(frames >= n);
+    // FFmpeg's channel order for 7.1: FL FR FC LFE BL BR SL SR; our source order is L R C LFE Ls Rs Lsr Rsr
+    let expected_out = [0usize, 1, 2, 3, 6, 7, 4, 5];
+    for (src, &outc) in expected_out.iter().enumerate() {
+        // amplitude of this source's tone in every output channel
+        let amp = |c: usize| -> f64 {
+            let (mut sc, mut ss) = (0.0f64, 0.0f64);
+            for i in 20_000..frames - 20_000 {
+                let a = 2.0 * std::f64::consts::PI * freqs[src] as f64 * i as f64 / 48_000.0;
+                sc += y[i * 8 + c] as f64 * a.cos();
+                ss += y[i * 8 + c] as f64 * a.sin();
+            }
+            2.0 * (sc * sc + ss * ss).sqrt() / (frames - 40_000) as f64
+        };
+        let here = amp(outc);
+        let elsewhere = (0..8).filter(|&c| c != outc).map(amp).fold(0.0, f64::max);
+        assert!((here - 0.4).abs() < 0.08, "source {src} came out at {here:.3} in channel {outc}");
+        assert!(elsewhere < 0.06, "source {src} leaks {elsewhere:.3} into another channel");
+    }
+}

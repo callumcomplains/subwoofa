@@ -102,3 +102,9 @@ Newest entries at the bottom. Started 2026-10-08.
 
 ## Folder-based batch encode
 - New "Batch from folder…" button over the input table: pick a folder and every complete set of per-channel files for the chosen input layout (`Name_L.wav`, `Name_R.wav`, … also `chNN`/FFmpeg-style names) becomes one queued job with the current format settings, named after the programme. `autoimport::scan_folder` does the grouping (incomplete sets are skipped; unit tested); Tauri command `scan_folder`.
+
+## E-AC-3 7.1 / 7.0 (dependent substream)
+- The catalogue offered 7.1 for E-AC-3 but the encoder refused it. Now: an independent substream carries a 5.1 (5.0) downmix (rears folded into the surrounds at -3 dB), and a dependent substream (strmtyp 1, custom channel map: Ls, Rs and the Lrs/Rrs pair) carries the true side and rear channels, so 7.1 decoders replace the downmixed surrounds and add the rears. The bit rate is split by channel count.
+- Found and fixed along the way: dependent substreams have no `convexpstr` fields and no per-block `convsnroffste` (A/52B Annex E); FFmpeg reported "expacc out of range" until they were left out.
+- Test: eight different tones, one per 7.1 channel, come back from FFmpeg each in its own output channel with no leakage. Also: side-surround file names (`SL`, `Ls`) now match `Lss` layouts in auto-import.
+- Layouts accepted for E-AC-3 are now the AC-3 modes plus 7.1 (side+rear, or surround+rear) and 7.0.
