@@ -30,7 +30,14 @@ fn ref_clock_code(rate: u32) -> u32 {
 
 /// Build one extension substream frame around an XLL frame.
 pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
+    exss_frame_ext(p, None, Some(xll))
+}
+
+/// Build one extension substream frame carrying an XBR extension and/or an XLL frame (the core, if any,
+/// lives in the core substream).
+pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) -> Vec<u8> {
     let nb4f = 16u32;
+    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len());
     // ---- asset descriptor (its own byte size)
     let mut a = BitWriter::new();
     a.put(0, 9); // size placeholder
@@ -60,20 +67,31 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
     } else {
         a.put(0, 1);
     }
-    if p.with_core {
+    let write_xll = |a: &mut BitWriter, x: &[u8]| {
+        a.put(x.len() as u32 - 1, nb4f);
+        a.put(1, 1); // XLL sync word present
+        a.put(0, 4); // peak bit rate smoothing buffer
+        a.put(0, 5); // 1-bit initial decoding delay field
+        a.put(0, 1);
+        a.put(0, nb4f); // sync word offset
+    };
+    if p.with_core || xbr.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        a.put(0x201, 12); // core in the core substream + XLL
-        a.put(xll.len() as u32 - 1, nb4f);
+        let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        a.put(mask, 12); // core in the core substream, XBR, XLL
+        if let Some(b) = xbr {
+            a.put(b.len() as u32 - 1, 14);
+        }
+        if let Some(x) = xll {
+            write_xll(&mut a, x);
+        }
     } else {
         a.put(1, 2); // lossless only
-        a.put(xll.len() as u32 - 1, nb4f);
+        write_xll(&mut a, xll.expect("an XLL frame"));
     }
-    a.put(1, 1); // XLL sync word present
-    a.put(0, 4); // peak bit rate smoothing buffer
-    a.put(0, 5); // 1-bit initial decoding delay field
-    a.put(0, 1);
-    a.put(0, nb4f); // sync word offset
-    a.put(0, 3); // stream id
+    if xll.is_some() {
+        a.put(0, 3); // stream id
+    }
     a.put(0, 1); // decode in primary decoder
     a.put(0, 1); // no revision 2 DRC
     a.align(8);
@@ -89,7 +107,7 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
     let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + 1 + 8 + 1 + nb4f as usize;
     let bits_total = bits_before_desc + alen * 8 + 1;
     let hsize = bits_total.div_ceil(8) + 2;
-    let frame_size = hsize + xll.len();
+    let frame_size = hsize + payload;
     let mut h = BitWriter::new();
     h.put(SYNC_EXSS, 32);
     h.put(0, 8); // user defined bits
@@ -106,7 +124,7 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
     h.put(1, 1); // active extension substream mask
     h.put(1, 8); // active asset mask
     h.put(0, 1); // no mixing metadata
-    h.put(xll.len() as u32 - 1, nb4f); // asset size
+    h.put(payload as u32 - 1, nb4f); // asset size
     for b in &ab {
         h.put(*b as u32, 8);
     }
@@ -116,7 +134,12 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
     assert_eq!(hb.len() + 2, hsize);
     let crc = crc16(&hb[5..]);
     hb.extend_from_slice(&crc.to_be_bytes());
-    hb.extend_from_slice(xll);
+    if let Some(x) = xbr {
+        hb.extend_from_slice(x);
+    }
+    if let Some(x) = xll {
+        hb.extend_from_slice(x);
+    }
     hb
 }
 

@@ -82,6 +82,8 @@ pub struct Request<'a> {
     pub output: &'a Path,
     /// DTS-ES (matrix): flag the stream and, for layouts with a separate Cs, mix it into the surrounds.
     pub es: Option<EsOptions>,
+    /// DTS-HD High Resolution: total bit rate (core plus XBR extension) in kbit/s.
+    pub hra_kbps: Option<u32>,
 }
 
 pub struct Stats {
@@ -103,12 +105,15 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         _ => None,
     };
     let mix_delay = req.es.map_or(0, |e| e.delay());
+    if req.hra_kbps.is_some() && xch {
+        return Err(Error::Unsupported("DTS-HD High Resolution with a discrete centre surround is not implemented yet".into()).into());
+    }
     let rate = stems.sample_rate;
     let nch = map.order.len();
     let bitrate = req.bitrate_kbps * 1000;
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if bitrate >= 700_000 || rate > 48_000 { 16 } else { 32 };
-    let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, blocks })?;
+    let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: req.hra_kbps.is_some(), blocks })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
@@ -117,7 +122,20 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
+    let mut hra = req.hra_kbps.map(|kbps| {
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0 };
+        enc.keep_residual = true;
+        crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
+    });
+    let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
+    let header_len = if container {
+        let h = crate::exss::dtshd_header(&crate::exss::DtsHdHeader { sample_rate: rate, frames: 0, samples_per_frame: n as u16, total_samples: want, ch_mask: crate::ma::map_layout(req.layout).exss_mask as u16, initial_padding: 0 }, 0);
+        out.write_all(&h)?;
+        h.len() as u64
+    } else {
+        0
+    };
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
     let mut frames = 0u64;
@@ -153,13 +171,25 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
             }
         }
         remaining -= got.min(remaining as usize) as u64;
-        let data = enc.encode_frame(&pcm);
+        let mut data = enc.encode_frame(&pcm);
+        if let Some(h) = hra.as_mut() {
+            data = h.wrap(data, &enc.last_residual);
+        }
         out.write_all(&data)?;
         frames += 1;
         bytes += data.len() as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     out.flush()?;
+    if container {
+        let h = crate::exss::dtshd_header(&crate::exss::DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: want, ch_mask: crate::ma::map_layout(req.layout).exss_mask as u16, initial_padding: 0 }, bytes);
+        debug_assert_eq!(h.len() as u64, header_len);
+        let mut inner = out.into_inner().map_err(|e| e.into_error())?;
+        use std::io::{Seek, SeekFrom};
+        inner.seek(SeekFrom::Start(0))?;
+        inner.write_all(&h)?;
+        inner.flush()?;
+    }
     on_progress(1.0);
     Ok(Stats { frames, bytes })
 }

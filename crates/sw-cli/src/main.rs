@@ -235,11 +235,12 @@ fn run() -> Result<(), String> {
                     println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
                     return Ok(());
                 }
-                if matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs) {
+                if matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::native::Request {
                         layout,
-                        bitrate_kbps: bitrate.unwrap_or(1509),
+                        bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { bitrate.unwrap_or(1509) },
+                        hra_kbps: if stream == StreamType::DtsHdHra { Some(bitrate.unwrap_or(3018)) } else { None },
                         dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
                         pcm_bits: (stems.bits as u32).clamp(16, 24),
                         start_secs: start.unwrap_or(0.0),

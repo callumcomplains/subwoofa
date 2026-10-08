@@ -34,6 +34,9 @@ pub struct Config {
     /// DTS-ES discrete: a sixth full-range channel (the centre surround) travels in the XCH extension at
     /// the end of every frame. `encode_frame` then takes it after the primary channels.
     pub xch: bool,
+    /// Perfect-reconstruction filter bank (FILTS flag): needed when a residual extension (XBR) refines
+    /// the core.
+    pub perfect: bool,
     /// Subband sample blocks per frame: 16 (512 samples) or 32 (1024 samples).
     pub blocks: usize,
 }
@@ -95,6 +98,10 @@ pub struct Encoder {
     exact: Option<ExactState>,
     /// PCM the reference decoder produces for the last frame (when emulation is on).
     pub last_core_pcm: Vec<Vec<i32>>,
+    /// Keep the difference between the input subband samples and the core's reconstruction in
+    /// `last_residual` (`[channel][band][block]`, primary channels only) for the XBR extension.
+    pub keep_residual: bool,
+    pub last_residual: Vec<Vec<Vec<f64>>>,
 }
 
 struct ExactState {
@@ -143,7 +150,7 @@ impl Encoder {
         let sum: f64 = LFE_FIR_64.iter().sum();
         let lfe_fir: Vec<f64> = LFE_FIR_64.iter().map(|v| v / sum).collect();
         Ok(Encoder {
-            analysis: (0..cfg.channels + usize::from(cfg.xch)).map(|_| Analysis::new(false)).collect(),
+            analysis: (0..cfg.channels + usize::from(cfg.xch)).map(|_| Analysis::new(cfg.perfect)).collect(),
             lfe_hist: vec![0.0; 512],
             lfe_pre: vec![0.0; LFE_ALIGN],
             frame_bytes,
@@ -153,6 +160,8 @@ impl Encoder {
             exact: None,
             last_offset: 30.0,
             last_core_pcm: Vec::new(),
+            keep_residual: false,
+            last_residual: Vec::new(),
             cfg,
         })
     }
@@ -276,6 +285,23 @@ impl Encoder {
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
         }
         let bytes = self.pack(&best, lfe.as_ref());
+        if self.keep_residual {
+            let mut res = Vec::with_capacity(self.cfg.channels);
+            for ch in 0..self.cfg.channels {
+                let mut bands = Vec::with_capacity(BANDS);
+                for b in 0..BANDS {
+                    let k = best.abits[ch][b] as usize;
+                    let mut deq = vec![0i32; blocks];
+                    if k > 0 {
+                        let scale = SCALE_7[best.scale_idx[ch][b] as usize] as i32;
+                        dequantize(&best.q[ch][b], STEP_LOSSY[k] as i32, scale, &mut deq);
+                    }
+                    bands.push(sub[ch][b].iter().zip(&deq).map(|(v, d)| v - *d as f64).collect());
+                }
+                res.push(bands);
+            }
+            self.last_residual = res;
+        }
         if self.exact.is_some() {
             self.emulate_decoder(&best, lfe.as_ref());
         }
@@ -521,7 +547,7 @@ impl Encoder {
         w.put(0, 1); // DSYNC only per subframe
         w.put(if cfg.lfe { 2 } else { 0 }, 2); // LFE interpolation by 64
         w.put(1, 1); // predictor history valid
-        w.put(0, 1); // non-perfect reconstruction bank
+        w.put(u32::from(cfg.perfect), 1); // perfect (1) or non-perfect (0) reconstruction bank
         let (vernum, dn) = if cfg.dialnorm >= -15 { (7, -cfg.dialnorm) } else { (6, -cfg.dialnorm - 16) };
         w.put(vernum, 4);
         w.put(1, 2); // copy history

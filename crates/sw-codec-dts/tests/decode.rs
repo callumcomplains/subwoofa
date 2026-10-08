@@ -12,7 +12,7 @@ fn run(name: &str, channels: usize, amode: u8, lfe: bool, bitrate: u32, blocks: 
 
 /// `xch`: an extra centre-surround channel after the primaries.
 fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate: u32, blocks: usize) -> (f64, Vec<f64>) {
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, amode, channels, lfe, bitrate, dialnorm: 0, pcm_bits: 24, es: xch, xch, blocks }).unwrap();
+    let mut enc = Encoder::new(Config { sample_rate: 48_000, amode, channels, lfe, bitrate, dialnorm: 0, pcm_bits: 24, es: xch, xch, perfect: false, blocks }).unwrap();
     let n = enc.frame_samples();
     let frames = 60;
     let total = n * frames;
@@ -125,7 +125,7 @@ fn band_mapping_matches_synthesis() {
     }
     use sw_codec_dts::qmf::Synthesis;
     for band in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 30, 31] {
-        let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 0, channels: 1, lfe: false, bitrate: 1_000_000, dialnorm: 0, pcm_bits: 24, es: false, xch: false, blocks: 16 }).unwrap();
+        let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 0, channels: 1, lfe: false, bitrate: 1_000_000, dialnorm: 0, pcm_bits: 24, es: false, xch: false, perfect: false, blocks: 16 }).unwrap();
         let frames = 40;
         let mut stream = Vec::new();
         let mut sy = Synthesis::new(false);
