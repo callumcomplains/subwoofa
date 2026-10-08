@@ -36,8 +36,17 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
 /// Build one extension substream frame carrying an XBR extension and/or an XLL frame (the core, if any,
 /// lives in the core substream).
 pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) -> Vec<u8> {
+    exss_build(p, xbr, xll, None)
+}
+
+/// Build one extension substream frame around an LBR (DTS Express) payload.
+pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
+    exss_build(p, None, None, Some(lbr))
+}
+
+fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>) -> Vec<u8> {
     let nb4f = 16u32;
-    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len());
+    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len());
     // ---- asset descriptor (its own byte size)
     let mut a = BitWriter::new();
     a.put(0, 9); // size placeholder
@@ -75,7 +84,11 @@ pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) ->
         a.put(0, 1);
         a.put(0, nb4f); // sync word offset
     };
-    if p.with_core || xbr.is_some() {
+    if let Some(l) = lbr {
+        a.put(2, 2); // coding mode: low bit rate
+        a.put(l.len() as u32 - 1, 14);
+        a.put(0, 1); // no sync distance
+    } else if p.with_core || xbr.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
         let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
@@ -138,6 +151,9 @@ pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) ->
         hb.extend_from_slice(x);
     }
     if let Some(x) = xll {
+        hb.extend_from_slice(x);
+    }
+    if let Some(x) = lbr {
         hb.extend_from_slice(x);
     }
     hb

@@ -248,6 +248,15 @@ fn run() -> Result<(), String> {
             let map = collect_inputs(layout, auto_import, inputs)?;
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
             if engine == "native" {
+                if stream == StreamType::DtsExpress {
+                    let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
+                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output };
+                    let t0 = std::time::Instant::now();
+                    let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let secs = (stats.frames * 4096) as f64 / stems.sample_rate as f64;
+                    println!("wrote {} ({} frames, {:.2} MB, average {:.0} kbps) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    return Ok(());
+                }
                 if matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_truehd::native::Request {
