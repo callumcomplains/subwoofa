@@ -129,8 +129,6 @@ fn band_mapping_matches_synthesis() {
         for delay in 0..700usize {
             let (mut xy, mut xx, mut yy) = (0.0, 0.0, 0.0);
             for i in 2000..reference.len() - 2000 {
-                let y = dec[i + delay.min(dec.len() - reference.len() - 1) * 0];
-                let _ = y;
                 if i + delay >= dec.len() {
                     break;
                 }
