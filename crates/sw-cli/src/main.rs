@@ -198,7 +198,7 @@ fn run() -> Result<(), String> {
             let map = collect_inputs(layout, auto_import, inputs)?;
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
             if engine == "native" {
-                if stream == StreamType::TrueHd {
+                if matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_truehd::native::Request {
                         layout,
@@ -206,6 +206,7 @@ fn run() -> Result<(), String> {
                         duration_secs: duration,
                         output: &output,
                         downmix: !no_downmix,
+                        mlp: stream == StreamType::Mlp,
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))

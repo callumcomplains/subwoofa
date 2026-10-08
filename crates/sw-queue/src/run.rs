@@ -161,7 +161,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa) {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -187,13 +187,14 @@ fn execute_inner(
     };
     log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
 
-    if native && stream == StreamType::TrueHd {
+    if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
         let req = sw_codec_truehd::native::Request {
             layout,
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
             downmix: spec.downmix,
+            mlp: stream == StreamType::Mlp,
         };
         let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_truehd::native::NativeError::Canceled => Failure::Canceled,

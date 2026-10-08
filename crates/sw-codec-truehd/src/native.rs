@@ -1,6 +1,6 @@
 //! File-level driver: stems in, raw `.thd` elementary stream out.
 
-use crate::{default_downmix, map_layout, Config, Encoder, Error, DEFAULT_RESTART_INTERVAL};
+use crate::{default_downmix, map_layout, map_layout_mlp, Config, Encoder, Error, LayoutMap, Mlp, DEFAULT_RESTART_INTERVAL};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +28,8 @@ pub struct Request<'a> {
     pub output: &'a Path,
     /// Include the stereo downmix substream (recommended; ignored for mono/stereo layouts).
     pub downmix: bool,
+    /// Write MLP (DVD-Audio) instead of TrueHD.
+    pub mlp: bool,
 }
 
 pub struct Stats {
@@ -48,9 +50,15 @@ pub fn encode_to_file(
     on_progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
 ) -> Result<Stats, NativeError> {
-    let map = map_layout(req.layout)?;
     let rate = stems.sample_rate;
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: map.chanmap, channels: map.source_index.len(), restart_interval: DEFAULT_RESTART_INTERVAL, downmix: if req.downmix { default_downmix(req.layout, &map) } else { None }, decorrelate: std::env::var_os("SW_NODECOR").is_none() })?;
+    let (map, mlp) = if req.mlp {
+        let (arrangement, source_index) = map_layout_mlp(req.layout)?;
+        let bits = match stems.bits as u32 { 0..=16 => 16, 17..=20 => 20, _ => 24 };
+        (LayoutMap { chanmap: 0, source_index }, Some(Mlp { arrangement, bits }))
+    } else {
+        (map_layout(req.layout)?, None)
+    };
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: map.chanmap, channels: map.source_index.len(), restart_interval: DEFAULT_RESTART_INTERVAL, downmix: if req.downmix && mlp.is_none() { default_downmix(req.layout, &map) } else { None }, decorrelate: std::env::var_os("SW_NODECOR").is_none(), mlp })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;

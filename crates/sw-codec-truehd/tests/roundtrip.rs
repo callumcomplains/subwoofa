@@ -70,7 +70,7 @@ fn run_interval(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_or
         return;
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None, decorrelate: true }).unwrap();
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None, decorrelate: true, mlp: None }).unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -255,7 +255,7 @@ fn run_downmix_bits(name: &str, chanmap: u16, channels: usize, decoded_order: &[
         return;
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n).into_iter().map(|v| (v >> zero_bits) << zero_bits).collect()).collect();
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()), decorrelate: true }).unwrap();
+    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()), decorrelate: true, mlp: None }).unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -381,4 +381,47 @@ fn downmix_half_level_stays_inside_24_bits_on_loud_material() {
     assert!(lo.len() == n);
     // full-scale uncorrelated noise in four channels is far worse than any real mix
     assert!(over * 50 < n, "too many overflows: {over}");
+}
+
+/// MLP (DVD-Audio) streams: the same decoder must reproduce them exactly.
+fn run_mlp(name: &str, arrangement: u8, channels: usize, rate: u32, bits: u32) {
+    if !have_ffmpeg() {
+        return;
+    }
+    let n = rate as usize * 2;
+    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(if bits == 16 { Kind::SixteenBit } else { Kind::Music }, c, n)).collect();
+    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: 0, channels, restart_interval: 16, downmix: None, decorrelate: true, mlp: Some(sw_codec_truehd::Mlp { arrangement, bits }) }).unwrap();
+    let chunk = enc.interval_samples();
+    let mut stream = Vec::new();
+    let mut pos = 0;
+    while pos < n {
+        let len = chunk.min(n - pos);
+        let part: Vec<Vec<i32>> = sigs.iter().map(|s| { let mut v = vec![0i32; chunk]; v[..len].copy_from_slice(&s[pos..pos + len]); v }).collect();
+        pos += len;
+        stream.extend(enc.encode_interval(&part, len, pos >= n));
+    }
+    let dir = std::env::temp_dir().join(format!("sw_mlp_{}_{}", std::process::id(), name));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.mlp");
+    std::fs::write(&path, &stream).unwrap();
+    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.len() >= n * channels * 3, "{name}: decoded {} bytes", out.stdout.len());
+    for c in 0..channels {
+        for i in 0..n {
+            let o = (i * channels + c) * 3;
+            let got = i32::from_le_bytes([out.stdout[o], out.stdout[o + 1], out.stdout[o + 2], 0]) << 8 >> 8;
+            assert_eq!(got, sigs[c][i], "{name}: channel {c} differs at sample {i}");
+        }
+    }
+}
+
+#[test]
+fn mlp_stereo_16_bit_44_1() {
+    run_mlp("mlp_st16", 1, 2, 44_100, 16);
+}
+
+#[test]
+fn mlp_five_one_24_bit_96() {
+    run_mlp("mlp_51", 12, 6, 96_000, 24);
 }

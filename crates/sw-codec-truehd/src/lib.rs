@@ -122,6 +122,45 @@ pub struct Config {
     pub downmix: Option<Downmix>,
     /// Predict each channel from the lower-numbered ones with per-interval matrices (lossless).
     pub decorrelate: bool,
+    /// Write MLP (DVD-Audio style) instead of TrueHD: one substream, no downmix, up to 6 channels.
+    pub mlp: Option<Mlp>,
+}
+
+/// MLP stream parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct Mlp {
+    /// Channel assignment code of the major sync (see `map_layout_mlp`).
+    pub arrangement: u8,
+    /// Source word length (16, 20 or 24).
+    pub bits: u32,
+}
+
+/// `(channel occupancy, summary info)` of the MLP channel assignments 0..=12.
+const MLP_CHANNEL_INFO: [(u8, u8); 13] = [(0x01, 0x1f), (0x03, 0x1b), (0x07, 0x1f), (0x0F, 0x19), (0x07, 0x03), (0x0F, 0x1f), (0x1F, 0x01), (0x07, 0x1a), (0x0F, 0x1f), (0x1F, 0x18), (0x0F, 0x02), (0x1F, 0x1f), (0x3F, 0x00)];
+
+/// MLP channel assignment and coded channel order for a layout (the layouts the format can describe).
+pub fn map_layout_mlp(layout: &ChannelLayout) -> Result<(u8, Vec<usize>), Error> {
+    use sw_core::Channel::*;
+    const TABLE: &[(u8, &[sw_core::Channel])] = &[
+        (0, &[C]),
+        (1, &[L, R]),
+        (2, &[L, R, Cs]),
+        (3, &[L, R, Ls, Rs]),
+        (4, &[L, R, Lfe]),
+        (7, &[L, R, C]),
+        (8, &[L, R, C, Cs]),
+        (9, &[L, R, C, Ls, Rs]),
+        (10, &[L, R, C, Lfe]),
+        (11, &[L, R, C, Lfe, Cs]),
+        (12, &[L, R, C, Lfe, Ls, Rs]),
+    ];
+    for (code, order) in TABLE {
+        if order.len() == layout.channels.len() && order.iter().all(|c| layout.channels.contains(c)) {
+            let idx = order.iter().map(|c| layout.channels.iter().position(|x| x == c).unwrap()).collect();
+            return Ok((*code, idx));
+        }
+    }
+    Err(Error::Unsupported(format!("layout '{}' has no MLP channel assignment (mono to 5.1 in the DVD-Audio arrangements)", layout.id)))
 }
 
 /// One primitive matrix: rewrites channel `out` from a weighted sum of all channels (2.14).
@@ -259,6 +298,9 @@ impl Encoder {
             return Err(Error::Unsupported("restart interval must be 8 to 128 access units".into()));
         }
         let n = cfg.channels;
+        if cfg.mlp.is_some() && (cfg.downmix.is_some() || n > 6) {
+            return Err(Error::Unsupported("MLP carries up to 6 channels in one substream, without a downmix".into()));
+        }
         if let Some(dm) = &cfg.downmix {
             if !(1 << 14..=32767).contains(&dm.dest) {
                 return Err(Error::Unsupported("downmix gain must be between 16384 and 32767 (2.14)".into()));
@@ -285,7 +327,7 @@ impl Encoder {
         };
         let dm = cfg.downmix.as_ref();
         let none = || Vec::new();
-        let subs = if n <= 2 {
+        let subs = if cfg.mlp.is_some() || n <= 2 {
             vec![Substream { min: 0, max: n - 1, matrices: none() }]
         } else if n <= 6 {
             vec![
@@ -346,7 +388,53 @@ impl Encoder {
         map
     }
 
+    fn write_major_sync_mlp(&self, m: Mlp) -> [u8; 28] {
+        let mut w = BitWriter::new();
+        w.put(0xF8726F, 24);
+        w.put(0xBB, 8);
+        w.put(match m.bits { 16 => 0, 20 => 1, _ => 2 }, 4);
+        w.put(0xF, 4);
+        w.put(self.rate_code, 4);
+        w.put(0xF, 4);
+        w.put(0, 4);
+        w.put(0, 4); // multichannel type
+        w.put(0, 3);
+        w.put(m.arrangement as u32, 5);
+        w.put(0xB752, 16);
+        w.put(0x4000, 16); // DVD-Audio flag
+        w.put(0, 16);
+        w.put(1, 1); // variable bit rate
+        let peak = ((9_600_000u32 << 4) - 8) / self.cfg.sample_rate;
+        w.put(peak & 0x7FFF, 15);
+        w.put(1, 4); // one substream
+        w.put(0, 2);
+        w.put(0, 2); // extended substream info
+        let high = self.rate_code & 3 == 2;
+        let info = 0x04 | u32::from(self.cfg.channels <= 2) | if high { 0x02 } else { 0 };
+        w.put(info, 8);
+        let fs = match self.cfg.sample_rate { 44_100 => 0x09, 88_200 => 0x0D, 176_400 => 0x11, 48_000 => 0x0A, 96_000 => 0x0E, _ => 0x12 };
+        w.put(fs, 5);
+        w.put(m.bits, 5);
+        let (occupancy, summary) = MLP_CHANNEL_INFO[m.arrangement as usize];
+        w.put(occupancy as u32, 6);
+        w.put(0, 3);
+        w.put(0, 10); // speaker layout
+        w.put(0, 3); // copy protection
+        w.put(0x8080, 16);
+        w.put(0, 7);
+        w.put(0, 4); // source format
+        w.put(summary as u32, 5);
+        let mut bytes = w.snapshot();
+        bytes.resize(28, 0);
+        let c = major_sync_checksum(&bytes[..26]);
+        bytes[26..28].copy_from_slice(&c.to_le_bytes());
+        bytes.try_into().unwrap()
+    }
+
     fn write_major_sync(&self) -> [u8; 28] {
+        if let Some(m) = self.cfg.mlp {
+            return self.write_major_sync_mlp(m);
+        }
         let mut w = BitWriter::new();
         w.put(0xF8726F, 24);
         w.put(0xBA, 8);
@@ -548,6 +636,7 @@ impl Encoder {
                     au,
                     restart,
                     is_last_au.then_some(shorten),
+                    self.cfg.mlp.is_some(),
                     self.output_timing,
                     check_for_header[si],
                     max_bits,
@@ -1253,6 +1342,7 @@ fn write_substream_au(
     au: usize,
     restart: bool,
     end_of_stream_shorten: Option<usize>,
+    mlp: bool,
     output_timing: u16,
     lossless_check: u8,
     max_output_bits: u32,
@@ -1286,7 +1376,7 @@ fn write_substream_au(
     w.align(16);
     if let Some(shorten) = end_of_stream_shorten.filter(|s| *s > 0) {
         w.put(0xD234, 16);
-        w.put((shorten as u32 & 0x1FFF) | 0xE000, 16);
+        w.put(if mlp { 0xD234 } else { (shorten as u32 & 0x1FFF) | 0xE000 }, 16);
     }
     let mut bytes = w.into_bytes();
     let p = parity(&bytes) ^ 0xA9;
