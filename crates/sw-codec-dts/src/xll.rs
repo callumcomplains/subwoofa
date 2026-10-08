@@ -425,10 +425,10 @@ impl XllEncoder {
         let decor = coeffs.iter().any(|c| *c != 0);
         let (orig_order, coeffs, coded) = if decor || nch < 2 { (orig_order, coeffs, coded) } else { ((0..nch).collect(), vec![0; nch / 2], pcm.to_vec()) };
         let me: &XllEncoder = self;
-        let plans: Vec<ChannelPlan> = std::thread::scope(|sc| {
-            let hs: Vec<_> = coded.into_iter().map(|x| sc.spawn(move || me.plan_channel(x))).collect();
-            hs.into_iter().map(|h| h.join().unwrap()).collect()
-        });
+        let plans: Vec<ChannelPlan> = {
+            use rayon::prelude::*;
+            coded.into_par_iter().map(|x| me.plan_channel(x)).collect()
+        };
         SetPlan { plans, orig_order, coeffs, decor }
     }
 

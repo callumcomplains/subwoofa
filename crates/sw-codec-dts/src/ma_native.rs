@@ -100,6 +100,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let (lo, hi) = (-(1i64 << (bit_res - 1)), (1i64 << (bit_res - 1)) - 1);
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
+    let mut tm = [0f64; 3];
     let mut bytes = 0u64;
     let mut frames = 0u64;
     // several frames per push so the lossless stage can run in parallel
@@ -110,7 +111,10 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
             return Err(MaError::Canceled);
         }
         let got = (remaining as usize).min(chunk);
+        let t_r = std::time::Instant::now();
         stems.read_planar(&mut planar, got)?;
+        tm[0] += t_r.elapsed().as_secs_f64();
+        let t_c = std::time::Instant::now();
         for (j, &lc) in map.order.iter().enumerate() {
             let dst = &mut pcm[j];
             dst.iter_mut().for_each(|v| *v = 0);
@@ -119,6 +123,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
             }
         }
         remaining -= got as u64;
+        tm[1] += t_c.elapsed().as_secs_f64();
+        let t_p = std::time::Instant::now();
         let ready: Vec<Vec<u8>> = match &mut enc {
             Enc::Core(e) => {
                 let part: Vec<Vec<i32>> = pcm.iter().map(|c| c[..got].to_vec()).collect();
@@ -126,12 +132,16 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
             }
             Enc::Lossless(e) => pcm.iter().map(|c| c.len()).max().map_or(vec![], |_| lossless_frames(e, &pcm, got, n)),
         };
+        tm[2] += t_p.elapsed().as_secs_f64();
         for f in ready {
             file.write_all(&f)?;
             bytes += f.len() as u64;
             frames += 1;
         }
         on_progress(1.0 - remaining as f32 / want as f32);
+    }
+    if std::env::var_os("SW_TIMING").is_some() {
+        eprintln!("ma driver: read {:.2}s convert {:.2}s encode {:.2}s", tm[0], tm[1], tm[2]);
     }
     if let Enc::Core(e) = &mut enc {
         for f in e.finish() {

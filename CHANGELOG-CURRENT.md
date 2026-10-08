@@ -88,3 +88,10 @@ Newest entries at the bottom. Started 2026-10-08.
 - Result: mono, stereo, 3.0, 4.0, 2.1/3.1/4.1, 5.0 and 5.1 streams verify with every frame accepted.
 - Constant frame size is enforced. A channel pair cannot be coded below the full mono region (the decoder reads those band indices in its second pass), so the cheapest setting costs about 108 kbps per pair, 36-48 kbps for a lone channel and 3 kbps for the LFE. The encoder now refuses lower rates with a clear message, the format catalogue shows the real minimum per layout (for example 5.1: 255 to 510 kbps), and if a loud frame still does not fit, the cheapest legal setting with muted coefficients is written instead of an oversize frame.
 - Still open for Express: band-limit flags (would allow lower rates), tonal components, LFE at 24 bits.
+
+## Speed
+- Per-frame `thread::scope` spawns (tens of thousands of thread creations per minute of audio) replaced by a persistent rayon pool in the core analysis, MA core input, XLL channel planning, TrueHD channel analysis, 96/24 core input and extension analysis, and in the XBR and X96 candidate searches.
+- MA lossless stage now runs one batch behind the core stage (pipelined) instead of blocking it.
+- The core's quality-offset search evaluates candidates in parallel on machines with 6+ cores (same 0.375 dB resolution; output unchanged).
+- 60 s of 5.1 film audio: MA 3.7x -> 7.6x real time, HRA 4x -> 7x, DTS core 7x -> 11x; 40 s of 96 kHz 5.1 in 96/24: 1x -> 3.7x. Output files are bit-identical to before for HRA and 96/24.
+- Auto-import also understands FFmpeg-style names (`ch1 FL_Front-Left`: `FL FR FC SL SR BL BR` and descriptive words such as Front/Left/Center are ignored when matching siblings).

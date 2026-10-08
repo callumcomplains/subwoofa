@@ -110,7 +110,10 @@ impl XbrEncoder {
     /// Encode `residual[ch][band][sample]` (core primary channels only) within `budget` bytes.
     pub fn encode(&self, residual: &[Vec<Vec<f64>>], budget: usize) -> Vec<u8> {
         let nch = residual.len();
-        let cands: Vec<Vec<Vec<Cand>>> = residual.iter().map(|c| c.iter().map(|b| candidates(b)).collect()).collect();
+        let cands: Vec<Vec<Vec<Cand>>> = {
+            use rayon::prelude::*;
+            residual.par_iter().map(|c| c.iter().map(|b| candidates(b)).collect()).collect()
+        };
         // Lagrangian search: smallest distortion for at most `budget` bytes
         let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p) <= budget;
         let mut lo = 1e-9f64;

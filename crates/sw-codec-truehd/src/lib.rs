@@ -551,16 +551,17 @@ impl Encoder {
 
         // 1. analysis: per channel quantizer step, predictor and residual
         let decorrelate = self.cfg.decorrelate;
-        let both: Vec<(ChannelAnalysis, Option<(ChannelAnalysis, usize)>)> = std::thread::scope(|sc| {
-            let handles: Vec<_> = (0..self.cfg.channels)
+        let both: Vec<(ChannelAnalysis, Option<(ChannelAnalysis, usize)>)> = {
+            use rayon::prelude::*;
+            (0..self.cfg.channels)
+                .into_par_iter()
                 .map(|c| {
                     let forced = forced_q[c];
                     let allow = decorrelate && !(coarse && (c == 0 || (c == 1 && !unity)));
-                    sc.spawn(move || analyze_with_prediction(coded, c, n, au, forced, allow))
+                    analyze_with_prediction(coded, c, n, au, forced, allow)
                 })
-                .collect();
-            handles.into_iter().map(|h| h.join().expect("analysis thread panicked")).collect()
-        });
+                .collect()
+        };
         // decoders accept at most 8 primitive matrices per substream: keep the predictions that save most
         let static_max = self.subs.iter().map(|s| s.matrices.len()).max().unwrap_or(0);
         let budget = 8usize.saturating_sub(static_max);

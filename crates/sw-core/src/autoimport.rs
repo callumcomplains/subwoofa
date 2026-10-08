@@ -26,19 +26,32 @@ fn tokens(stem: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Remove `chNN` position tokens ("ch01", "Ch12") so per-channel file numbering does not defeat matching.
+/// Remove `chNN` position tokens ("ch01", "Ch12") and descriptive words ("Front-Left") so per-channel file
+/// numbering and naming do not defeat matching.
 fn strip_numbering(s: &str) -> String {
     let mut out = String::new();
     let mut last = 0;
     for (a, b) in tokens(s) {
         let t = &s[a..b];
-        if t.len() > 2 && t[..2].eq_ignore_ascii_case("ch") && t[2..].bytes().all(|c| c.is_ascii_digit()) {
+        let descriptor = matches!(t.to_ascii_lowercase().as_str(), "front" | "left" | "right" | "center" | "centre" | "surround" | "back" | "rear" | "side" | "low" | "frequency" | "effects" | "channel" | "sub" | "subwoofer" | "height" | "top" | "wide");
+        if descriptor || (t.len() > 2 && t[..2].eq_ignore_ascii_case("ch") && t[2..].bytes().all(|c| c.is_ascii_digit())) {
             out.push_str(&s[last..a]);
             last = b;
         }
     }
     out.push_str(&s[last..]);
-    out
+    // runs of delimiters left behind by the removals compare equal
+    let mut collapsed = String::new();
+    for ch in out.chars() {
+        if matches!(ch, '.' | '-' | '_' | ' ') {
+            if !collapsed.ends_with('_') {
+                collapsed.push('_');
+            }
+        } else {
+            collapsed.push(ch);
+        }
+    }
+    collapsed.trim_matches('_').to_string()
 }
 
 /// Find the channel ID token in `stem` that equals `ch` and return (prefix, suffix) around it.

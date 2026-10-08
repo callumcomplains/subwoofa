@@ -43,6 +43,10 @@ pub struct Config {
 
 pub const MAX_PRIMARY: usize = 5;
 
+static T_SEARCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static T_PACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static T_EMU: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn sfreq_code(rate: u32) -> Option<u32> {
     Some(match rate {
         8000 => 1,
@@ -206,19 +210,18 @@ impl Encoder {
         assert_eq!(pcm.len(), nch + usize::from(self.cfg.lfe));
         // 1. subband analysis
         let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
-        std::thread::scope(|sc| {
-            for ((an, out), input) in self.analysis.iter_mut().zip(sub.iter_mut()).zip(pcm.iter()) {
-                sc.spawn(move || {
-                    for b in 0..blocks {
-                        let mut o = [0f64; BANDS];
-                        an.step(&input[b * 32..b * 32 + 32], &mut o);
-                        for (band, v) in o.iter().enumerate() {
-                            out[band][b] = v * SUBBAND_GAIN;
-                        }
+        {
+            use rayon::prelude::*;
+            self.analysis.par_iter_mut().zip(sub.par_iter_mut()).zip(pcm.par_iter()).for_each(|((an, out), input)| {
+                for b in 0..blocks {
+                    let mut o = [0f64; BANDS];
+                    an.step(&input[b * 32..b * 32 + 32], &mut o);
+                    for (band, v) in o.iter().enumerate() {
+                        out[band][b] = v * SUBBAND_GAIN;
                     }
-                });
-            }
-        });
+                }
+            });
+        }
         let lfe = if self.cfg.lfe { Some(self.lfe_samples(&pcm[nch])) } else { None };
         self.encode_subbands(&sub, lfe)
     }
@@ -249,49 +252,17 @@ impl Encoder {
             })
             .collect();
         // search around the previous frame's operating point: quality offsets vary slowly
-        let mut lo = self.last_offset - 12.0;
-        let mut best = self.make_plan(sub, &power, &peak, lo);
-        let mut guard = 0;
-        while best.bits > budget && lo > -200.0 {
-            lo -= 24.0;
-            best = self.make_plan(sub, &power, &peak, lo);
-            guard += 1;
-            if guard > 12 {
-                break;
-            }
-        }
-        if best.bits > budget {
-            lo = -200.0;
-            best = self.make_plan(sub, &power, &peak, lo);
-        } else {
-            let mut hi = lo + 24.0;
-            loop {
-                let p = self.make_plan(sub, &power, &peak, hi);
-                if p.bits <= budget && hi < 200.0 {
-                    lo = hi;
-                    best = p;
-                    hi += 24.0;
-                } else {
-                    break;
-                }
-            }
-            for _ in 0..6 {
-                let mid = 0.5 * (lo + hi);
-                let p = self.make_plan(sub, &power, &peak, mid);
-                if p.bits <= budget {
-                    lo = mid;
-                    best = p;
-                } else {
-                    hi = mid;
-                }
-            }
-        }
+        let t_a = std::time::Instant::now();
+        let (lo, best) = self.search_offset(sub, &power, &peak, budget);
+        T_SEARCH.fetch_add(t_a.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         self.last_offset = lo;
         if std::env::var_os("SW_DTS_DEBUG").is_some() {
             let used: Vec<f64> = best.abits.iter().map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0).collect();
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
         }
+        let t_b = std::time::Instant::now();
         let bytes = self.pack(&best, lfe.as_ref());
+        T_PACK.fetch_add(t_b.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         if self.keep_residual {
             let mut res = Vec::with_capacity(self.cfg.channels);
             let mut all_deq = Vec::with_capacity(self.cfg.channels);
@@ -315,7 +286,12 @@ impl Encoder {
             self.last_deq = all_deq;
         }
         if self.exact.is_some() {
+            let t_c = std::time::Instant::now();
             self.emulate_decoder(&best, lfe.as_ref());
+            T_EMU.fetch_add(t_c.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            if std::env::var_os("SW_TIMING").is_some() {
+                eprintln!("core: search {} ms, pack {} ms, emulate {} ms", T_SEARCH.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000, T_PACK.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000, T_EMU.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000);
+            }
         }
         bytes
     }
@@ -342,6 +318,77 @@ impl Encoder {
         let step = SCALE_7[idx] as f64 * 0.035;
         let q = vals.iter().map(|v| ((v / step).round() as i32).clamp(-128, 127)).collect();
         (q, idx as u8)
+    }
+
+    /// Highest quality offset (dB) whose plan fits `budget` bits, with that plan. On a multi-core machine the
+    /// candidates of each round are evaluated in parallel; resolution is 0.375 dB either way.
+    fn search_offset(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], budget: usize) -> (f64, Plan) {
+        use rayon::prelude::*;
+        if rayon::current_num_threads() >= 6 {
+            let base = self.last_offset;
+            let first: Vec<(f64, Plan)> = (-4..=4).into_par_iter().map(|i| { let o = base + 3.0 * i as f64; (o, self.make_plan(sub, power, peak, o)) }).collect();
+            let top_fit = first.iter().rposition(|(_, p)| p.bits <= budget);
+            if let Some(i) = top_fit {
+                if i + 1 < first.len() {
+                    // the answer lies between candidate i (fits) and i + 1 (does not): refine in eighths
+                    let lo = first[i].0;
+                    let mut best = (lo, first.into_iter().nth(i).unwrap().1);
+                    let fine: Vec<(f64, Plan)> = (1..8).into_par_iter().map(|j| { let o = lo + 3.0 * j as f64 / 8.0; (o, self.make_plan(sub, power, peak, o)) }).collect();
+                    for (o, p) in fine {
+                        if p.bits <= budget {
+                            best = (o, p);
+                        }
+                    }
+                    return best;
+                }
+                // everything fits: continue upwards from the top candidate
+                let top = first.into_iter().last().unwrap();
+                return self.search_sequential(sub, power, peak, budget, top.0 - 12.0);
+            }
+            return self.search_sequential(sub, power, peak, budget, base - 12.0 - 24.0);
+        }
+        self.search_sequential(sub, power, peak, budget, self.last_offset - 12.0)
+    }
+
+    fn search_sequential(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], budget: usize, start: f64) -> (f64, Plan) {
+        let mut lo = start;
+        let mut best = self.make_plan(sub, power, peak, lo);
+        let mut guard = 0;
+        while best.bits > budget && lo > -200.0 {
+            lo -= 24.0;
+            best = self.make_plan(sub, power, peak, lo);
+            guard += 1;
+            if guard > 12 {
+                break;
+            }
+        }
+        if best.bits > budget {
+            lo = -200.0;
+            best = self.make_plan(sub, power, peak, lo);
+        } else {
+            let mut hi = lo + 24.0;
+            loop {
+                let p = self.make_plan(sub, power, peak, hi);
+                if p.bits <= budget && hi < 200.0 {
+                    lo = hi;
+                    best = p;
+                    hi += 24.0;
+                } else {
+                    break;
+                }
+            }
+            for _ in 0..6 {
+                let mid = 0.5 * (lo + hi);
+                let p = self.make_plan(sub, power, peak, mid);
+                if p.bits <= budget {
+                    lo = mid;
+                    best = p;
+                } else {
+                    hi = mid;
+                }
+            }
+        }
+        (lo, best)
     }
 
     fn make_plan(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], offset_db: f64) -> Plan {

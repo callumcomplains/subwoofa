@@ -133,6 +133,13 @@ impl Channel {
             "rb" => Rsr,
             "cb" => Cs,
             "lfe1" => Lfe,
+            "fl" => L,
+            "fr" => R,
+            "fc" => C,
+            "sl" => Ls,
+            "sr" => Rs,
+            "bl" => Lsr,
+            "br" => Rsr,
             _ => return None,
         })
     }

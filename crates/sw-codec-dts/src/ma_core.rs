@@ -76,6 +76,8 @@ pub struct MaCoreEncoder {
     emitted: usize,
     t_core: std::time::Duration,
     t_xll: std::time::Duration,
+    /// Lossless stage of the previous batch of frames, running while the next batch is core-encoded.
+    pending: Option<std::thread::JoinHandle<Vec<Vec<u8>>>>,
     /// Source samples already discarded from the front of `buf`.
     dropped: usize,
     xll_cfg: XllConfig,
@@ -151,6 +153,7 @@ impl MaCoreEncoder {
             emitted: 0,
             t_core: std::time::Duration::ZERO,
             t_xll: std::time::Duration::ZERO,
+            pending: None,
             dropped: 0,
             xll_cfg,
             core_pad,
@@ -190,39 +193,28 @@ impl MaCoreEncoder {
         while self.emitted < frames {
             jobs.push(self.core_stage());
         }
-        self.finish_jobs(jobs)
+        let mut out = self.finish_jobs(jobs);
+        out.extend(self.flush_pending());
+        out
     }
 
-    /// Lossless stage of several frames in parallel (the frames are independent of each other).
+    /// Hand the lossless stage of a batch of frames to the worker pool and return the frames of the previous
+    /// batch (which ran meanwhile); `finish` collects the last batch.
     fn finish_jobs(&mut self, jobs: Vec<(Vec<u8>, Vec<Vec<i32>>)>) -> Vec<Vec<u8>> {
         if jobs.is_empty() {
             return Vec::new();
         }
-        let t0 = std::time::Instant::now();
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(jobs.len());
-        let exss = &self.exss;
-        let xll_cfg = self.xll_cfg.clone();
-        let mut results: Vec<Option<Vec<u8>>> = vec![None; jobs.len()];
-        let per = jobs.len().div_ceil(threads);
-        std::thread::scope(|sc| {
-            for (chunk_jobs, chunk_out) in jobs.chunks(per).zip(results.chunks_mut(per)) {
-                let cfg = xll_cfg.clone();
-                sc.spawn(move || {
-                    let mut xll = XllEncoder::new(cfg);
-                    for ((core_bytes, resid), out) in chunk_jobs.iter().zip(chunk_out.iter_mut()) {
-                        let data = xll.encode_frame(resid);
-                        let mut frame = core_bytes.clone();
-                        frame.extend_from_slice(&exss_frame(exss, &data));
-                        *out = Some(frame);
-                    }
-                });
-            }
-        });
-        self.t_xll += t0.elapsed();
-        if std::env::var_os("SW_TIMING").is_some() {
-            eprintln!("ma timing: core {:?}, xll {:?}", self.t_core, self.t_xll);
+        let cfg = self.xll_cfg.clone();
+        let exss = self.exss.clone();
+        let handle = std::thread::spawn(move || xll_stage(jobs, cfg, exss));
+        match self.pending.replace(handle) {
+            Some(prev) => prev.join().expect("lossless worker panicked"),
+            None => Vec::new(),
         }
-        results.into_iter().map(|r| r.unwrap()).collect()
+    }
+
+    fn flush_pending(&mut self) -> Vec<Vec<u8>> {
+        self.pending.take().map(|h| h.join().expect("lossless worker panicked")).unwrap_or_default()
     }
 
     /// Core-rate input samples for one channel and frame, in 24-bit units.
@@ -258,11 +250,10 @@ impl MaCoreEncoder {
         let ncore = self.xll_to_core.iter().flatten().copied().max().map_or(0, |m| m + 1);
         let mut core_in: Vec<Vec<f64>> = vec![Vec::new(); ncore];
         let inputs: Vec<(usize, usize, Vec<f64>)> = {
+            use rayon::prelude::*;
             let me: &MaCoreEncoder = &*self;
-            std::thread::scope(|sc| {
-                let hs: Vec<_> = me.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.map(|s| (x, s))).map(|(x, slot)| sc.spawn(move || (x, slot, me.core_input(x, me.emitted)))).collect();
-                hs.into_iter().map(|h| h.join().unwrap()).collect()
-            })
+            let work: Vec<(usize, usize)> = me.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.map(|s| (x, s))).collect();
+            work.into_par_iter().map(|(x, slot)| (x, slot, me.core_input(x, me.emitted))).collect()
         };
         for (x, slot, mut v) in inputs {
             if let Some(h) = &self.hier {
@@ -323,4 +314,26 @@ impl MaCoreEncoder {
         }
         (core_bytes, resid)
     }
+}
+
+
+/// Lossless coding of a batch of independent frames on the rayon pool; returns the finished stream frames.
+fn xll_stage(jobs: Vec<(Vec<u8>, Vec<Vec<i32>>)>, cfg: XllConfig, exss: ExssParams) -> Vec<Vec<u8>> {
+    use rayon::prelude::*;
+    let threads = rayon::current_num_threads().max(1);
+    let per = jobs.len().div_ceil(threads).max(1);
+    jobs.par_chunks(per)
+        .flat_map_iter(|chunk| {
+            let mut xll = XllEncoder::new(cfg.clone());
+            chunk
+                .iter()
+                .map(|(core_bytes, resid)| {
+                    let data = xll.encode_frame(resid);
+                    let mut frame = core_bytes.clone();
+                    frame.extend_from_slice(&exss_frame(&exss, &data));
+                    frame
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }

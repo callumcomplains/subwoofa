@@ -109,7 +109,10 @@ impl X96Encoder {
     /// `residual[ch][band 0..64][block]`; `total` is the size of the whole X96 block in bytes (it is padded to
     /// that size).
     pub fn encode(&self, residual: &[Vec<Vec<f64>>], total: usize) -> Vec<u8> {
-        let cands: Vec<Vec<Vec<Cand>>> = residual.iter().map(|c| c.iter().map(|b| candidates(b)).collect()).collect();
+        let cands: Vec<Vec<Vec<Cand>>> = {
+            use rayon::prelude::*;
+            residual.par_iter().map(|c| c.par_iter().map(|b| candidates(b)).collect()).collect()
+        };
         let budget = total;
         let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p) <= budget;
         let mut lo = 1e-9f64;

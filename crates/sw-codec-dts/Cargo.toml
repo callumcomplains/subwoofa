@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rayon = "1.12.0"
 sw-core = { path = "../sw-core" }
 sw-pcm = { path = "../sw-pcm" }
 thiserror.workspace = true

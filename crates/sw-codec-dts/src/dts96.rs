@@ -175,10 +175,8 @@ impl Dts96Encoder {
         let t0 = std::time::Instant::now();
         let core_in: Vec<Vec<f64>> = {
             let me: &Dts96Encoder = &*self;
-            std::thread::scope(|sc| {
-                let hs: Vec<_> = (0..nch).map(|c| sc.spawn(move || me.core_input(c, f))).collect();
-                hs.into_iter().map(|h| h.join().unwrap()).collect()
-            })
+            use rayon::prelude::*;
+            (0..nch).into_par_iter().map(|c| me.core_input(c, f)).collect()
         };
         self.timing[0] += t0.elapsed();
         let t0 = std::time::Instant::now();
@@ -192,36 +190,36 @@ impl Dts96Encoder {
         let _ = n;
         let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); self.nprim];
         let deq = &self.core.last_deq;
-        std::thread::scope(|sc| {
-            for ((ch, ana), out) in self.ext.iter_mut().enumerate().zip(resid.iter_mut()) {
-                let src = &self.buf[ch];
-                sc.spawn(move || {
-                    let mut bands = vec![vec![0f64; blocks]; BANDS64];
+        {
+            use rayon::prelude::*;
+            let bufs = &self.buf;
+            self.ext.par_iter_mut().zip(resid.par_iter_mut()).enumerate().for_each(|(ch, (ana, out))| {
+                let src = &bufs[ch];
+                let mut bands = vec![vec![0f64; blocks]; BANDS64];
+                for b in 0..blocks {
+                    let start = (f_off + b * 64) as isize + delay as isize + 64 * shift + adj;
+                    let mut input = [0f64; 64];
+                    for (i, v) in input.iter_mut().enumerate() {
+                        let idx = start + i as isize - dropped as isize;
+                        if idx >= 0 && (idx as usize) < src.len() {
+                            *v = src[idx as usize];
+                        }
+                    }
+                    let mut o = [0f64; BANDS64];
+                    ana.step(&input, &mut o);
+                    for band in 0..BANDS64 {
+                        bands[band][b] = o[band];
+                    }
+                }
+                // lower half: what the core did not capture
+                for band in 0..32 {
                     for b in 0..blocks {
-                        let start = (f_off + b * 64) as isize + delay as isize + 64 * shift + adj;
-                        let mut input = [0f64; 64];
-                        for (i, v) in input.iter_mut().enumerate() {
-                            let idx = start + i as isize - dropped as isize;
-                            if idx >= 0 && (idx as usize) < src.len() {
-                                *v = src[idx as usize];
-                            }
-                        }
-                        let mut o = [0f64; BANDS64];
-                        ana.step(&input, &mut o);
-                        for band in 0..BANDS64 {
-                            bands[band][b] = o[band];
-                        }
+                        bands[band][b] -= deq[ch][band][b] as f64;
                     }
-                    // lower half: what the core did not capture
-                    for band in 0..32 {
-                        for b in 0..blocks {
-                            bands[band][b] -= deq[ch][band][b] as f64;
-                        }
-                    }
-                    *out = bands;
-                });
-            }
-        });
+                }
+                *out = bands;
+            });
+        }
         self.timing[2] += t0.elapsed();
         let t0 = std::time::Instant::now();
         let start = frame.len() - self.x96_bytes;
