@@ -159,3 +159,60 @@ fn eac3_five_one_low_rate_160() {
 fn eac3_mono_64() {
     run_codec(true, 1, false, 64, &[0], 18.0);
 }
+
+/// Quiet tone with sharp noise bursts (claps): returns the decoded stream's error energy in the
+/// 256 samples before each burst, the place where pre-echo from long transforms lands.
+fn pre_echo_error(switching: bool) -> (f64, usize) {
+    let n: usize = 48_000 * 3;
+    let mut x = 0x2468_ACE1u32;
+    let sig: Vec<f32> = (0..n)
+        .map(|i| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let noise = x as f32 / u32::MAX as f32 - 0.5;
+            let t = i as f32 / 48_000.0;
+            let tone = (2.0 * std::f32::consts::PI * 330.0 * t).sin() * 0.01;
+            let since = i % 8000;
+            let burst = if since >= 4000 { noise * 1.6 * (-(since as f32 - 4000.0) / 250.0).exp() } else { 0.0 };
+            tone + burst
+        })
+        .collect();
+    let mut enc = Encoder::new(Config { acmod: 1, lfe: false, sample_rate: 48_000, bitrate_kbps: 96, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false }).unwrap();
+    enc.set_block_switching(switching);
+    let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
+    let mut bytes = Vec::new();
+    for f in 0..frames {
+        let chunk: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| sig.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
+        bytes.extend(enc.encode_frame(&[chunk.as_slice()]));
+    }
+    let dir = std::env::temp_dir().join(format!("sw_ac3_pre_{}_{}", std::process::id(), switching));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.ac3");
+    std::fs::write(&path, &bytes).unwrap();
+    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&out.stderr));
+    let dec: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let (mut err, mut count) = (0.0, 0usize);
+    let mut burst_start = 4000;
+    while burst_start + 8000 < n - 4000 {
+        for i in burst_start - 256..burst_start {
+            let d = dec[i + 256] as f64 - sig[i] as f64;
+            err += d * d;
+        }
+        count += 1;
+        burst_start += 8000;
+    }
+    (err, count)
+}
+
+#[test]
+fn block_switching_reduces_pre_echo() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let (off, bursts) = pre_echo_error(false);
+    let (on, _) = pre_echo_error(true);
+    println!("pre-echo error energy over {bursts} bursts: long blocks {off:.4}, switching {on:.4} ({:.1} dB better)", 10.0 * (off / on).log10());
+    assert!(on < off * 0.8, "switching {on} vs long {off}");
+}

@@ -5,6 +5,7 @@
 //! It produces standard-conforming frames that any AC-3 decoder accepts.
 
 pub mod bits;
+pub mod blocksw;
 pub mod mdct;
 pub mod native;
 pub mod tables;
@@ -282,6 +283,7 @@ impl Strat {
 
 /// Everything derived from the coefficients of one channel for one set of blocks.
 struct SetPlan {
+    strat: Strat,
     exp: Vec<i32>,
     psd: Vec<i32>,
     mask: [i32; BANDS],
@@ -309,6 +311,12 @@ pub struct Encoder {
     b2b: [u8; 256],
     sets: Vec<(usize, usize)>, // (first block, block count)
     strat: Strat,
+    switched: blocksw::Switched,
+    dets: Vec<blocksw::Detector>,
+    block_switching: bool,
+    /// Exponent sets and block-switch flags of the frame being encoded.
+    cur_sets: Vec<(usize, usize)>,
+    cur_blksw: Vec<[bool; BLOCKS]>,
 }
 
 impl Encoder {
@@ -361,8 +369,13 @@ impl Encoder {
             frame_no: 0,
             frac: 0.0,
             b2b: bin_to_band(),
-            sets,
+            sets: sets.clone(),
             strat,
+            switched: blocksw::Switched::new(MDCT_SCALE),
+            dets: (0..nfch).map(|_| blocksw::Detector::new(cfg.sample_rate)).collect(),
+            block_switching: !cfg.eac3 && std::env::var_os("SW_AC3_NOBLKSW").is_none(),
+            cur_sets: sets,
+            cur_blksw: vec![[false; BLOCKS]; nfch],
             cfg,
         })
     }
@@ -388,6 +401,11 @@ impl Encoder {
         let bins = (hz / bin_hz).floor() as usize;
         let code = (bins.clamp(73, 253) - 73) / 3;
         code * 3 + 73
+    }
+
+    /// Turn the transient detector (and with it the short transforms) on or off; on by default for AC-3.
+    pub fn set_block_switching(&mut self, on: bool) {
+        self.block_switching = on && !self.cfg.eac3;
     }
 
     pub fn channels(&self) -> usize {
@@ -424,21 +442,56 @@ impl Encoder {
         assert_eq!(input.len(), self.nch);
         let (words, frmsizecod) = self.frame_words();
 
-        // 1. transform
+        // 1. transform; a channel whose new samples hold a transient uses the two short transforms
         let mut coefs: Vec<Vec<[f32; M]>> = Vec::with_capacity(self.nch);
+        let mut blksw = vec![[false; BLOCKS]; self.nfch];
         for ch in 0..self.nch {
             assert_eq!(input[ch].len(), SAMPLES_PER_FRAME);
             let mut coef = vec![[0f32; M]; BLOCKS];
             let mut buf = [0f32; 2 * M];
             for blk in 0..BLOCKS {
+                let new = &input[ch][blk * M..(blk + 1) * M];
+                let short = self.block_switching && ch < self.nfch && self.dets[ch].block(new);
+                if ch < self.nfch {
+                    blksw[ch][blk] = short;
+                }
                 buf[..M].copy_from_slice(&self.hist[ch]);
-                buf[M..].copy_from_slice(&input[ch][blk * M..(blk + 1) * M]);
-                self.mdct.forward(&buf, &mut coef[blk]);
+                buf[M..].copy_from_slice(new);
+                if short {
+                    self.switched.forward(&buf, true, &mut coef[blk]);
+                } else {
+                    self.mdct.forward(&buf, &mut coef[blk]);
+                }
                 self.hist[ch].copy_from_slice(&buf[M..]);
             }
             coefs.push(coef);
         }
+        self.cur_sets = self.frame_sets(&blksw);
+        self.cur_blksw = blksw;
         self.encode_coefficients(coefs, frmsizecod, words)
+    }
+
+    /// Exponent sets for a frame: the configured grouping, with every block that is switched in any channel
+    /// as a set of its own (the exponents of a short block do not carry over to its neighbours).
+    fn frame_sets(&self, blksw: &[[bool; BLOCKS]]) -> Vec<(usize, usize)> {
+        let any: Vec<bool> = (0..BLOCKS).map(|b| blksw.iter().any(|c| c[b])).collect();
+        let mut out = Vec::new();
+        for &(first, count) in &self.sets {
+            let mut start = first;
+            for blk in first..first + count {
+                if any[blk] {
+                    if start < blk {
+                        out.push((start, blk - start));
+                    }
+                    out.push((blk, 1));
+                    start = blk + 1;
+                }
+            }
+            if start < first + count {
+                out.push((start, first + count - start));
+            }
+        }
+        out
     }
 
     /// Encode a frame from already-transformed coefficients (`[channel][block][bin]`).
@@ -451,21 +504,22 @@ impl Encoder {
         }
 
         // 2. exponents, psd and masking per (channel, set of blocks)
-        for cp in &mut chans {
-            for &(first, count) in &self.sets {
+        for (ch, cp) in chans.iter_mut().enumerate() {
+            for &(first, count) in &self.cur_sets {
                 let mut min_e = vec![24i32; cp.end];
                 for blk in first..first + count {
                     for (bin, e) in min_e.iter_mut().enumerate() {
                         *e = (*e).min(exponent_of(cp.coef[blk][bin]));
                     }
                 }
-                let exp = condition_exponents(&min_e, cp.strat);
+                let strat = if ch < self.nfch && self.cur_blksw[ch][first] { Strat::D45 } else { cp.strat };
+                let exp = condition_exponents(&min_e, strat);
                 let mut psd = vec![0i32; cp.end];
                 let mut band_psd = [0i32; BANDS];
                 calc_psd(&exp, cp.end, &self.b2b, &mut psd, &mut band_psd);
                 let mut mask = [0i32; BANDS];
                 calc_mask(&band_psd, cp.end, FAST_GAIN[FGAINCOD], cp.is_lfe, self.fscod, &self.b2b, &mut mask);
-                cp.sets.push(SetPlan { exp, psd, mask });
+                cp.sets.push(SetPlan { strat, exp, psd, mask });
             }
         }
 
@@ -490,6 +544,8 @@ impl Encoder {
     #[doc(hidden)]
     pub fn encode_frame_from_coefficients(&mut self, coefs: Vec<Vec<[f32; M]>>) -> Vec<u8> {
         let (words, frmsizecod) = self.frame_words();
+        self.cur_sets = self.sets.clone();
+        self.cur_blksw = vec![[false; BLOCKS]; self.nfch];
         self.encode_coefficients(coefs, frmsizecod, words)
     }
 
@@ -505,9 +561,9 @@ impl Encoder {
     }
 
     fn mantissa_bits(&self, chans: &[ChannelPlan], v: u32) -> usize {
-        let per: Vec<Vec<Vec<u8>>> = chans.iter().map(|cp| (0..self.sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect();
+        let per: Vec<Vec<Vec<u8>>> = chans.iter().map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect();
         let mut total = 0usize;
-        for (set, &(_, count)) in self.sets.iter().enumerate() {
+        for (set, &(_, count)) in self.cur_sets.iter().enumerate() {
             let mut cnt = [0usize; 16];
             let mut direct = 0usize;
             for p in &per {
@@ -530,7 +586,7 @@ impl Encoder {
         // pattern appears in the standard's table of 32 combinations.
         let pattern = |cp: &ChannelPlan| -> [u8; 6] {
             let mut p = [0u8; 6];
-            for &(first, _) in &self.sets {
+            for &(first, _) in &self.cur_sets {
                 p[first] = cp.strat.code() as u8;
             }
             p
@@ -586,7 +642,7 @@ impl Encoder {
                 }
                 None => {
                     for blk in 0..BLOCKS {
-                        let new_exps = self.sets.iter().any(|&(f, _)| f == blk);
+                        let new_exps = self.cur_sets.iter().any(|&(f, _)| f == blk);
                         for cp in chans.iter().take(self.nfch) {
                             w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
                         }
@@ -595,7 +651,7 @@ impl Encoder {
             }
             if cfg.lfe {
                 for blk in 0..BLOCKS {
-                    w.put(u32::from(self.sets.iter().any(|&(f, _)| f == blk)), 1);
+                    w.put(u32::from(self.cur_sets.iter().any(|&(f, _)| f == blk)), 1);
                 }
             }
             for ch in 0..self.nfch {
@@ -638,15 +694,15 @@ impl Encoder {
         let baps: Vec<Vec<Vec<u8>>> = if measure_only {
             Vec::new()
         } else {
-            chans.iter().map(|cp| (0..self.sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect()
+            chans.iter().map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect()
         };
 
         for blk in 0..BLOCKS {
-            let set = self.sets.iter().position(|&(f, c)| blk >= f && blk < f + c).unwrap();
-            let new_exps = self.sets[set].0 == blk;
+            let set = self.cur_sets.iter().position(|&(f, c)| blk >= f && blk < f + c).unwrap();
+            let new_exps = self.cur_sets[set].0 == blk;
             if !cfg.eac3 {
-                for _ in 0..self.nfch {
-                    w.put(0, 1); // blksw
+                for ch in 0..self.nfch {
+                    w.put(u32::from(self.cur_blksw[ch][blk]), 1); // blksw
                 }
             }
             // dither off: zero-bit bins decode as silence rather than noise (explicit in both
@@ -675,7 +731,7 @@ impl Encoder {
             }
             if !cfg.eac3 {
                 for cp in chans.iter().take(self.nfch) {
-                    w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
+                    w.put(if new_exps { cp.sets[set].strat.code() } else { 0 }, 2);
                 }
                 if cfg.lfe {
                     w.put(u32::from(new_exps), 1);
@@ -686,7 +742,7 @@ impl Encoder {
                     w.put(((cp.end - 73) / 3) as u32, 6); // chbwcod
                 }
                 for cp in chans.iter() {
-                    write_exponents(&mut w, &cp.sets[set].exp, cp.strat, cp.end);
+                    write_exponents(&mut w, &cp.sets[set].exp, cp.sets[set].strat, cp.end);
                     if !cp.is_lfe {
                         w.put(0, 2); // gainrng
                     }

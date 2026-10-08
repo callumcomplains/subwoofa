@@ -64,3 +64,10 @@ Newest entries at the bottom. Started 2026-10-08.
 - Checked on Tokyo 2020 (1:00:00-1:00:30): 22.2 to 7.1 DTS-HD MA decodes in FFmpeg with sensible per-channel levels; 22.2 to 5.1 DTS Express encodes.
 - Not yet: a 22.2 output format (there is no public 24-channel codec spec in the roadmap; multichannel WAV/FLAC pass-through is a candidate), and a downmix editor for the 22.2 matrix.
 - Also fixed: the queue test that expected the native engine to refuse MLP (MLP became native earlier).
+
+## AC-3 block switching (transient handling)
+- `blocksw.rs`: the spec's 256-sample transform pair (clause 7.9.4.2) written literally as a reference inverse, plus the forward transform as its adjoint. Tests: the long block matches the fast MDCT, and any mixed sequence of long and short blocks reconstructs perfectly (error 4e-7) through the spec decoder.
+- Transient detector as in clause 8.2.2 (8 kHz high-pass, three-level segment peak tree, thresholds 0.1/0.075/0.05, silence gate). Channels switch independently per block.
+- A switched block gets exponent sets of its own using D45 (as the spec recommends); neighbouring blocks no longer share exponents with it.
+- FFmpeg decodes the result with CRC checking on; on a synthetic clap signal at 96 kbps the error energy before each onset (pre-echo) drops 2.5 dB. `SW_AC3_NOBLKSW=1` turns it off for A/B tests; E-AC-3 stays on long blocks.
+- Not done: coupling and rematrixing (still the main efficiency gap at low rates).
