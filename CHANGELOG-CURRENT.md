@@ -108,3 +108,10 @@ Newest entries at the bottom. Started 2026-10-08.
 - Found and fixed along the way: dependent substreams have no `convexpstr` fields and no per-block `convsnroffste` (A/52B Annex E); FFmpeg reported "expacc out of range" until they were left out.
 - Test: eight different tones, one per 7.1 channel, come back from FFmpeg each in its own output channel with no leakage. Also: side-surround file names (`SL`, `Ls`) now match `Lss` layouts in auto-import.
 - Layouts accepted for E-AC-3 are now the AC-3 modes plus 7.1 (side+rear, or surround+rear) and 7.0.
+
+## DTS Express: band limiting, much lower rates
+- The decoder's band-limit modes (1/2 and 1/4 of the bandwidth: 16 or 8 coded subbands) are now used. They shrink every grid and make a channel pair's mandatory mono region cheap, which was what held low rates back. The mode follows the rate per full-band channel: 128 kbps and up full band (24 kHz), 56 to 128 kbps 12 kHz, below that 6 kHz. Streams verify with `DTSHDVerify` and decode in FFmpeg in all three modes.
+- Mono at 64 kbps: SNR 5 dB -> 16 dB (the old full-band setting spread too few bits over 32 bands; now the bits land in the 0-12 kHz range where the speech is). 96 kbps: 13.7 -> 20.2 dB.
+- Minimum rates are now about 56 kbps per channel pair, 30 kbps for a lone channel and 3 kbps for the LFE (5.1 from 143 kbps instead of 255; stereo from 56 instead of 109). The catalogue and the encoder's own check use the same numbers.
+- Bug fixed: stream frames must have an even size (the verifier rejects odd frames, FFmpeg did not mind); for example 128 kbps stereo was 1365 bytes per frame and failed.
+- Bug fixed (MA, all full-length encodes): `ma_core.rs` compared `keep_from > self.dropped + 1 << 16`, which Rust reads as `(dropped + 1) << 16`, so the input buffer was never trimmed after the first frame and memory grew with the length of the programme (about 11 MB/s of audio; a 2 h 7.1 film would have needed more than 11 GB). Fixed; memory stays flat.

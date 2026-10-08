@@ -305,7 +305,7 @@ impl MaCoreEncoder {
         self.emitted += 1;
         // drop samples no later frame needs (keep the decimator's look-back)
         let keep_from = (self.emitted * n).saturating_sub(HALF + 4);
-        if keep_from > self.dropped + 1 << 16 {
+        if keep_from > self.dropped + (1 << 16) {
             let cut = keep_from - self.dropped;
             for b in self.buf.iter_mut() {
                 b.drain(..cut);

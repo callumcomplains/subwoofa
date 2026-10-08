@@ -237,16 +237,47 @@ pub struct LbrEncoder {
     lfe_base: usize,
     frames: usize,
     frame_bytes: usize,
+    geo: Geo,
 }
 
 const SUBBANDS: usize = BANDS;
+
+/// Band layout of a stream: the number of coded subbands and the regions derived from it (clause 9.6.2).
+#[derive(Clone, Copy, Debug)]
+struct Geo {
+    /// 0, 1 or 2: the stream is limited to 1/1, 1/2 or 1/4 of the sample rate's bandwidth.
+    band_limit: u32,
+    nsb: usize,
+    limited_rate: u32,
+    min_mono: usize,
+    max_mono: usize,
+    /// Groups of the first grid (bands 2 up to this) and of the second grid.
+    ng1: usize,
+    ng2: usize,
+    /// Bits of a band index in the time-sample chunks.
+    idx_bits: u32,
+}
+
+impl Geo {
+    fn new(sample_rate: u32, band_limit: u32) -> Geo {
+        let nsb = SUBBANDS >> band_limit;
+        let limited_rate = sample_rate >> band_limit;
+        let half = (limited_rate / 2) as usize;
+        Geo {
+            band_limit,
+            nsb,
+            limited_rate,
+            min_mono: (nsb * 2000 / half).min(nsb),
+            max_mono: (nsb * 14000 / half).min(nsb),
+            ng1: SCF_TO_GRID_1[nsb - 1] as usize + 1,
+            ng2: SCF_TO_GRID_2[nsb - 1] as usize + 1,
+            idx_bits: 3 + (2 - band_limit),
+        }
+    }
+}
 const AMP_MAX: usize = 56;
-const MIN_MONO: usize = 2;
-const MAX_MONO: usize = 18;
 /// Narrowest coded bandwidth (in bands) the rate control may fall back to.
 const MIN_K: usize = 6;
-/// Channel pairs need the whole mono region (the decoder reads indices for it in the second pass).
-const MIN_K_PAIR: usize = MAX_MONO;
 
 /// Everything derived from the time samples of one channel for one frame and quantizer profile.
 struct ChanCoding {
@@ -277,17 +308,21 @@ impl LbrEncoder {
                 cfg.bitrate / 1000
             )));
         }
-        let frame_bytes = (cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 8) as usize;
+        // whole 16-bit words: the verifier rejects odd frame sizes
+        let frame_bytes = (cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2;
         let n = cfg.channels;
-        Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, cfg })
+        let per_channel = cfg.bitrate as f64 / 1000.0 / cfg.channels as f64;
+        let band_limit = std::env::var("SW_LBR_BL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if per_channel >= 128.0 { 0 } else if per_channel >= 56.0 { 1 } else { 2 });
+        let geo = Geo::new(cfg.sample_rate, band_limit);
+        Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, cfg })
     }
 
-    /// Smallest bit rate (bits per second) the encoder can honour: about 108 kbps per channel pair at its
-    /// cheapest setting, about 35 kbps for a lone channel, a few kbps for the LFE.
+    /// Smallest bit rate (bits per second) the encoder can honour: about 55 kbps per channel pair at its
+    /// narrowest bandwidth (6 kHz), about 30 kbps for a lone channel, a few kbps for the LFE.
     pub fn min_bitrate(channels: usize, lfe: bool) -> u32 {
         let pairs = channels / 2;
         let lone = channels % 2;
-        (pairs as u32 * 108_000 + lone as u32 * if channels == 1 { 48_000 } else { 36_000 }) + if lfe { 3_000 } else { 0 }
+        pairs as u32 * 56_000 + lone as u32 * 30_000 + if lfe { 3_000 } else { 0 }
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -342,7 +377,18 @@ impl LbrEncoder {
             }
             self.next_hop += 1;
         }
-        let ts: Vec<Vec<Vec<f64>>> = self.ana.iter_mut().map(|a| a.take_frame()).collect();
+        let mut ts: Vec<Vec<Vec<f64>>> = self.ana.iter_mut().map(|a| a.take_frame()).collect();
+        if self.geo.band_limit > 0 {
+            // the decoder scales a band-limited stream's filter bank output by sqrt(2^(2 - limited range))
+            let g = 1.0 / ((1u32 << self.geo.band_limit) as f64).sqrt();
+            for ch in ts.iter_mut() {
+                for band in ch.iter_mut() {
+                    for v in band.iter_mut() {
+                        *v *= g;
+                    }
+                }
+            }
+        }
         // drop what no later hop needs
         let keep_from = self.next_hop * HOP;
         if keep_from > self.base {
@@ -403,7 +449,7 @@ impl LbrEncoder {
         // binary search finds the first one that fits
         let mut cands: Vec<(u32, usize)> = Vec::new();
         for &p in &profiles {
-            for k in (if self.cfg.channels > 1 { MIN_K_PAIR } else { MIN_K }..=SUBBANDS).rev() {
+            for k in (MIN_K..=self.geo.nsb).rev() {
                 cands.push((p, k));
             }
         }
@@ -442,7 +488,7 @@ impl LbrEncoder {
         let chunks = chosen.unwrap_or_else(|| {
             let mut c = Vec::new();
             for pair in 0..npairs {
-                c.extend(self.write_pair_ex(pair, ts, 0, if self.cfg.channels > 1 { MIN_K_PAIR } else { MIN_K }, true));
+                c.extend(self.write_pair_ex(pair, ts, 0, MIN_K, true));
             }
             c
         });
@@ -463,7 +509,7 @@ impl LbrEncoder {
         out.push(12); // 48 kHz
         out.extend_from_slice(&self.cfg.speaker_mask.to_le_bytes());
         out.extend_from_slice(&0x0800u16.to_le_bytes());
-        out.push(0x14 | if self.cfg.lfe { 0x02 } else { 0 }); // 16-bit, no band limit, no downmix
+        out.push(match self.geo.band_limit { 0 => 0x14, 1 => 0x08, _ => 0x10 } | if self.cfg.lfe { 0x02 } else { 0 }); // 16-bit, band limit, no downmix
         let br = self.cfg.bitrate;
         out.push((((br >> 16) & 0xF) | (((br >> 16) & 0xF) << 4)) as u8);
         out.extend_from_slice(&(br as u16).to_le_bytes());
@@ -493,16 +539,19 @@ impl LbrEncoder {
         } else {
             0
         };
-        (SUBBANDS * AVG_G3_FREQS[res_profile] as usize / 24000).min(SUBBANDS)
+        (self.geo.nsb * AVG_G3_FREQS[res_profile] as usize / (self.geo.limited_rate / 2) as usize).min(self.geo.nsb)
     }
 
     /// Quantize one channel for a set of levels. Bands at or above `k` are not coded; they get the scale
     /// factor that makes the decoder's noise match their level.
-    fn code_channel(&self, x: &[Vec<f64>], levels: &[usize], k: usize) -> ChanCoding {
-        let mut q = vec![vec![Vec::new(); 8]; SUBBANDS];
-        let mut scf = vec![[0usize; 8]; SUBBANDS];
+    /// Bands below `k` carry data; bands from `k` up to `kw` are written as zero symbols (a channel pair has to
+    /// describe the whole mono region); above `kw` the decoder fills noise at the signalled level.
+    fn code_channel(&self, x: &[Vec<f64>], levels: &[usize], k: usize, kw: usize) -> ChanCoding {
+        let nsb = self.geo.nsb;
+        let mut q = vec![vec![Vec::new(); 8]; nsb];
+        let mut scf = vec![[0usize; 8]; nsb];
         let noise_gain = 0.453 * self.br_scale();
-        for sb in 0..SUBBANDS {
+        for sb in 0..nsb {
             let alpha = alphabet(levels[sb]);
             let lmax = alpha.iter().fold(0f32, |m, a| m.max(a.abs()));
             for slot in 0..8 {
@@ -511,6 +560,10 @@ impl LbrEncoder {
                     let (s, qq) = self.pick_scale(seg, &alpha, lmax);
                     scf[sb][slot] = s;
                     q[sb][slot] = qq;
+                } else if sb < kw {
+                    scf[sb][slot] = 0;
+                    let zero = nearest(&alpha, 0.0) as i32;
+                    q[sb][slot] = vec![zero; 16];
                 } else {
                     // decoder noise: uniform, rms 0.453 * br scale * amplitude
                     let rms = (seg.iter().map(|v| v * v).sum::<f64>() / 16.0).sqrt();
@@ -552,12 +605,13 @@ impl LbrEncoder {
 
     /// Grid 1 values (11 groups x 8 slots), the third grid averages and per-band offsets.
     fn grids(&self, scf: &[[usize; 8]]) -> Grids {
+        let nsb = self.geo.nsb;
         let mut g1 = vec![[0i32; 8]; 12];
-        for (g, row) in g1.iter_mut().enumerate().take(11) {
-            let sb = (GRID_1_TO_SCF[g] as usize).min(SUBBANDS - 1);
+        for (g, row) in g1.iter_mut().enumerate().take(self.geo.ng1) {
+            let sb = (GRID_1_TO_SCF[g] as usize).min(nsb - 1);
             for i in 0..8 {
                 let mut m = scf[sb][i] as i32;
-                for sb2 in 0..SUBBANDS {
+                for sb2 in 0..nsb {
                     if GRID_1_WEIGHTS[g][sb2] > 64 {
                         m = m.max(scf[sb2][i] as i32);
                     }
@@ -565,9 +619,9 @@ impl LbrEncoder {
                 row[i] = m;
             }
         }
-        let mut avg = vec![0i32; SUBBANDS];
-        let mut g3 = vec![[0i32; 8]; SUBBANDS];
-        for sb in 4..SUBBANDS {
+        let mut avg = vec![0i32; nsb];
+        let mut g3 = vec![[0i32; 8]; nsb];
+        for sb in 4..nsb {
             let a = SCF_TO_GRID_1[sb] as usize;
             let (w1, w2) = (GRID_1_WEIGHTS[a][sb] as i32, GRID_1_WEIGHTS[a + 1][sb] as i32);
             let mut diffs = [0i32; 8];
@@ -600,12 +654,16 @@ impl LbrEncoder {
         let ch1 = pair * 2;
         let ch2 = (ch1 + 1).min(self.cfg.channels - 1);
         let stereo = ch1 != ch2;
-        let levels = levels_from_profile(profile, SUBBANDS, 48_000);
-        let mut c1 = self.code_channel(&ts[ch1], &levels, k);
-        let mut c2 = if stereo { Some(self.code_channel(&ts[ch2], &levels, k)) } else { None };
+        let geo = self.geo;
+        let nsb = geo.nsb;
+        let k = k.min(nsb);
+        let levels = levels_from_profile(profile, nsb, geo.limited_rate);
+        let kw = if stereo { k.max(geo.max_mono) } else { k };
+        let mut c1 = self.code_channel(&ts[ch1], &levels, k, kw);
+        let mut c2 = if stereo { Some(self.code_channel(&ts[ch2], &levels, k, kw)) } else { None };
         if muted {
             for c in std::iter::once(&mut c1).chain(c2.as_mut()) {
-                for sb in 0..SUBBANDS {
+                for sb in 0..nsb {
                     let zero = nearest(&alphabet(levels[sb]), 0.0) as i32;
                     for slot in c.q[sb].iter_mut() {
                         for v in slot.iter_mut() {
@@ -620,16 +678,16 @@ impl LbrEncoder {
 
         // ---- grid 1 chunk
         let mut w = BitsLe::new();
-        for sb in 2..11 {
+        for sb in 2..geo.ng1 {
             self.put_scale_factors(&mut w, &c1.grids.g1[sb]);
         }
-        for sb in 0..SUBBANDS - 4 {
+        for sb in 0..nsb - 4 {
             self.t.avg_g3.put(&mut w, (c1.grids.avg[sb] + 16) as u32);
         }
         if stereo {
             w.put(0, 4); // min_v of both channels
             w.put(0, 4);
-            for _ in 0..(SUBBANDS - MIN_MONO).div_ceil(4) * 2 * 4 {
+            for _ in 0..(nsb - geo.min_mono).div_ceil(4) * 2 * 4 {
                 self.t.st_grid.put(&mut w, 0); // neutral stereo image
             }
         }
@@ -677,7 +735,7 @@ impl LbrEncoder {
             }
             self.put_ts(&mut w, &c1.q[sb], levels[sb]);
         }
-        self.put_grid2(&mut w, 1);
+        self.put_grid2(&mut w, 1.min(geo.ng2));
         for sb in 4..6 {
             self.put_g3(&mut w, &c1.grids, sb);
             if stereo {
@@ -690,9 +748,9 @@ impl LbrEncoder {
 
         // ---- time samples 2
         let mut w = BitsLe::new();
-        self.put_grid2(&mut w, 2);
-        for sb in 6..MAX_MONO.min(k) {
-            w.put(sb as u32, 5);
+        self.put_grid2(&mut w, 3.min(geo.ng2).saturating_sub(1));
+        for sb in 6..geo.max_mono.min(kw) {
+            w.put(sb as u32, geo.idx_bits);
             if sb == 12 {
                 for sg in 0..self.g3_avg_only_start() - 4 {
                     if sg + 4 > 11 {
@@ -709,18 +767,18 @@ impl LbrEncoder {
         }
         if let Some(c2) = &c2 {
             // the secondary channel: first grid scale factors and third grid averages
-            for sb in 2..11 {
+            for sb in 2..geo.ng1 {
                 self.put_scale_factors(&mut w, &c2.grids.g1[sb]);
             }
-            for sb in 0..SUBBANDS - 4 {
+            for sb in 0..nsb - 4 {
                 self.t.avg_g3.put(&mut w, (c2.grids.avg[sb] + 16) as u32);
             }
-            self.put_grid2(&mut w, 3);
+            self.put_grid2(&mut w, 3.min(geo.ng2));
             // second pass over the bands: the secondary channel of the mono region, both channels above it
-            for sb in MIN_MONO..k {
-                let in_mono = sb < MAX_MONO;
+            for sb in geo.min_mono..kw {
+                let in_mono = sb < geo.max_mono;
                 if sb >= 6 && !in_mono {
-                    w.put(sb as u32, 5);
+                    w.put(sb as u32, geo.idx_bits);
                 }
                 if sb == 12 {
                     for sg in 0..self.g3_avg_only_start() - 4 {
@@ -743,8 +801,8 @@ impl LbrEncoder {
                 }
             }
         } else {
-            for sb in MAX_MONO..k {
-                w.put(sb as u32, 5);
+            for sb in geo.max_mono..kw {
+                w.put(sb as u32, geo.idx_bits);
                 self.put_ts(&mut w, &c1.q[sb], levels[sb]);
             }
         }

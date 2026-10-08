@@ -197,10 +197,10 @@ pub fn bitrate_range_kbps(
             Some(if dest == Destination::DtsMusicDisc { (754, 1411) } else { (lo, 1509) })
         }
         StreamType::DtsExpress => {
-            // the native encoder needs about 108 kbps per channel pair, 36-48 for a lone channel, 3 for the LFE
+            // the native encoder needs about 56 kbps per channel pair (6 kHz bandwidth), 30 for a lone channel, 3 for the LFE
             let main = layout.main_channels() as u32;
             let lone = main % 2;
-            let lo = (main / 2) * 108 + lone * if main == 1 { 48 } else { 36 } + u32::from(layout.has_lfe()) * 3;
+            let lo = (main / 2) * 56 + lone * 30 + u32::from(layout.has_lfe()) * 3;
             Some((lo.clamp(48, 510), 510))
         }
         StreamType::Ac3 => Some((32, 640)),
