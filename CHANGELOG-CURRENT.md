@@ -43,3 +43,9 @@ Newest entries at the bottom. Started 2026-10-08.
 - **Speed (partial).** The 64-band extension analysis and the 96 kHz-to-48 kHz decimation of the 96/24 and 96 kHz MA encoders now run one thread per channel (96/24 5.1: 10.8 s -> 6.9 s for 12 s of audio; 96 kHz MA 5.1 about 1.5x real time with the core included); output is byte-identical. The rate-distortion search of XBR/X96 prunes dominated candidates. The 48 kHz MA path was already about 4.8x real time. Remaining hot spots: the exact-decoder emulation in the core stage and X96 side-information coding.
 - **MA 6.0 / 6.1 / 7.0** added to the hierarchical layout code (Cs folds into both surrounds at -3 dB; no LFE is fine): lossless with core in the new tests.
 - **Presets (done).** Settings dialog: Save preset / Load preset (`.swpreset`, plain JSON: destination, stream type, layout, sample rate, bit rate, MA core on/off, dialnorm, DTS options, unlocked, output name/folder; input files are not part of it). Round-trip checked in the running app.
+
+## DTS-HD Express (LBR) — first working encoder
+- New native LBR encoder (`lbr*.rs`): hybrid MDCT filter bank, VLC-coded residuals, grid scale factors, stereo pairs. Mono, stereo and 5.0 (L R Ls Rs C) streams decode in FFmpeg; written as `.dtshd` extension-substream frames.
+- Wired into the CLI (`--stream dts-express`), the queue and the app catalog (48-510 kbps, default 128).
+- Measured SNR on dialog: mono 64/128/256 kbps = 11/15/21 dB; 5.0 at 384 kbps about 12 dB per channel.
+- Known gaps: no LFE channel (5.1 layouts are rejected), no band-limit flags, so 64 kbps mono overshoots (about 76 kbps), and the parameter search is slow (about 1x real time for stereo, 0.3x for 5.0). Quality is modest compared with the reference encoder.
