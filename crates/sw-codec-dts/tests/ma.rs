@@ -19,20 +19,32 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
         .collect()
 }
 
-/// Where FFmpeg puts a layout channel in its output of 7.1 streams (back channels precede side channels).
+/// Where FFmpeg puts a layout channel in its output: channels come in its native (AV) order.
 fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
     use sw_core::Channel::*;
-    if layout.channels.len() != 8 || !layout.channels.contains(&Lsr) {
-        return idx;
-    }
-    match layout.channels[idx] {
+    let rank = |c: sw_core::Channel| match c {
+        L | Lt => 0,
+        R | Rt => 1,
+        C => 2,
+        Lfe => 3,
         Lsr => 4,
         Rsr => 5,
-        Ls | Lss => 6,
-        Rs | Rss => 7,
-        _ => idx,
-    }
+        Cs => 8,
+        Ls | Lss => 9,
+        Rs | Rss => 10,
+        Oh => 11,
+        Lh => 12,
+        Ch => 13,
+        Rh => 14,
+        Lhs => 15,
+        Rhs => 16,
+        Lw => 18,
+        Rw => 19,
+    };
+    let me = rank(layout.channels[idx]);
+    layout.channels.iter().filter(|c| rank(**c) < me).count()
 }
+
 
 fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     if !have_ffmpeg() {
@@ -94,4 +106,11 @@ fn seven_one_48k() {
     roundtrip("71b", "7.1-ls-rs-lsr-rsr", 48_000, 8);
     roundtrip("71h", "7.1-height", 48_000, 8);
     roundtrip("71w", "7.1-wide", 48_000, 8);
+}
+
+#[test]
+fn six_one_and_seven_zero_lossless_only() {
+    roundtrip("61", "6.1-discrete", 48_000, 8);
+    roundtrip("60", "6.0-discrete", 48_000, 8);
+    roundtrip("70", "7.0-side-rear", 48_000, 8);
 }

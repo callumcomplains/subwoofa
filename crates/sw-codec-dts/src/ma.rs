@@ -132,21 +132,28 @@ fn dmix_index(v: f64) -> usize {
     (0..DMIX.len()).min_by(|&a, &b| (DMIX[a] as f64 - target).abs().partial_cmp(&(DMIX[b] as f64 - target).abs()).unwrap()).unwrap()
 }
 
-/// The channel of the 5.1 base a channel outside it is folded into, in a 7.1 layout.
-fn fold_target(c: Channel, side: (Channel, Channel)) -> Option<Channel> {
+/// How a channel outside the 5.1 base folds into it: `(base channel, row scale, coefficient)` per target,
+/// scales and coefficients as fractions (the row scale gives headroom for what is added to the row).
+fn fold_targets(c: Channel, side: (Channel, Channel)) -> Option<Vec<(Channel, f64, f64)>> {
     use Channel::*;
-    match c {
-        Lsr | Lss => Some(side.0),
-        Rsr | Rss => Some(side.1),
-        Lh | Lhs | Lw => Some(L),
-        Rh | Rhs | Rw => Some(R),
-        _ => None,
-    }
+    let m3 = std::f64::consts::FRAC_1_SQRT_2;
+    Some(match c {
+        Lsr | Lss => vec![(side.0, m3, m3)],
+        Rsr | Rss => vec![(side.1, m3, m3)],
+        Lh | Lhs | Lw => vec![(L, m3, m3)],
+        Rh | Rhs | Rw => vec![(R, m3, m3)],
+        // the centre surround joins both surrounds at -3 dB, as in DTS-ES
+        Cs => vec![(side.0, 1.0, m3), (side.1, 1.0, m3)],
+        Ch | Oh => vec![(C, 1.0, m3)],
+        _ => return None,
+    })
 }
 
+/// Split a 6.0 to 7.1 layout into a 5.x base (with the surround pair) and the channels folded into it.
 fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     use Channel::*;
-    if layout.channels.len() != 8 {
+    let n = layout.channels.len();
+    if !(6..=8).contains(&n) {
         return None;
     }
     let pos = |c: Channel| layout.channels.iter().position(|x| *x == c);
@@ -157,28 +164,37 @@ fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     } else {
         return None;
     };
-    let base_ch = [C, L, R, Lfe, side.0, side.1];
+    let mut base_ch = vec![C, L, R, side.0, side.1];
+    if pos(Lfe).is_some() {
+        base_ch.push(Lfe);
+    }
     let mut base: Vec<usize> = base_ch.iter().map(|c| pos(*c)).collect::<Option<Vec<_>>>()?;
     base.sort_by_key(|&i| xll_bit(layout.channels[i]));
-    let mut extra: Vec<usize> = (0..8).filter(|i| !base.contains(i)).collect();
-    extra.sort_by_key(|&i| xll_bit(layout.channels[i]));
-    let m3 = dmix_index(std::f64::consts::FRAC_1_SQRT_2);
-    let unity = DMIX.len() - 1;
-    let mut scale_idx = vec![unity; 6];
-    let mut coeff_idx = vec![vec![0usize; extra.len()]; 6];
-    for (k, &e) in extra.iter().enumerate() {
-        let target = fold_target(layout.channels[e], side)?;
-        let row = base.iter().position(|&b| layout.channels[b] == target)?;
-        scale_idx[row] = m3;
-        coeff_idx[row][k] = m3;
+    let mut extra: Vec<usize> = (0..n).filter(|i| !base.contains(i)).collect();
+    if extra.is_empty() {
+        return None;
     }
+    extra.sort_by_key(|&i| xll_bit(layout.channels[i]));
+    let rows = base.len();
+    let unity = DMIX.len() - 1;
+    let mut scale_val = vec![1.0f64; rows];
+    let mut coeff_val = vec![vec![0.0f64; extra.len()]; rows];
+    for (k, &e) in extra.iter().enumerate() {
+        for (target, scale, coef) in fold_targets(layout.channels[e], side)? {
+            let row = base.iter().position(|&b| layout.channels[b] == target)?;
+            scale_val[row] = scale_val[row].min(scale);
+            coeff_val[row][k] = coef;
+        }
+    }
+    let scale_idx: Vec<usize> = scale_val.iter().map(|&v| if v >= 1.0 { unity } else { dmix_index(v) }).collect();
+    let coeff_idx: Vec<Vec<usize>> = coeff_val.iter().map(|r| r.iter().map(|&v| if v == 0.0 { 0 } else { dmix_index(v) }).collect()).collect();
     let scale: Vec<i32> = scale_idx.iter().map(|&i| DMIX[i] as i32).collect();
     let inv: Vec<i32> = scale_idx.iter().map(|&i| DMIX_INV[i - 41] as i32).collect();
-    let coeff: Vec<Vec<i32>> = (0..6)
+    let coeff: Vec<Vec<i32>> = (0..rows)
         .map(|j| (0..extra.len()).map(|k| ((inv[j] as i64 * DMIX[coeff_idx[j][k]] as i64 + (1 << 15)) >> 16) as i32).collect())
         .collect();
     let hier = Hier {
-        base: 6,
+        base: rows,
         scale,
         scale_code: scale_idx.iter().map(|&i| 0x100 | i as u16).collect(),
         inv,

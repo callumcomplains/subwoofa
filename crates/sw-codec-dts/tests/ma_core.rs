@@ -19,26 +19,32 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
         .collect()
 }
 
-/// Where FFmpeg puts a layout channel in its output (back channels precede side channels).
+/// Where FFmpeg puts a layout channel in its output: channels come in its native (AV) order.
 fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
     use sw_core::Channel::*;
     let rank = |c: sw_core::Channel| match c {
+        L | Lt => 0,
+        R | Rt => 1,
+        C => 2,
+        Lfe => 3,
         Lsr => 4,
         Rsr => 5,
-        Ls | Lss => 6,
-        Rs | Rss => 7,
-        _ => 0,
+        Cs => 8,
+        Ls | Lss => 9,
+        Rs | Rss => 10,
+        Oh => 11,
+        Lh => 12,
+        Ch => 13,
+        Rh => 14,
+        Lhs => 15,
+        Rhs => 16,
+        Lw => 18,
+        Rw => 19,
     };
-    if layout.channels.len() == 8 && layout.channels.contains(&Lsr) {
-        let c = layout.channels[idx];
-        match c {
-            Lsr | Rsr | Ls | Lss | Rs | Rss => rank(c),
-            _ => idx,
-        }
-    } else {
-        idx
-    }
+    let me = rank(layout.channels[idx]);
+    layout.channels.iter().filter(|c| rank(**c) < me).count()
 }
+
 
 fn core_roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32) {
     if !have_ffmpeg() {
@@ -159,4 +165,11 @@ fn seven_one_embedded_five_one_downmix() {
     }
     eprintln!("per-channel worst error {per:?}");
     assert!(worst <= 1.0, "downmix deviates by {worst}");
+}
+
+#[test]
+fn core_plus_xll_six_one_and_six_zero_48k() {
+    core_roundtrip("c61", "6.1-discrete", 48_000, 24, 24);
+    core_roundtrip("c60", "6.0-discrete", 48_000, 24, 24);
+    core_roundtrip("c70", "7.0-side-rear", 48_000, 24, 24);
 }
