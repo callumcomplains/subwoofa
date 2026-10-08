@@ -189,6 +189,11 @@
       <label class="opt inline"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b><small>Native TrueHD only: add a stereo substream so stereo-only players get a proper downmix. Makes the file roughly 5 to 8% larger.</small></span></label>
       <label class="opt inline"><input type="checkbox" id="optVerify" checked><span><b>Auto verify</b><small>Lossless encodes are decoded and compared with the source (MD5); lossy ones must decode cleanly.</small></span></label>
     </div>
+    <div class="opt-row">
+      <span class="hint">Presets keep the format, layout, sample rate, bit rate, dialnorm and DTS options (not the input files).</span>
+      <button type="button" id="presetSave" class="plain">Save preset…</button>
+      <button type="button" id="presetLoad" class="plain">Load preset…</button>
+    </div>
     <menu><button value="close" class="go small">Done</button></menu>
   </form>
 </dialog>

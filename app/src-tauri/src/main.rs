@@ -260,6 +260,11 @@ fn queue_set_concurrency(queue: tauri::State<Queue>, n: usize) {
     queue.set_concurrency(n)
 }
 #[tauri::command]
+fn write_text(path: String, text: String) -> Result<(), String> {
+    std::fs::write(&path, text).map_err(|e| format!("{path}: {e}"))
+}
+
+#[tauri::command]
 fn read_log(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
 }
@@ -374,7 +379,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, probe, downmix_default, downmix_safe, downmix_check,
-            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log,
+            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
             tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_verify
         ])
         .run(tauri::generate_context!())

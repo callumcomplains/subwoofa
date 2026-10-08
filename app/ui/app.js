@@ -403,6 +403,48 @@ function renderQueue(jobs) {
   }
 }
 
+/* ---------- presets (.swpreset, plain JSON) ---------- */
+
+const PRESET_FILTER = [{ name: "Subwoofa preset", extensions: ["swpreset"] }];
+
+function presetState() {
+  return {
+    app: "subwoofa", version: 1,
+    dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(), sample_rate: curRate(),
+    bitrate: $("bitrate").value === "" ? null : Number($("bitrate").value),
+    core_on: $("coreOn").checked, dialnorm_on: $("dialnormOn").checked, dialnorm: Number($("dialnorm").value),
+    es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
+    unlocked, outname: $("outname").value, output_dir: outDir,
+  };
+}
+
+async function applyPreset(p) {
+  if (p.app !== "subwoofa") throw new Error("not a Subwoofa preset");
+  setUnlocked(!!p.unlocked);
+  if ([...$("dest").options].some((o) => o.value === p.dest)) $("dest").value = p.dest;
+  await cascade("dest");
+  if ([...$("stream").options].some((o) => o.value === p.stream)) $("stream").value = p.stream;
+  await cascade("stream", p.layout);
+  if (p.sample_rate && [...$("rate").options].some((o) => o.value === String(p.sample_rate))) {
+    $("rate").value = String(p.sample_rate);
+    $("ratecustom").hidden = true;
+    await cascade("rate", p.layout);
+  }
+  $("coreOn").checked = p.core_on !== false;
+  $("esShift").checked = !!p.es_phase_shift;
+  $("rear3").checked = !!p.rear_minus_3db;
+  $("dialnormOn").checked = !!p.dialnorm_on;
+  $("dialnorm").disabled = !$("dialnormOn").checked;
+  if (Number.isFinite(p.dialnorm)) $("dialnorm").value = p.dialnorm;
+  syncDialnorm();
+  renderBitrate("preset");
+  if (p.bitrate != null && !$("bitrate").disabled) $("bitrate").value = p.bitrate;
+  if (p.outname) $("outname").value = p.outname;
+  if (p.output_dir) { outDir = p.output_dir; $("outdir").value = p.output_dir; }
+  syncChips();
+  update();
+}
+
 function setUnlocked(v) {
   unlocked = v;
   store.set("unlocked", v ? "1" : "0");
@@ -458,6 +500,18 @@ async function init() {
   await window.__TAURI__.event.listen("queue", (e) => renderQueue(e.payload));
   renderQueue(await invoke("queue_list"));
   $("openSettings").onclick = () => $("settings").showModal();
+  $("presetSave").onclick = async () => {
+    const f = await dialog.save({ defaultPath: ($("outname").value || "preset") + ".swpreset", filters: PRESET_FILTER });
+    if (!f) return;
+    try { await invoke("write_text", { path: f, text: JSON.stringify(presetState(), null, 2) }); log(`Saved preset ${f}`, "ok"); }
+    catch (e) { log(String(e), "bad"); }
+  };
+  $("presetLoad").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: PRESET_FILTER });
+    if (!f) return;
+    try { await applyPreset(JSON.parse(await invoke("read_log", { path: f }))); log(`Loaded preset ${f}`, "ok"); $("settings").close(); }
+    catch (e) { log(String(e), "bad"); }
+  };
   $("dmTarget").onchange = () => dmLoad(true);
   $("dmReset").onclick = () => dmLoad(true);
   $("dmCheck").onclick = dmCheck;
