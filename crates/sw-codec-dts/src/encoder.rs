@@ -31,6 +31,9 @@ pub struct Config {
     pub pcm_bits: u32,
     /// DTS-ES (matrix) flag.
     pub es: bool,
+    /// DTS-ES discrete: a sixth full-range channel (the centre surround) travels in the XCH extension at
+    /// the end of every frame. `encode_frame` then takes it after the primary channels.
+    pub xch: bool,
     /// Subband sample blocks per frame: 16 (512 samples) or 32 (1024 samples).
     pub blocks: usize,
 }
@@ -129,6 +132,9 @@ impl Encoder {
         let samples = cfg.blocks * 32;
         let frame_bytes = (cfg.bitrate as u64 * samples as u64 / cfg.sample_rate as u64 / 8) as usize;
         let min = 40 + (60 + 4 * 32) * cfg.channels + if cfg.lfe { 12 } else { 0 };
+        if cfg.xch && cfg.channels != 5 {
+            return Err(Error::Unsupported("the XCH extension adds a sixth channel to a 5.x core".into()));
+        }
         if frame_bytes < min || frame_bytes > 16384 {
             return Err(Error::Unsupported(format!("frame size of {frame_bytes} bytes is outside what {} channels need (>= {min})", cfg.channels)));
         }
@@ -137,7 +143,7 @@ impl Encoder {
         let sum: f64 = LFE_FIR_64.iter().sum();
         let lfe_fir: Vec<f64> = LFE_FIR_64.iter().map(|v| v / sum).collect();
         Ok(Encoder {
-            analysis: (0..cfg.channels).map(|_| Analysis::new(false)).collect(),
+            analysis: (0..cfg.channels + usize::from(cfg.xch)).map(|_| Analysis::new(false)).collect(),
             lfe_hist: vec![0.0; 512],
             lfe_pre: vec![0.0; LFE_ALIGN],
             frame_bytes,
@@ -162,6 +168,11 @@ impl Encoder {
         self.cfg.blocks * 32
     }
 
+    /// Channels with subband data: the primaries plus the XCH channel.
+    fn nplan(&self) -> usize {
+        self.cfg.channels + usize::from(self.cfg.xch)
+    }
+
     pub fn frame_bytes(&self) -> usize {
         self.frame_bytes
     }
@@ -174,7 +185,7 @@ impl Encoder {
     /// Encode one frame. `pcm[ch]` holds `frame_samples()` samples in 24-bit units, primary channels in
     /// stream order followed by the LFE channel when present.
     pub fn encode_frame(&mut self, pcm: &[Vec<f64>]) -> Vec<u8> {
-        let nch = self.cfg.channels;
+        let nch = self.nplan();
         let blocks = self.cfg.blocks;
         assert_eq!(pcm.len(), nch + usize::from(self.cfg.lfe));
         // 1. subband analysis
@@ -296,7 +307,7 @@ impl Encoder {
     }
 
     fn make_plan(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], offset_db: f64) -> Plan {
-        let nch = self.cfg.channels;
+        let nch = self.nplan();
         let blocks = self.cfg.blocks;
         let mut abits = vec![[0u8; BANDS]; nch];
         for ch in 0..nch {
@@ -329,7 +340,7 @@ impl Encoder {
     }
 
     fn finish_plan(&self, sub: &[Vec<Vec<f64>>], abits: Vec<[u8; BANDS]>, peak: &[[f64; BANDS]], blocks: usize) -> Plan {
-        let nch = self.cfg.channels;
+        let nch = self.nplan();
         let mut scale_idx = vec![[0u8; BANDS]; nch];
         let mut q = vec![vec![Vec::new(); BANDS]; nch];
         for ch in 0..nch {
@@ -354,7 +365,9 @@ impl Encoder {
         let mut bhuff = vec![6u8; nch];
         let mut bits = self.header_bits();
         let nssc = blocks / 8;
+        let mut xch_bits = 0usize;
         for ch in 0..nch {
+            let bits_before = bits;
             // ABITS coding
             let all_huff = abits[ch].iter().all(|a| (1..=12).contains(a));
             let all4 = abits[ch].iter().all(|a| *a <= 15);
@@ -417,11 +430,25 @@ impl Encoder {
                     bits += 2;
                 }
             }
+            if ch >= self.cfg.channels {
+                // the extension channel is counted apart
+                xch_bits = bits - bits_before;
+                bits = bits_before;
+            }
         }
         if self.cfg.lfe {
             bits += 8 * (2 * 2 * nssc) + 8;
         }
         bits += 16; // DSYNC
+        if self.cfg.xch {
+            // the extension starts on a 32-bit boundary; sync, size, arrangement, channel count, the header
+            // arrays (21 bits) and PMODE flags (32 bits) of its channel, and its DSYNC
+            let x = xch_bits + 49 + 21 + BANDS + 16;
+            bits = bits.div_ceil(32) * 32 + x;
+            if x.div_ceil(8) > 1000 {
+                bits = usize::MAX / 4; // XChFSIZE is 10 bits
+            }
+        }
         Plan { abits, scale_idx, q, sel, bhuff, bits }
     }
 
@@ -489,8 +516,8 @@ impl Encoder {
         w.put(0, 1); // time stamp
         w.put(0, 1); // auxiliary data
         w.put(0, 1); // HDCD
-        w.put(0, 3); // extension audio id
-        w.put(0, 1); // extension audio
+        w.put(0, 3); // extension audio id: XCH
+        w.put(u32::from(cfg.xch), 1); // extension audio present
         w.put(0, 1); // DSYNC only per subframe
         w.put(if cfg.lfe { 2 } else { 0 }, 2); // LFE interpolation by 64
         w.put(1, 1); // predictor history valid
@@ -603,8 +630,80 @@ impl Encoder {
         }
         w.put(0xFFFF, 16);
         let mut bytes = w.into_bytes();
+        if cfg.xch {
+            let start = bytes.len().div_ceil(4) * 4;
+            bytes.resize(start, 0);
+            bytes.extend_from_slice(&self.pack_xch(plan, self.frame_bytes - start));
+        }
         assert!(bytes.len() <= self.frame_bytes, "frame overflow: {} > {}", bytes.len(), self.frame_bytes);
         bytes.resize(self.frame_bytes, 0);
+        bytes
+    }
+
+    /// The XCH extension: the sixth channel coded like a core channel, ending at the end of the frame.
+    fn pack_xch(&self, plan: &Plan, dist: usize) -> Vec<u8> {
+        let ch = self.cfg.channels;
+        let nssc = self.cfg.blocks / 8;
+        let mut w = BitWriter::new();
+        w.put(0x5A5A_5A5A, 32);
+        w.put(dist as u32 - 1, 10);
+        w.put(1, 4); // one extension channel
+        w.put(0, 3);
+        w.put(30, 5); // 32 active subbands
+        w.put(31, 5); // no high frequency VQ
+        w.put(0, 3); // no joint intensity
+        w.put(0, 2); // transient codebook A4
+        w.put(6, 3); // 7-bit linear scale factors
+        w.put(plan.bhuff[ch] as u32, 3);
+        for (i, nb) in SEL_BITS.iter().enumerate() {
+            w.put(plan.sel[ch][i] as u32, *nb);
+        }
+        for (i, g) in GROUP_SIZE.iter().enumerate() {
+            if (plan.sel[ch][i] as usize) < *g {
+                w.put(0, 2);
+            }
+        }
+        for _ in 0..BANDS {
+            w.put(0, 1); // no ADPCM
+        }
+        for b in 0..BANDS {
+            let a = plan.abits[ch][b] as u32;
+            match plan.bhuff[ch] {
+                6 => w.put(a, 5),
+                5 => w.put(a, 4),
+                j => {
+                    let (c, l) = BITALLOC_HUFF[j as usize][a as usize - 1];
+                    w.put(c as u32, l as u32);
+                }
+            }
+        }
+        if nssc > 1 {
+            for b in 0..BANDS {
+                if plan.abits[ch][b] > 0 {
+                    let (c, l) = TMODE_HUFF[0][0];
+                    w.put(c as u32, l as u32);
+                }
+            }
+        }
+        for b in 0..BANDS {
+            if plan.abits[ch][b] > 0 {
+                w.put(plan.scale_idx[ch][b] as u32, 7);
+            }
+        }
+        for ss in 0..nssc {
+            for b in 0..BANDS {
+                let k = plan.abits[ch][b] as usize;
+                if k == 0 {
+                    continue;
+                }
+                let vals = &plan.q[ch][b][ss * 8..ss * 8 + 8];
+                self.put_samples(&mut w, k, plan.sel[ch][k.min(10) - 1], vals);
+            }
+        }
+        w.put(0xFFFF, 16);
+        let mut bytes = w.into_bytes();
+        assert!(bytes.len() <= dist, "XCH overflow: {} > {}", bytes.len(), dist);
+        bytes.resize(dist, 0);
         bytes
     }
 

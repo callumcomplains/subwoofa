@@ -1,5 +1,6 @@
 //! File-level driver: stems in, raw `.dts` core stream out.
 
+use crate::es::{EsMixer, EsOptions};
 use crate::{Config, Encoder, Error};
 use std::io::Write;
 use std::path::Path;
@@ -79,6 +80,8 @@ pub struct Request<'a> {
     pub start_secs: f64,
     pub duration_secs: Option<f64>,
     pub output: &'a Path,
+    /// DTS-ES (matrix): flag the stream and, for layouts with a separate Cs, mix it into the surrounds.
+    pub es: Option<EsOptions>,
 }
 
 pub struct Stats {
@@ -87,13 +90,25 @@ pub struct Stats {
 }
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
-    let map = map_layout(req.layout)?;
+    // channels that go into the core (a separate Cs is folded into the surrounds first)
+    let mix_cs = req.es.map_or(false, |e| e.mix_cs);
+    let core_idx: Vec<usize> = (0..req.layout.channels.len()).filter(|&i| !(mix_cs && req.layout.channels[i] == Channel::Cs)).collect();
+    let core_chs: Vec<Channel> = core_idx.iter().map(|&i| req.layout.channels[i]).collect();
+    let cmap = map_channels(&core_chs, req.layout.id)?;
+    let map = LayoutMap { amode: cmap.amode, order: cmap.order.iter().map(|&i| core_idx[i]).collect(), lfe: cmap.lfe.map(|i| core_idx[i]) };
+    let xch = req.es.map_or(false, |e| e.xch);
+    let cs_slot = req.layout.channels.iter().position(|c| *c == Channel::Cs).filter(|_| xch);
+    let mut mixer = match req.es {
+        Some(o) if o.mix_cs || o.phase_shift || o.rear_minus_3db => Some(EsMixer::new(o, req.layout.channels).ok_or_else(|| Error::Unsupported("the ES options need a layout with surround channels".into()))?),
+        _ => None,
+    };
+    let mix_delay = req.es.map_or(0, |e| e.delay());
     let rate = stems.sample_rate;
     let nch = map.order.len();
     let bitrate = req.bitrate_kbps * 1000;
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if bitrate >= 700_000 || rate > 48_000 { 16 } else { 32 };
-    let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: false, blocks })?;
+    let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, blocks })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
@@ -108,8 +123,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let mut frames = 0u64;
     let mut bytes = 0u64;
     // one extra frame flushes the filter bank delay
-    let total_frames = want.div_ceil(n as u64) + 1;
-    let mut pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; nch + usize::from(map.lfe.is_some())];
+    let total_frames = (want + mix_delay as u64).div_ceil(n as u64) + 1;
+    let mut pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; nch + usize::from(xch) + usize::from(map.lfe.is_some())];
     for _ in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
@@ -118,14 +133,26 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         if got > 0 {
             stems.read_planar(&mut planar, got)?;
         }
-        for (slot, src) in map.order.iter().copied().chain(map.lfe).enumerate() {
+        if let Some(m) = mixer.as_mut() {
+            // the mixer works on whole blocks (silence past the end of the programme)
+            let block: Vec<Vec<f32>> = (0..req.layout.channels.len())
+                .map(|c| {
+                    let mut v = if got > 0 { planar[c][..got].to_vec() } else { Vec::new() };
+                    v.resize(n, 0.0);
+                    v
+                })
+                .collect();
+            planar = m.process(&block);
+        }
+        let got = if mixer.is_some() { n } else { got };
+        for (slot, src) in map.order.iter().copied().chain(cs_slot).chain(map.lfe).enumerate() {
             let dst = &mut pcm[slot];
             dst.iter_mut().for_each(|v| *v = 0.0);
             for i in 0..got {
                 dst[i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
             }
         }
-        remaining -= got as u64;
+        remaining -= got.min(remaining as usize) as u64;
         let data = enc.encode_frame(&pcm);
         out.write_all(&data)?;
         frames += 1;

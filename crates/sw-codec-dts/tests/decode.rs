@@ -7,26 +7,40 @@ fn have_ffmpeg() -> bool {
 }
 
 fn run(name: &str, channels: usize, amode: u8, lfe: bool, bitrate: u32, blocks: usize) -> (f64, Vec<f64>) {
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, amode, channels, lfe, bitrate, dialnorm: 0, pcm_bits: 24, es: false, blocks }).unwrap();
+    run_ext(name, channels, amode, lfe, false, bitrate, blocks)
+}
+
+/// `xch`: an extra centre-surround channel after the primaries.
+fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate: u32, blocks: usize) -> (f64, Vec<f64>) {
+    let mut enc = Encoder::new(Config { sample_rate: 48_000, amode, channels, lfe, bitrate, dialnorm: 0, pcm_bits: 24, es: xch, xch, blocks }).unwrap();
     let n = enc.frame_samples();
     let frames = 60;
     let total = n * frames;
-    let nin = channels + usize::from(lfe);
+    let nin = channels + usize::from(xch) + usize::from(lfe);
     let sig: Vec<Vec<f64>> = (0..nin)
         .map(|c| {
             (0..total)
                 .map(|i| {
                     let t = i as f64 / 48_000.0;
-                    let is_lfe = lfe && c == channels;
+                    let is_lfe = lfe && c == channels + usize::from(xch);
                     let f = if is_lfe { 40.0 } else { 300.0 + 700.0 * c as f64 };
                     (2.0 * std::f64::consts::PI * f * t).sin() * 1_000_000.0 + if is_lfe { 0.0 } else { (2.0 * std::f64::consts::PI * (f * 7.3) * t).sin() * 200_000.0 }
                 })
                 .collect()
         })
         .collect();
+    // an XCH decoder takes the centre surround back out of the surrounds, so the core carries them mixed
+    let mut feed = sig.clone();
+    if xch {
+        for i in 0..total {
+            let cs = sig[channels][i] * std::f64::consts::FRAC_1_SQRT_2;
+            feed[3][i] += cs;
+            feed[4][i] += cs;
+        }
+    }
     let mut stream = Vec::new();
     for f in 0..frames {
-        let part: Vec<Vec<f64>> = sig.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
+        let part: Vec<Vec<f64>> = feed.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
         stream.extend(enc.encode_frame(&part));
     }
     let dir = std::env::temp_dir().join(format!("sw_dts_{}_{}", std::process::id(), name));
@@ -37,7 +51,7 @@ fn run(name: &str, channels: usize, amode: u8, lfe: bool, bitrate: u32, blocks: 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
     let dec: Vec<f64> = out.stdout.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect();
-    let nout = channels + usize::from(lfe);
+    let nout = nin;
     assert_eq!(dec.len() % nout, 0);
     let _ = enc.delay();
     let mut snrs = Vec::new();
@@ -92,6 +106,17 @@ fn five_one_roundtrip() {
     assert!(snr.iter().all(|s| *s > 30.0), "{snr:?}");
 }
 
+#[test]
+fn es_discrete_roundtrip() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let (gain, snr) = run_ext("xch", 5, 9, true, true, 1_509_000, 16);
+    println!("6.1 ES: gain {gain:.5}, snr {snr:?}");
+    assert_eq!(snr.len(), 7);
+    assert!(snr.iter().all(|s| *s > 30.0), "{snr:?}");
+}
+
 /// Place noise in one subband at a time and compare FFmpeg's decode with our own synthesis bank.
 #[test]
 fn band_mapping_matches_synthesis() {
@@ -100,7 +125,7 @@ fn band_mapping_matches_synthesis() {
     }
     use sw_codec_dts::qmf::Synthesis;
     for band in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 30, 31] {
-        let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 0, channels: 1, lfe: false, bitrate: 1_000_000, dialnorm: 0, pcm_bits: 24, es: false, blocks: 16 }).unwrap();
+        let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 0, channels: 1, lfe: false, bitrate: 1_000_000, dialnorm: 0, pcm_bits: 24, es: false, xch: false, blocks: 16 }).unwrap();
         let frames = 40;
         let mut stream = Vec::new();
         let mut sy = Synthesis::new(false);

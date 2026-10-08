@@ -33,6 +33,12 @@ pub struct EncodeSpec {
     /// Multichannel-file channel order: "auto" (default), "mask" or "file".
     #[serde(default)]
     pub channel_order: String,
+    /// DTS: rotate the surrounds by +/-45 degrees before the centre surround is added (6.x ES).
+    #[serde(default)]
+    pub es_phase_shift: bool,
+    /// DTS: attenuate the rear channels by 3 dB first.
+    #[serde(default)]
+    pub rear_minus_3db: bool,
 }
 
 fn yes() -> bool {
@@ -155,7 +161,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsHdMa) {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdMa) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -211,7 +217,7 @@ fn execute_inner(
             sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
         })?;
-    } else if native && stream == StreamType::DtsDigitalSurround {
+    } else if native && matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs) {
         let req = sw_codec_dts::native::Request {
             layout,
             bitrate_kbps: spec.bitrate.unwrap_or(1509),
@@ -220,6 +226,7 @@ fn execute_inner(
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
+            es: sw_codec_dts::es_options(stream == StreamType::DtsEs, layout, spec.es_phase_shift, spec.rear_minus_3db),
         };
         sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,

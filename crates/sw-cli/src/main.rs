@@ -103,6 +103,12 @@ enum Cmd {
         /// Encoder engine: `ffmpeg` (default) or `native` (Subwoofa's own, AC-3 only for now).
         #[arg(long, default_value = "ffmpeg")]
         engine: String,
+        /// Native DTS-ES: rotate the surrounds by +/-45 degrees before the centre surround is added.
+        #[arg(long)]
+        es_phase_shift: bool,
+        /// Native DTS: attenuate the rear channels by 3 dB first.
+        #[arg(long)]
+        rear_3db: bool,
     },
 }
 
@@ -181,7 +187,7 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db } => {
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
@@ -229,7 +235,7 @@ fn run() -> Result<(), String> {
                     println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
                     return Ok(());
                 }
-                if stream == StreamType::DtsDigitalSurround {
+                if matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::native::Request {
                         layout,
@@ -239,6 +245,7 @@ fn run() -> Result<(), String> {
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
+                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs, layout, es_phase_shift, rear_3db),
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;

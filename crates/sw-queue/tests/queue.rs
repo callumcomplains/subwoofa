@@ -51,7 +51,7 @@ fn spec(dir: &Path, name: &str, stream: &str, inputs: &HashMap<String, String>) 
     EncodeSpec {
         dest: "generic".into(), stream: stream.into(), layout: "5.1".into(), sample_rate: 48_000,
         bitrate: if stream == "ac3" { Some(448) } else { None }, dialnorm: Some(31), start: None, duration: None,
-        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false, engine: String::new(), downmix: true, channel_order: String::new(),
+        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false, engine: String::new(), downmix: true, channel_order: String::new(), es_phase_shift: false, rear_minus_3db: false,
     }
 }
 

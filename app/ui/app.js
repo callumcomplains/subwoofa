@@ -187,6 +187,7 @@ function renderRates(want) {
 function renderBitrate(from) {
   const br = $("bitrate"), o = opts;
   const lossless = o.bitrate_min == null;
+  syncDtsOpts();
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
   if (!ma) $("coreOn").checked = true;
@@ -211,6 +212,16 @@ function renderBitrate(from) {
 }
 
 /** DTS-HD MA with the core switched off: only the lossless extension is written (bit rate 0 tells the encoder). */
+/** DTS core streams offer the rear -3 dB trim; DTS-ES adds the surround phase shift for 6.x layouts. */
+function syncDtsOpts() {
+  const st = $("stream").value;
+  const dts = ["dts", "dts-es", "dts-96-24", "dtshd-hra"].includes(st);
+  $("dtsOpts").hidden = !dts;
+  $("esShiftWrap").hidden = st !== "dts-es";
+  if (!dts) { $("rear3").checked = false; $("esShift").checked = false; }
+  $("esNote").textContent = st === "dts-es" ? "Phase shift is recommended for 6.x Discrete, not for Matrix layouts." : "";
+}
+
 function coreOff() {
   return $("stream").value === "dtshd-ma" && !$("coreOn").checked;
 }
@@ -350,6 +361,7 @@ async function encode() {
       sample_rate: curRate(),
       bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
       dialnorm: dialnormValue(), unlocked, engine: preferNative && curStream().native ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
+      es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
       start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
       inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
     }});

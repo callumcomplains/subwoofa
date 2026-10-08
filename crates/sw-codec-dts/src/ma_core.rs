@@ -108,6 +108,7 @@ impl MaCoreEncoder {
             dialnorm: cfg.dialnorm,
             pcm_bits: cfg.bit_res,
             es: false,
+            xch: false,
             blocks: 16,
         })?;
         core.enable_exact_decode(ratio == 2);
