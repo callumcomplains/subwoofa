@@ -66,6 +66,7 @@ pub struct Dts96Encoder {
     ext_delay: usize,
     ext_shift: isize,
     ext_adj: isize,
+    timing: [std::time::Duration; 4],
 }
 
 impl Dts96Encoder {
@@ -112,6 +113,7 @@ impl Dts96Encoder {
             ext_delay,
             ext_shift,
             ext_adj: std::env::var("SW_X96_ADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            timing: [std::time::Duration::ZERO; 4],
         })
     }
 
@@ -142,6 +144,9 @@ impl Dts96Encoder {
         while self.emitted < frames {
             out.push(self.next_frame());
         }
+        if std::env::var_os("SW_TIMING").is_some() {
+            eprintln!("dts96 timing: decimate {:?}, core {:?}, ext analysis {:?}, x96 coding {:?}", self.timing[0], self.timing[1], self.timing[2], self.timing[3]);
+        }
         out
     }
 
@@ -167,45 +172,61 @@ impl Dts96Encoder {
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.emitted;
         let nch = self.buf.len();
-        let core_in: Vec<Vec<f64>> = (0..nch).map(|c| self.core_input(c, f)).collect();
+        let t0 = std::time::Instant::now();
+        let core_in: Vec<Vec<f64>> = {
+            let me: &Dts96Encoder = &*self;
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = (0..nch).map(|c| sc.spawn(move || me.core_input(c, f))).collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            })
+        };
+        self.timing[0] += t0.elapsed();
+        let t0 = std::time::Instant::now();
         let mut frame = self.core.encode_frame(&core_in);
-        // extension analysis of the programme, aligned with what the decoder's synthesis outputs
+        self.timing[1] += t0.elapsed();
+        let t0 = std::time::Instant::now();
+        // extension analysis of the programme, aligned with what the decoder's synthesis outputs (one
+        // thread per channel: the analysis banks are independent)
         let blocks = 16;
-        let mut resid: Vec<Vec<Vec<f64>>> = Vec::with_capacity(self.nprim);
-        for ch in 0..self.nprim {
-            let mut bands = vec![vec![0f64; blocks]; BANDS64];
-            let src = &self.buf[ch];
-            for b in 0..blocks {
-                let start = (f * self.n + b * 64) as isize + self.ext_delay as isize + 64 * self.ext_shift + self.ext_adj;
-                let mut input = [0f64; 64];
-                for (i, v) in input.iter_mut().enumerate() {
-                    let idx = start + i as isize - self.dropped as isize;
-                    if idx >= 0 && (idx as usize) < src.len() {
-                        *v = src[idx as usize];
+        let (f_off, n, delay, shift, adj, dropped) = (f * self.n, self.n, self.ext_delay, self.ext_shift, self.ext_adj, self.dropped);
+        let _ = n;
+        let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); self.nprim];
+        let deq = &self.core.last_deq;
+        std::thread::scope(|sc| {
+            for ((ch, ana), out) in self.ext.iter_mut().enumerate().zip(resid.iter_mut()) {
+                let src = &self.buf[ch];
+                sc.spawn(move || {
+                    let mut bands = vec![vec![0f64; blocks]; BANDS64];
+                    for b in 0..blocks {
+                        let start = (f_off + b * 64) as isize + delay as isize + 64 * shift + adj;
+                        let mut input = [0f64; 64];
+                        for (i, v) in input.iter_mut().enumerate() {
+                            let idx = start + i as isize - dropped as isize;
+                            if idx >= 0 && (idx as usize) < src.len() {
+                                *v = src[idx as usize];
+                            }
+                        }
+                        let mut o = [0f64; BANDS64];
+                        ana.step(&input, &mut o);
+                        for band in 0..BANDS64 {
+                            bands[band][b] = o[band];
+                        }
                     }
-                }
-                let mut o = [0f64; BANDS64];
-                self.ext[ch].step(&input, &mut o);
-                for band in 0..BANDS64 {
-                    bands[band][b] = o[band];
-                }
+                    // lower half: what the core did not capture
+                    for band in 0..32 {
+                        for b in 0..blocks {
+                            bands[band][b] -= deq[ch][band][b] as f64;
+                        }
+                    }
+                    *out = bands;
+                });
             }
-            // lower half: what the core did not capture
-            let (mut e_ext, mut e_res) = (0.0f64, 0.0f64);
-            for band in 0..32 {
-                for b in 0..blocks {
-                    e_ext += bands[band][b].powi(2);
-                    bands[band][b] -= self.core.last_deq[ch][band][b] as f64;
-                    e_res += bands[band][b].powi(2);
-                }
-            }
-            if ch == 0 && f == 200 && std::env::var_os("SW_X96_DEBUG").is_some() {
-                eprintln!("X96 frame {f}: lower-band residual {:.1} dB below the extension subbands", 10.0 * (e_ext / e_res.max(1e-9)).log10());
-            }
-            resid.push(bands);
-        }
+        });
+        self.timing[2] += t0.elapsed();
+        let t0 = std::time::Instant::now();
         let start = frame.len() - self.x96_bytes;
         let block = self.x96.encode(&resid, self.x96_bytes);
+        self.timing[3] += t0.elapsed();
         frame[start..].copy_from_slice(&block);
         self.emitted += 1;
         // drop samples no later frame needs

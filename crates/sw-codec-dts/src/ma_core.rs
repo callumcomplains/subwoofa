@@ -257,15 +257,19 @@ impl MaCoreEncoder {
         let nch = self.buf.len();
         let ncore = self.xll_to_core.iter().flatten().copied().max().map_or(0, |m| m + 1);
         let mut core_in: Vec<Vec<f64>> = vec![Vec::new(); ncore];
-        for (x, slot) in self.xll_to_core.iter().enumerate() {
-            if let Some(slot) = *slot {
-                let mut v = self.core_input(x, self.emitted);
-                if let Some(h) = &self.hier {
-                    let g = h.core_gain(x);
-                    v.iter_mut().for_each(|s| *s *= g);
-                }
-                core_in[slot] = v;
+        let inputs: Vec<(usize, usize, Vec<f64>)> = {
+            let me: &MaCoreEncoder = &*self;
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = me.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.map(|s| (x, s))).map(|(x, slot)| sc.spawn(move || (x, slot, me.core_input(x, me.emitted)))).collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            })
+        };
+        for (x, slot, mut v) in inputs {
+            if let Some(h) = &self.hier {
+                let g = h.core_gain(x);
+                v.iter_mut().for_each(|s| *s *= g);
             }
+            core_in[slot] = v;
         }
         let t0 = std::time::Instant::now();
         let mut core_bytes = self.core.encode_frame(&core_in);

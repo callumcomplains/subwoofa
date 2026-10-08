@@ -64,7 +64,33 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
             break; // finer quantizers cannot help: the decoder works with integers
         }
     }
-    out
+    prune(out, |c| c.bits as f64, |c| c.dist)
+}
+
+/// Keep only the candidates on the lower convex hull of (bits, distortion): the Lagrangian search never
+/// picks any other.
+fn prune<T: Clone>(mut c: Vec<T>, bits: impl Fn(&T) -> f64, dist: impl Fn(&T) -> f64) -> Vec<T> {
+    c.sort_by(|a, b| bits(a).partial_cmp(&bits(b)).unwrap().then(dist(a).partial_cmp(&dist(b)).unwrap()));
+    let mut h: Vec<T> = Vec::new();
+    for p in c {
+        if let Some(last) = h.last() {
+            if dist(&p) >= dist(last) {
+                continue; // more bits, no better
+            }
+        }
+        while h.len() >= 2 {
+            let (a, b) = (&h[h.len() - 2], &h[h.len() - 1]);
+            // b is above the line a -> p: drop it
+            let cross = (bits(b) - bits(a)) * (dist(&p) - dist(a)) - (dist(b) - dist(a)) * (bits(&p) - bits(a));
+            if cross <= 0.0 {
+                h.pop();
+            } else {
+                break;
+            }
+        }
+        h.push(p);
+    }
+    h
 }
 
 fn bits_for(max: usize) -> u32 {
