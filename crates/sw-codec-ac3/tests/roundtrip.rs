@@ -216,3 +216,50 @@ fn block_switching_reduces_pre_echo() {
     println!("pre-echo error energy over {bursts} bursts: long blocks {off:.4}, switching {on:.4} ({:.1} dB better)", 10.0 * (off / on).log10());
     assert!(on < off * 0.8, "switching {on} vs long {off}");
 }
+
+/// Joint-stereo material (a shared signal plus a little independent content) coded at a low rate:
+/// rematrixing must not lose to plain left/right and should win clearly.
+fn joint_stereo_snr(remat: bool) -> f64 {
+    let n: usize = 48_000 * 3;
+    let common = signal(0, n, 0.5);
+    let a = signal(1, n, 0.03);
+    let b = signal(2, n, 0.03);
+    let left: Vec<f32> = (0..n).map(|i| common[i] + a[i]).collect();
+    let right: Vec<f32> = (0..n).map(|i| common[i] + b[i]).collect();
+    let mut enc = Encoder::new(Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 96, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false }).unwrap();
+    enc.set_rematrixing(remat);
+    let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
+    let mut bytes = Vec::new();
+    for f in 0..frames {
+        let l: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| left.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
+        let r: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| right.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
+        bytes.extend(enc.encode_frame(&[l.as_slice(), r.as_slice()]));
+    }
+    let dir = std::env::temp_dir().join(format!("sw_ac3_js_{}_{}", std::process::id(), remat));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.ac3");
+    std::fs::write(&path, &bytes).unwrap();
+    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&out.stderr));
+    let dec: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let (mut s, mut e) = (0.0, 0.0);
+    for i in 2000..n - 2000 {
+        for (c, x) in [&left, &right].iter().enumerate() {
+            let d = dec[(i + 256) * 2 + c] as f64 - x[i] as f64;
+            s += (x[i] as f64).powi(2);
+            e += d * d;
+        }
+    }
+    10.0 * (s / e).log10()
+}
+
+#[test]
+fn rematrixing_helps_joint_stereo() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let off = joint_stereo_snr(false);
+    let on = joint_stereo_snr(true);
+    println!("joint stereo at 96 kbps: L/R {off:.1} dB, rematrixed {on:.1} dB");
+    assert!(on > off + 1.0, "{on} vs {off}");
+}

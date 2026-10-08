@@ -71,3 +71,8 @@ Newest entries at the bottom. Started 2026-10-08.
 - A switched block gets exponent sets of its own using D45 (as the spec recommends); neighbouring blocks no longer share exponents with it.
 - FFmpeg decodes the result with CRC checking on; on a synthetic clap signal at 96 kbps the error energy before each onset (pre-echo) drops 2.5 dB. `SW_AC3_NOBLKSW=1` turns it off for A/B tests; E-AC-3 stays on long blocks.
 - Not done: coupling and rematrixing (still the main efficiency gap at low rates).
+
+## AC-3 rematrixing (2/0 mode)
+- Per block and per band (the four bands of Table 7.25) the encoder sends sum/difference when it leaves less energy to code, using the spec's "minimum sum" rule; flags are only resent when they change; blocks whose two channels differ in block switching are never rematrixed.
+- Joint-stereo test material at 96 kbps: 19.2 dB with plain L/R, 21.0 dB rematrixed (decoded by FFmpeg).
+- `SW_AC3_NOREMAT=1` switches it off for A/B tests. Coupling is still not implemented.

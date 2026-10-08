@@ -317,6 +317,9 @@ pub struct Encoder {
     /// Exponent sets and block-switch flags of the frame being encoded.
     cur_sets: Vec<(usize, usize)>,
     cur_blksw: Vec<[bool; BLOCKS]>,
+    /// Rematrixing flags per block and band (2/0 mode, AC-3 only).
+    cur_remat: Vec<[bool; 4]>,
+    rematrixing: bool,
 }
 
 impl Encoder {
@@ -376,6 +379,8 @@ impl Encoder {
             block_switching: !cfg.eac3 && std::env::var_os("SW_AC3_NOBLKSW").is_none(),
             cur_sets: sets,
             cur_blksw: vec![[false; BLOCKS]; nfch],
+            cur_remat: vec![[false; 4]; BLOCKS],
+            rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
             cfg,
         })
     }
@@ -406,6 +411,11 @@ impl Encoder {
     /// Turn the transient detector (and with it the short transforms) on or off; on by default for AC-3.
     pub fn set_block_switching(&mut self, on: bool) {
         self.block_switching = on && !self.cfg.eac3;
+    }
+
+    /// 2/0 mode: allow sum/difference coding per band (on by default).
+    pub fn set_rematrixing(&mut self, on: bool) {
+        self.rematrixing = on;
     }
 
     pub fn channels(&self) -> usize {
@@ -494,8 +504,49 @@ impl Encoder {
         out
     }
 
+    /// 2/0 mode: per block and band, send sum and difference instead of left and right where that leaves
+    /// less energy to code (clause 7.5.3).
+    fn rematrix(&mut self, coefs: &mut [Vec<[f32; M]>]) {
+        self.cur_remat = vec![[false; 4]; BLOCKS];
+        if self.cfg.acmod != 2 || self.cfg.eac3 || !self.rematrixing {
+            return;
+        }
+        const EDGES: [(usize, usize); 4] = [(13, 25), (25, 37), (37, 61), (61, 253)];
+        let end = self.end[0].min(self.end[1]);
+        let (a, b) = coefs.split_at_mut(1);
+        let (left, right) = (&mut a[0], &mut b[0]);
+        for blk in 0..BLOCKS {
+            if self.cur_blksw[0][blk] != self.cur_blksw[1][blk] {
+                continue;
+            }
+            for (band, &(lo, hi)) in EDGES.iter().enumerate() {
+                let hi = hi.min(end);
+                if lo >= hi {
+                    continue;
+                }
+                let (mut sl, mut sr, mut sp, mut sm) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+                for k in lo..hi {
+                    let (l, r) = (left[blk][k] as f64, right[blk][k] as f64);
+                    sl += l * l;
+                    sr += r * r;
+                    sp += (l + r) * (l + r);
+                    sm += (l - r) * (l - r);
+                }
+                if sp.min(sm) < sl.min(sr) {
+                    self.cur_remat[blk][band] = true;
+                    for k in lo..hi {
+                        let (l, r) = (left[blk][k], right[blk][k]);
+                        left[blk][k] = 0.5 * (l + r);
+                        right[blk][k] = 0.5 * (l - r);
+                    }
+                }
+            }
+        }
+    }
+
     /// Encode a frame from already-transformed coefficients (`[channel][block][bin]`).
-    fn encode_coefficients(&mut self, coefs: Vec<Vec<[f32; M]>>, frmsizecod: u32, words: usize) -> Vec<u8> {
+    fn encode_coefficients(&mut self, mut coefs: Vec<Vec<[f32; M]>>, frmsizecod: u32, words: usize) -> Vec<u8> {
+        self.rematrix(&mut coefs);
         let frame_bits = words * 16;
         let mut chans: Vec<ChannelPlan> = Vec::with_capacity(self.nch);
         for (ch, coef) in coefs.into_iter().enumerate() {
@@ -720,11 +771,17 @@ impl Encoder {
                 w.put(0, 1);
             }
             if cfg.acmod == 2 {
-                if blk == 0 {
-                    if !cfg.eac3 {
-                        w.put(1, 1); // rematstr
+                if cfg.eac3 {
+                    if blk == 0 {
+                        w.put(0, 4); // no band rematrixed
+                    } else {
+                        w.put(0, 1);
                     }
-                    w.put(0, 4); // no band rematrixed
+                } else if blk == 0 || self.cur_remat[blk] != self.cur_remat[blk - 1] {
+                    w.put(1, 1); // rematstr
+                    for band in 0..4 {
+                        w.put(u32::from(self.cur_remat[blk][band]), 1);
+                    }
                 } else {
                     w.put(0, 1);
                 }
