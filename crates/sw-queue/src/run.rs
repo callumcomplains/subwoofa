@@ -200,7 +200,7 @@ fn execute_inner(
     } else if native && stream == StreamType::DtsHdMa {
         let req = sw_codec_dts::ma_native::MaRequest {
             layout,
-            core_bitrate_kbps: spec.bitrate.filter(|b| *b > 0).or(Some(1509)),
+            core_bitrate_kbps: match spec.bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
             dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
             start_secs: start,
             duration_secs: Some(span),

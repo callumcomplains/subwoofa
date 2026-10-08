@@ -187,7 +187,10 @@ function renderRates(want) {
 function renderBitrate(from) {
   const br = $("bitrate"), o = opts;
   const lossless = o.bitrate_min == null;
-  br.disabled = lossless && !unlocked;
+  const ma = $("stream").value === "dtshd-ma";
+  $("coreWrap").hidden = !ma;
+  if (!ma) $("coreOn").checked = true;
+  br.disabled = (lossless && !unlocked) || coreOff();
   $("brange").textContent = lossless ? (unlocked ? "free entry" : "lossless / variable") : unlocked ? `spec ${o.bitrate_min}–${o.bitrate_max}` : `${o.bitrate_min}–${o.bitrate_max}`;
   if (lossless && !unlocked) br.value = "";
   else if (from === "dest" || from === "stream" || !br.value) {
@@ -205,6 +208,11 @@ function renderBitrate(from) {
     chips.append(b);
   }
   syncChips();
+}
+
+/** DTS-HD MA with the core switched off: only the lossless extension is written (bit rate 0 tells the encoder). */
+function coreOff() {
+  return $("stream").value === "dtshd-ma" && !$("coreOn").checked;
 }
 
 function syncChips() {
@@ -340,7 +348,7 @@ async function encode() {
     const id = await invoke("queue_add", { verify: autoVerify, spec: {
       dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
       sample_rate: curRate(),
-      bitrate: $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
+      bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
       dialnorm: dialnormValue(), unlocked, engine: preferNative && curStream().native ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
       start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
       inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
@@ -412,6 +420,7 @@ async function init() {
   $("rate").onchange = () => { $("ratecustom").hidden = $("rate").value !== "custom"; cascade("rate"); };
   $("ratecustom").oninput = () => cascade("rate");
   $("bitrate").oninput = () => { syncChips(); update(); };
+  $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncChips(); update(); };
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };

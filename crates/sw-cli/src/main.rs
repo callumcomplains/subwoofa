@@ -216,7 +216,7 @@ fn run() -> Result<(), String> {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::ma_native::MaRequest {
                         layout,
-                        core_bitrate_kbps: bitrate.filter(|b| *b > 0).or(Some(1509)),
+                        core_bitrate_kbps: match bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
                         dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
