@@ -99,9 +99,60 @@ pub fn auto_import(first: &Path, layout: &ChannelLayout) -> HashMap<Channel, Pat
     found
 }
 
+/// One programme found in a folder: a display name and the file for every channel.
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub name: String,
+    pub inputs: HashMap<Channel, PathBuf>,
+}
+
+/// Find every complete set of per-channel files in `dir` (non-recursive): files are grouped by everything
+/// around the channel ID, and only groups that cover the whole layout are returned, sorted by name.
+pub fn scan_folder(dir: &Path, layout: &ChannelLayout) -> Vec<Group> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let first = layout.channels[0];
+    let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    files.sort();
+    let mut groups: Vec<Group> = Vec::new();
+    for f in &files {
+        let ext_ok = f.extension().and_then(|e| e.to_str()).map(|e| matches!(e.to_ascii_lowercase().as_str(), "wav" | "w64" | "aif" | "aiff" | "flac" | "bwf")).unwrap_or(false);
+        let Some(stem) = f.file_stem().and_then(|s| s.to_str()) else { continue };
+        if !ext_ok || split_around(stem, first).is_none() {
+            continue;
+        }
+        let found = auto_import(f, layout);
+        if layout.channels.iter().all(|c| found.contains_key(c)) {
+            let (prefix, suffix) = split_around(stem, first).unwrap();
+            let name = format!("{prefix}{suffix}").trim_matches(|c: char| matches!(c, '.' | '-' | '_' | ' ')).to_string();
+            let name = if name.is_empty() { stem.to_string() } else { name };
+            if !groups.iter().any(|g| g.inputs.get(&first) == found.get(&first)) {
+                groups.push(Group { name, inputs: found });
+            }
+        }
+    }
+    groups
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scans_a_folder_into_programmes() {
+        let dir = std::env::temp_dir().join(format!("sw_scan_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for prog in ["Reel1", "Reel2"] {
+            for ch in ["L", "R"] {
+                std::fs::write(dir.join(format!("{prog}_{ch}.wav")), b"x").unwrap();
+            }
+        }
+        std::fs::write(dir.join("Reel3_L.wav"), b"x").unwrap(); // incomplete: no R
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        let lay = ChannelLayout::find("2.0").unwrap();
+        let groups = scan_folder(&dir, lay);
+        let names: Vec<_> = groups.iter().map(|g| g.name.clone()).collect();
+        assert_eq!(names, vec!["Reel1", "Reel2"]);
+    }
 
     #[test]
     fn finds_siblings() {

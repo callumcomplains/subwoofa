@@ -358,19 +358,41 @@ function update() {
   syncChips();
 }
 
-async function encode() {
+function jobSpec(inputsFor, name) {
   const entire = $("entire").checked;
+  return {
+    dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
+    sample_rate: curRate(),
+    bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
+    dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
+    es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
+    start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
+    inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
+  };
+}
+
+async function encode() {
   try {
-    const id = await invoke("queue_add", { verify: autoVerify, spec: {
-      dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
-      sample_rate: curRate(),
-      bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
-      dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
-      es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
-      start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
-      inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
-    }});
+    const id = await invoke("queue_add", { verify: autoVerify, spec: jobSpec(inputs, $("outname").value.trim()) });
     log(`Queued as job ${id}.`, "ok");
+  } catch (e) { log(String(e), "bad"); }
+}
+
+/** Queue one job per complete set of channel files in a folder, with the current format settings. */
+async function batchFromFolder() {
+  if (!outDir) { log("Choose an output folder first.", "bad"); return; }
+  const dir = await dialog.open({ directory: true, multiple: false });
+  if (!dir) return;
+  try {
+    const groups = await invoke("scan_folder", { dir, layout: inLayout().id });
+    if (!groups.length) { log(`No complete sets of ${inLayout().channels.length} channel files (named like Name_L.wav, Name_R.wav ...) found in that folder.`, "bad"); return; }
+    let n = 0;
+    for (const g of groups) {
+      const safe = g.name.replace(/[\\/:*?"<>|]/g, "_");
+      await invoke("queue_add", { verify: autoVerify, spec: jobSpec(g.inputs, safe) });
+      n++;
+    }
+    log(`Queued ${n} job${n === 1 ? "" : "s"} from ${dir}: ${groups.map((g) => g.name).join(", ")}.`, "ok");
   } catch (e) { log(String(e), "bad"); }
 }
 
@@ -482,6 +504,7 @@ async function init() {
   $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncChips(); update(); };
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
+  $("batch").onclick = batchFromFolder;
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
   $("srcLayout").onchange = () => { srcLayoutId = $("srcLayout").value; inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };

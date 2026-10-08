@@ -99,3 +99,6 @@ Newest entries at the bottom. Started 2026-10-08.
 ## DTS Music Disc (DTS-CD) output was a raw stream named .wav; now a real DTS-in-PCM WAV
 - Destination "DTS Music Disc" now writes a 16-bit stereo PCM WAV (44.1 kHz, or 48 kHz) whose samples are the stream's byte-swapped 16-bit words, with the CD data rate of exactly 1411.2 kbit/s (2048-byte core frames). FFmpeg identifies the file as "dts, 44100 Hz, 5.1, 1411 kb/s" and decodes it cleanly.
 - Sample rates are now per destination: DTS Music Disc 44.1 kHz, video discs/delivery 48 kHz for core DTS and ES (96 kHz for 96/24), and the GUI's rate list follows the destination. Bit-rate range for a music disc is 754 to 1411 kbps.
+
+## Folder-based batch encode
+- New "Batch from folder…" button over the input table: pick a folder and every complete set of per-channel files for the chosen input layout (`Name_L.wav`, `Name_R.wav`, … also `chNN`/FFmpeg-style names) becomes one queued job with the current format settings, named after the programme. `autoimport::scan_folder` does the grouping (incomplete sets are skipped; unit tested); Tauri command `scan_folder`.

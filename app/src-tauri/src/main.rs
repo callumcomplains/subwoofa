@@ -112,6 +112,25 @@ fn options(dest: String, stream: String, layout: String, sample_rate: u32, unloc
     Ok(Options { layouts, bitrate_min, bitrate_max, presets, extension: d.extension(s) })
 }
 
+#[derive(Serialize)]
+struct FolderGroup {
+    name: String,
+    inputs: HashMap<String, String>,
+}
+
+/// Programmes in a folder: every complete set of per-channel files for `layout`.
+#[tauri::command]
+fn scan_folder(dir: String, layout: String) -> Result<Vec<FolderGroup>, String> {
+    let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
+    Ok(autoimport::scan_folder(std::path::Path::new(&dir), l)
+        .into_iter()
+        .map(|g| FolderGroup {
+            name: g.name,
+            inputs: g.inputs.into_iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect(),
+        })
+        .collect())
+}
+
 #[tauri::command]
 fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>, String> {
     let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
@@ -393,7 +412,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            catalog, options, auto_import, probe, downmix_default, downmix_safe, downmix_check,
+            catalog, options, auto_import, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
             tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_verify
         ])
