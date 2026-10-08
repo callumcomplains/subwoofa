@@ -55,3 +55,12 @@ Newest entries at the bottom. Started 2026-10-08.
 - Quantiser search is now a binary search: 5.1 encodes at 8x real time (was 0.3x for 5.0).
 - Encoder buffers are drained as frames are produced, so long programmes no longer grow in memory.
 - Still not done: band-limit flags (the 32-band layout is fixed, so very low rates overshoot: mono 64 kbps averages about 76 kbps).
+
+## NHK 22.2 (24 channels)
+- New layout `22.2` (C L R Lw Rw Lss Rss Lb Rb Cb LFE LFE2 Tfc Tfl Tfr Tsl Tsr Tc Tbl Tbr Tbc Bfc Bfl Bfr) and the 12 new channel positions (LFE2, top layer, bottom layer), with file-name IDs including `Lb Rb Cb LFE2`.
+- Auto-import now ignores per-channel numbering such as `ch01`, so dropping `...ch01 C.wav` finds the other 23 files of the Tokyo 2020 set.
+- Mix-down of any richer input layout to any output layout by constant-power panning between the two nearest speakers (elevated or lowered sources -3 dB, overhead spread over all speakers, the two LFEs summed at -3 dB each). Implemented as `Matrix::pan` and applied while the stems are read (`StemSet::set_downmix`), so a 4-hour film is never written out as a temporary file.
+- CLI: `--source-layout 22.2 --layout 5.1 ...`; queue: `EncodeSpec.source_layout`; GUI: "Input layout" selector over the file table. Native encoders only (every format now has one).
+- Checked on Tokyo 2020 (1:00:00-1:00:30): 22.2 to 7.1 DTS-HD MA decodes in FFmpeg with sensible per-channel levels; 22.2 to 5.1 DTS Express encodes.
+- Not yet: a 22.2 output format (there is no public 24-channel codec spec in the roadmap; multichannel WAV/FLAC pass-through is a candidate), and a downmix editor for the 22.2 matrix.
+- Also fixed: the queue test that expected the native engine to refuse MLP (MLP became native earlier).

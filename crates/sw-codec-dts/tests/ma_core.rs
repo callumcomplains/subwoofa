@@ -40,6 +40,7 @@ fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
         Rhs => 16,
         Lw => 18,
         Rw => 19,
+        _ => unreachable!(),
     };
     let me = rank(layout.channels[idx]);
     layout.channels.iter().filter(|c| rank(**c) < me).count()

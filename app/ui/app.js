@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 
 let cat;                 // catalog from the Rust side
 let inputs = {};         // channel -> path
+let srcLayoutId = "";    // "" = inputs match the output layout; "22.2" = NHK 22.2 inputs mixed down
 let meta = {};           // channel -> probe result
 let outDir = "";
 let opts = null;         // last options() answer
@@ -36,6 +37,7 @@ const family = (l) => `${l.channels.filter((c) => c !== "LFE").length}.${l.chann
 const layoutById = (id) => cat.layouts.find((l) => l.id === id);
 const curLayoutId = () => $("variants").dataset.value;
 const curLayout = () => layoutById(curLayoutId());
+const inLayout = () => (srcLayoutId ? layoutById(srcLayoutId) : curLayout());
 const curDest = () => cat.destinations.find((d) => d.id === $("dest").value);
 const curStream = () => cat.all_streams.find((s) => s.id === $("stream").value);
 const curRate = () => ($("rate").value === "custom" ? Number($("ratecustom").value) : Number($("rate").value));
@@ -68,7 +70,7 @@ function log(msg, cls = "") {
 
 function renderLayoutPicker(validIds, chosen) {
   const valid = cat.layouts.filter((l) => validIds.includes(l.id));
-  const fams = [...new Set(cat.layouts.map(family))];       // table order is richest first
+  const fams = [...new Set(cat.layouts.filter((l) => l.id !== "22.2").map(family))];       // table order is richest first
   const have = new Set(valid.map(family));
   const sel = valid.find((l) => l.id === chosen) || valid.find((l) => l.id === "5.1") || valid[0];
   $("variants").dataset.value = sel ? sel.id : "";
@@ -100,7 +102,7 @@ function renderLayoutPicker(validIds, chosen) {
 }
 
 function pickLayout(id) {
-  inputs = {}; meta = {};
+  if (!srcLayoutId) { inputs = {}; meta = {}; }
   cascade("layout", id);
 }
 
@@ -126,7 +128,7 @@ function renderFiles() {
   const tb = $("files").tBodies[0];
   tb.innerHTML = "";
   const bad = rateMismatch();
-  for (const ch of curLayout().channels) {
+  for (const ch of inLayout().channels) {
     const tr = tb.insertRow();
     tr.dataset.ch = ch;
     const m = meta[ch] || {};
@@ -156,15 +158,15 @@ async function setFile(ch, path) {
 async function browseFor(ch) {
   const p = await dialog.open({ multiple: false, filters: [{ name: "Audio", extensions: ["wav", "aif", "aiff", "flac"] }] });
   if (!p) return;
-  if (ch === curLayout().channels[0]) await autoImport(p); else await setFile(ch, p);
+  if (ch === inLayout().channels[0]) await autoImport(p); else await setFile(ch, p);
 }
 
 async function autoImport(path) {
-  const found = await invoke("auto_import", { first: path, layout: curLayoutId() });
+  const found = await invoke("auto_import", { first: path, layout: inLayout().id });
   const entries = Object.entries(found);
   if (!entries.length) { log("No channel ID found in that file name. Assign files row by row instead.", "bad"); return; }
   await Promise.all(entries.map(([ch, p]) => setFile(ch, p)));
-  log(`Auto-import matched ${entries.length} of ${curLayout().channels.length} channels.`);
+  log(`Auto-import matched ${entries.length} of ${inLayout().channels.length} channels.`);
 }
 
 /* ---------- format cascade ---------- */
@@ -344,12 +346,13 @@ function syncDialnorm() {
 }
 
 function update() {
-  const need = curLayout().channels;
+  const need = inLayout().channels;
   const dnOk = !$("dialnorm").classList.contains("bad");
   const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && cat.has_ffmpeg && curRate() > 0;
-  const available = curStream().available;
+  const available = curStream().available && (!srcLayoutId || curStream().native);
   $("go").disabled = !ready || !available;
-  if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
+  if (!available && srcLayoutId) log("Mixing 22.2 down needs a format with a native Subwoofa encoder.");
+  else if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
   syncChips();
 }
 
@@ -360,7 +363,7 @@ async function encode() {
       dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
       sample_rate: curRate(),
       bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
-      dialnorm: dialnormValue(), unlocked, engine: curStream().native && (preferNative || !curStream().ffmpeg) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
+      dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
       es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
       start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
       inputs, output: outDir + "\\" + $("outname").value.trim() + $("ext").textContent,
@@ -456,7 +459,7 @@ function setUnlocked(v) {
 async function init() {
   cat = await invoke("catalog");
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
-  cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c)) }));
+  cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c === "Lfe2" ? "LFE2" : c)) }));
 
   const eng = $("engine");
   eng.classList.add(cat.has_ffmpeg ? "ok" : "bad");
@@ -478,6 +481,7 @@ async function init() {
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
+  $("srcLayout").onchange = () => { srcLayoutId = $("srcLayout").value; inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };
   $("go").onclick = encode;
   $("qClear").onclick = () => invoke("queue_clear");

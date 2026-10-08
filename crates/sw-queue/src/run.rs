@@ -142,6 +142,9 @@ fn execute_inner(
         Some(id) if !id.is_empty() => ChannelLayout::find(id).ok_or("unknown source layout")?,
         _ => layout,
     };
+    if src_layout.id != layout.id && spec.engine != "native" {
+        return Err("mixing a richer input layout down needs the native engine".into());
+    }
     let mut stems = sw_pcm::StemSet::open_ordered(src_layout, &inputs, order).map_err(|e| e.to_string())?;
     let downmixed = src_layout.id != layout.id;
     if downmixed {

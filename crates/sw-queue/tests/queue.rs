@@ -51,7 +51,7 @@ fn spec(dir: &Path, name: &str, stream: &str, inputs: &HashMap<String, String>) 
     EncodeSpec {
         dest: "generic".into(), stream: stream.into(), layout: "5.1".into(), sample_rate: 48_000,
         bitrate: if stream == "ac3" { Some(448) } else { None }, dialnorm: Some(31), start: None, duration: None,
-        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false, engine: String::new(), downmix: true, channel_order: String::new(), es_phase_shift: false, rear_minus_3db: false,
+        inputs: inputs.clone(), output: dir.join(name).to_string_lossy().into_owned(), unlocked: false, engine: String::new(), downmix: true, channel_order: String::new(), es_phase_shift: false, rear_minus_3db: false, source_layout: None,
     }
 }
 
@@ -126,9 +126,10 @@ fn native_engine_runs_in_the_queue() {
     let snap = wait_until(&q, |s| s.len() == 3 && s.iter().all(|j| j.state.is_final()));
     assert_eq!(snap[2].state, State::Passed, "{:?}", snap[2]);
     assert!(snap[2].message.contains("lossless verified"), "{}", snap[2].message);
-    // native engine refuses formats it cannot make
+    // a richer input layout is only mixed down by the native engine
     let mut bad = spec(&dir, "m.mlp", "mlp", &inputs);
-    bad.engine = "native".into();
+    bad.source_layout = Some("22.2".into());
+    bad.engine = "ffmpeg".into();
     q.enqueue(bad, false).unwrap();
     let snap = wait_until(&q, |s| s.len() == 4 && s.iter().all(|j| j.state.is_final()));
     assert_eq!(snap[3].state, State::Failed);
