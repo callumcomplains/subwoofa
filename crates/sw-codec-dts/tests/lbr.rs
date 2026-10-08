@@ -58,3 +58,55 @@ fn mono_stream_decodes() {
     println!("SNR {db:.1} dB");
     assert!(db > 10.0, "SNR {db}");
 }
+
+#[test]
+fn lfe_channel_decodes() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let frames = 14;
+    let total = 4096 * frames;
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000 }).unwrap();
+    let tone = |f: f32, a: f32, i: usize| a * (2.0 * std::f32::consts::PI * f * i as f32 / 48_000.0).sin();
+    let chans: Vec<Vec<f32>> = (0..6).map(|c| (0..total).map(|i| if c == 5 { tone(60.0, 0.5, i) } else if c == 4 { tone(440.0, 0.2, i) } else { 0.0 }).collect()).collect();
+    let mut payloads = Vec::new();
+    for s in (0..total).step_by(4096) {
+        let block: Vec<Vec<f32>> = chans.iter().map(|c| c[s..s + 4096].to_vec()).collect();
+        payloads.extend(enc.push(&block));
+    }
+    payloads.extend(enc.finish());
+    let exss = ExssParams { sample_rate: 48_000, channels: 6, bit_res: 16, spk_mask: 0xF, with_core: false, dialnorm: 0, frame_duration_code: 7 };
+    let mut stream = Vec::new();
+    for p in &payloads {
+        stream.extend(exss_frame_lbr(&exss, p));
+    }
+    let mut file = dtshd_header(&DtsHdHeader { sample_rate: 48_000, frames: payloads.len() as u32, samples_per_frame: 4096, total_samples: total as u64, ch_mask: 0xF, initial_padding: 0 }, stream.len() as u64);
+    file.extend_from_slice(&stream);
+    let dir = std::env::temp_dir().join(format!("sw_dts_lbr_lfe_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.dtshd");
+    std::fs::write(&path, &file).unwrap();
+    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
+    println!("ffmpeg stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success());
+    let y: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    let n = y.len() / 6;
+    println!("decoded {n} samples per channel");
+    // amplitude of 60 Hz in each channel
+    let mut best = (0usize, 0.0f64);
+    for c in 0..6 {
+        let (mut sc, mut ss) = (0.0f64, 0.0f64);
+        for i in 16384..n - 16384 {
+            let a = 2.0 * std::f64::consts::PI * 60.0 * i as f64 / 48_000.0;
+            sc += y[i * 6 + c] as f64 * a.cos();
+            ss += y[i * 6 + c] as f64 * a.sin();
+        }
+        let amp = 2.0 * (sc * sc + ss * ss).sqrt() / (n - 32768) as f64;
+        println!("channel {c}: 60 Hz amplitude {amp:.3}");
+        if amp > best.1 {
+            best = (c, amp);
+        }
+    }
+    assert_eq!(best.0, 3, "LFE should be output channel 3");
+    assert!((best.1 - 0.5).abs() < 0.1, "LFE amplitude {}", best.1);
+}

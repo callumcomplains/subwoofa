@@ -49,3 +49,9 @@ Newest entries at the bottom. Started 2026-10-08.
 - Wired into the CLI (`--stream dts-express`), the queue and the app catalog (48-510 kbps, default 128).
 - Measured SNR on dialog: mono 64/128/256 kbps = 11/15/21 dB; 5.0 at 384 kbps about 12 dB per channel.
 - Known gaps: no LFE channel (5.1 layouts are rejected), no band-limit flags, so 64 kbps mono overshoots (about 76 kbps), and the parameter search is slow (about 1x real time for stereo, 0.3x for 5.0). Quality is modest compared with the reference encoder.
+
+## DTS Express: LFE, 5.1, much faster
+- LFE channel (`lbr_lfe.rs`): 750 Hz decimation plus 4-bit ADPCM, as the decoder expects; a 60 Hz test tone decodes at 0.48 amplitude (input 0.5) in the correct output channel. 5.1 now works (City of God 10:00, 384 kbps: 386 kbps average, FFmpeg shows "DTS Express 5.1(side)").
+- Quantiser search is now a binary search: 5.1 encodes at 8x real time (was 0.3x for 5.0).
+- Encoder buffers are drained as frames are produced, so long programmes no longer grow in memory.
+- Still not done: band-limit flags (the 32-band layout is fixed, so very low rates overshoot: mono 64 kbps averages about 76 kbps).

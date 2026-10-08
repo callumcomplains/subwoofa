@@ -9,6 +9,7 @@ pub mod es;
 pub mod hra;
 pub mod lbr_fb;
 mod lbr_tables;
+mod lbr_lfe;
 pub mod lbr;
 pub mod lbr_native;
 pub mod exss;

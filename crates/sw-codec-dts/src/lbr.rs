@@ -230,6 +230,11 @@ pub struct LbrEncoder {
     /// Source samples per channel not yet fully analysed.
     buf: Vec<Vec<f64>>,
     next_hop: usize,
+    /// Samples dropped from the front of `buf` / `lfe_buf`.
+    base: usize,
+    lfe: Option<crate::lbr_lfe::LfeEncoder>,
+    lfe_buf: Vec<f64>,
+    lfe_base: usize,
     frames: usize,
     frame_bytes: usize,
 }
@@ -257,12 +262,12 @@ impl LbrEncoder {
         if cfg.sample_rate != 48_000 {
             return Err(crate::Error::Unsupported("DTS Express is implemented at 48 kHz".into()));
         }
-        if cfg.channels == 0 || cfg.channels > 5 || cfg.lfe {
-            return Err(crate::Error::Unsupported("DTS Express: 1 to 5 full-band channels (LFE is not implemented yet)".into()));
+        if cfg.channels == 0 || cfg.channels > 5 {
+            return Err(crate::Error::Unsupported("DTS Express: 1 to 5 full-band channels".into()));
         }
         let frame_bytes = (cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 8) as usize;
         let n = cfg.channels;
-        Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, frames: 0, frame_bytes, cfg })
+        Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, cfg })
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -272,12 +277,18 @@ impl LbrEncoder {
     /// Feed any number of samples per channel; returns the LBR payloads (one per 4096 input samples) that
     /// are ready.
     pub fn push(&mut self, pcm: &[Vec<f32>]) -> Vec<Vec<u8>> {
+        let n = self.buf.len();
         for (b, c) in self.buf.iter_mut().zip(pcm) {
             b.extend(c.iter().map(|v| *v as f64));
         }
+        if self.lfe.is_some() {
+            if let Some(c) = pcm.get(n) {
+                self.lfe_buf.extend(c.iter().map(|v| *v as f64));
+            }
+        }
         let mut out = Vec::new();
         // a frame needs hops up to 32 f + 32, i.e. samples up to 4096 f + 4096 + 256
-        while self.buf[0].len() >= (self.frames + 1) * 4096 + 256 + 128 {
+        while self.base + self.buf[0].len() >= (self.frames + 1) * 4096 + 256 + 128 {
             out.push(self.next_frame());
         }
         out
@@ -285,11 +296,14 @@ impl LbrEncoder {
 
     /// Flush: pad with silence so every pushed sample is covered.
     pub fn finish(&mut self) -> Vec<Vec<u8>> {
-        let pushed = self.buf[0].len();
+        let pushed = self.base + self.buf[0].len();
         let frames = pushed.div_ceil(4096);
         let want = (frames + 1) * 4096 + 512;
         for b in self.buf.iter_mut() {
-            b.resize(want, 0.0);
+            b.resize(want - self.base, 0.0);
+        }
+        if self.lfe.is_some() {
+            self.lfe_buf.resize(want - self.lfe_base, 0.0);
         }
         let mut out = Vec::new();
         while self.frames < frames {
@@ -301,7 +315,7 @@ impl LbrEncoder {
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.frames;
         while self.next_hop <= 32 * f + 32 {
-            let start = self.next_hop * HOP;
+            let start = self.next_hop * HOP - self.base;
             for (c, a) in self.ana.iter_mut().enumerate() {
                 let block: Vec<f64> = (0..2 * HOP).map(|i| self.buf[c].get(start + i).copied().unwrap_or(0.0)).collect();
                 a.push_hop(&block);
@@ -309,8 +323,34 @@ impl LbrEncoder {
             self.next_hop += 1;
         }
         let ts: Vec<Vec<Vec<f64>>> = self.ana.iter_mut().map(|a| a.take_frame()).collect();
+        // drop what no later hop needs
+        let keep_from = self.next_hop * HOP;
+        if keep_from > self.base {
+            let drop = (keep_from - self.base).min(self.buf[0].len());
+            for b in self.buf.iter_mut() {
+                b.drain(..drop);
+            }
+            self.base += drop;
+        }
+        let lfe = self.lfe.as_mut().map(|l| {
+            let origin = f * 4096;
+            let (buf, base) = (&self.lfe_buf, self.lfe_base);
+            let body = l.code_frame(&|i| {
+                let p = origin as isize + i - base as isize;
+                if p < 0 { 0.0 } else { buf.get(p as usize).copied().unwrap_or(0.0) }
+            });
+            chunk(0x0A, body)
+        });
+        if self.lfe.is_some() {
+            let keep = ((f + 1) * 4096).saturating_sub(self.lfe.as_ref().map_or(0, |l| l.reach()));
+            if keep > self.lfe_base {
+                let d = (keep - self.lfe_base).min(self.lfe_buf.len());
+                self.lfe_buf.drain(..d);
+                self.lfe_base += d;
+            }
+        }
         self.frames += 1;
-        self.encode_frame(&ts)
+        self.encode_frame(&ts, lfe)
     }
 
     fn header_len(&self) -> usize {
@@ -328,10 +368,10 @@ impl LbrEncoder {
         }
     }
 
-    fn encode_frame(&self, ts: &[Vec<Vec<f64>>]) -> Vec<u8> {
+    fn encode_frame(&self, ts: &[Vec<Vec<f64>>], lfe: Option<Vec<u8>>) -> Vec<u8> {
         let nch = self.cfg.channels;
         let npairs = nch.div_ceil(2);
-        let budget = self.frame_bytes.saturating_sub(self.header_len() + 8);
+        let budget = self.frame_bytes.saturating_sub(self.header_len() + 8 + lfe.as_ref().map_or(0, |c| c.len()));
         // candidate profiles from the finest quantizers to the coarsest
         let mut profiles: Vec<u32> = Vec::new();
         for ol in (0..8u32).rev() {
@@ -339,23 +379,32 @@ impl LbrEncoder {
                 profiles.push((st << 6) | (ol << 3));
             }
         }
+        // candidates from the finest to the coarsest; the size is close to monotone along the list, so a
+        // binary search finds the first one that fits
+        let mut cands: Vec<(u32, usize)> = Vec::new();
+        for &p in &profiles {
+            for k in (24..=SUBBANDS).rev() {
+                cands.push((p, k));
+            }
+        }
+        let try_one = |&(p, k): &(u32, usize)| -> Option<Vec<Vec<u8>>> {
+            let mut chunks = Vec::new();
+            for pair in 0..npairs {
+                chunks.extend(self.write_pair(pair, ts, p, k));
+            }
+            let bytes: usize = chunks.iter().map(|c| c.len()).sum();
+            (bytes <= budget).then_some(chunks)
+        };
+        let (mut lo, mut hi) = (0usize, cands.len());
         let mut chosen: Option<Vec<Vec<u8>>> = None;
-        'search: for &p in &profiles {
-            // the same profile for every pair; shrink the coded bandwidth until it fits
-            for k in (18..=SUBBANDS).rev() {
-                let mut chunks = Vec::new();
-                for pair in 0..npairs {
-                    chunks.extend(self.write_pair(pair, ts, p, k));
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            match try_one(&cands[mid]) {
+                Some(c) => {
+                    chosen = Some(c);
+                    hi = mid;
                 }
-                let bytes: usize = chunks.iter().map(|c| c.len()).sum();
-                if bytes <= budget {
-                    chosen = Some(chunks);
-                    break 'search;
-                }
-                // a coarser profile is tried first when truncating would cut deeper than 24 positions
-                if k <= 24 {
-                    break;
-                }
+                None => lo = mid + 1,
             }
         }
         let chunks = chosen.unwrap_or_else(|| {
@@ -365,6 +414,8 @@ impl LbrEncoder {
             }
             c
         });
+        let mut chunks = chunks;
+        chunks.extend(lfe);
         self.assemble(chunks)
     }
 
@@ -380,7 +431,7 @@ impl LbrEncoder {
         out.push(12); // 48 kHz
         out.extend_from_slice(&self.cfg.speaker_mask.to_le_bytes());
         out.extend_from_slice(&0x0800u16.to_le_bytes());
-        out.push(0x14); // 16-bit, no band limit, no LFE, no downmix
+        out.push(0x14 | if self.cfg.lfe { 0x02 } else { 0 }); // 16-bit, no band limit, no downmix
         let br = self.cfg.bitrate;
         out.push((((br >> 16) & 0xF) | (((br >> 16) & 0xF) << 4)) as u8);
         out.extend_from_slice(&(br as u16).to_le_bytes());
@@ -724,7 +775,7 @@ impl LbrEncoder {
     }
 }
 
-fn chunk(id: u8, w: BitsLe) -> Vec<u8> {
+pub(crate) fn chunk(id: u8, w: BitsLe) -> Vec<u8> {
     let data = w.into_bytes();
     let mut out = Vec::with_capacity(data.len() + 3);
     out.push(id | 0x80);
