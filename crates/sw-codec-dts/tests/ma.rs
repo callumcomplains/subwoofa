@@ -19,6 +19,21 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
         .collect()
 }
 
+/// Where FFmpeg puts a layout channel in its output of 7.1 streams (back channels precede side channels).
+fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
+    use sw_core::Channel::*;
+    if layout.channels.len() != 8 || !layout.channels.contains(&Lsr) {
+        return idx;
+    }
+    match layout.channels[idx] {
+        Lsr => 4,
+        Rsr => 5,
+        Ls | Lss => 6,
+        Rs | Rss => 7,
+        _ => idx,
+    }
+}
+
 fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     if !have_ffmpeg() {
         return;
@@ -51,6 +66,7 @@ fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     let _ = want_order;
     // map: output slot k holds layout channel k; coded channel j is layout channel map.order[j]
     for (j, &lc) in map.order.iter().enumerate() {
+        let lc = out_position(layout, lc);
         for i in 0..n * frames {
             assert_eq!(dec[i * nch + lc], sigs[j][i], "{name}: channel {lc} differs at sample {i}");
         }
@@ -70,4 +86,12 @@ fn stereo_48k() {
 #[test]
 fn five_one_96k() {
     roundtrip("51_96", "5.1", 96_000, 8);
+}
+
+#[test]
+fn seven_one_48k() {
+    roundtrip("71", "7.1-side-rear", 48_000, 8);
+    roundtrip("71b", "7.1-ls-rs-lsr-rsr", 48_000, 8);
+    roundtrip("71h", "7.1-height", 48_000, 8);
+    roundtrip("71w", "7.1-wide", 48_000, 8);
 }

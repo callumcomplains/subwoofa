@@ -9,18 +9,39 @@ use crate::xll_table::REFL_COEFF;
 
 pub const SYNC_XLL: u32 = 0x41A2_9547;
 
+/// One row of an embedded downmix matrix: how a channel of a lower set was scaled and what the channels
+/// of this set were added to it with (9-bit codes: bit 8 set = positive, low 8 bits index `DMIX`).
+#[derive(Debug, Clone)]
+pub struct DmixRow {
+    pub scale_code: u16,
+    pub coeff_codes: Vec<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DmixHeader {
+    /// One row per channel of the lower-indexed sets.
+    pub rows: Vec<DmixRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetCfg {
+    pub channels: usize,
+    /// Speaker position bit mask of the set (bit 0 = C, 1 = L, 2 = R, 3 = Ls, 4 = Rs, 5 = LFE1, ...).
+    pub ch_mask: u32,
+    /// Residual of a core (true) or the original audio (false).
+    pub residual_of_core: bool,
+    /// Present for the non-primary sets of a hierarchy.
+    pub dmix: Option<DmixHeader>,
+}
+
 #[derive(Debug, Clone)]
 pub struct XllConfig {
     pub sample_rate: u32,
-    pub channels: usize,
-    /// Speaker position bit mask of the channel set (bit 0 = C, 1 = L, 2 = R, 3 = Ls, 4 = Rs, 5 = LFE1, ...).
-    pub ch_mask: u32,
     /// Resolution of the coded samples (16, 20 or 24 bits).
     pub bit_res: u32,
-    /// Residual of a core (true) or the original audio (false).
-    pub residual_of_core: bool,
     /// Samples per channel in one frame.
     pub frame_samples: usize,
+    pub sets: Vec<SetCfg>,
 }
 
 pub fn crc16(data: &[u8]) -> u16 {
@@ -260,6 +281,13 @@ fn choose_code(u: &[u32]) -> (Code, u64) {
     if lb <= rb { (Code::Linear(w), lb) } else { (Code::Rice(k), rb) }
 }
 
+struct SetPlan {
+    plans: Vec<ChannelPlan>,
+    orig_order: Vec<usize>,
+    coeffs: Vec<i32>,
+    decor: bool,
+}
+
 struct ChannelPlan {
     /// Coded samples of the channel (after decorrelation).
     coded: Vec<i32>,
@@ -284,7 +312,9 @@ impl XllEncoder {
     }
 
     fn nabits(&self) -> u32 {
-        if self.cfg.bit_res > 16 { 5 } else if self.cfg.bit_res > 8 { 4 } else { 3 }
+        let n = if self.cfg.bit_res > 16 { 5 } else if self.cfg.bit_res > 8 { 4 } else { 3 };
+        // room for the embedded downmix
+        if self.cfg.sets.len() > 1 && n < 5 { n + 1 } else { n }
     }
 
     /// Choose channel pairs and coefficients. Returns (orig_order, coeffs per pair, coded channels).
@@ -388,49 +418,66 @@ impl XllEncoder {
         best.unwrap().1
     }
 
-    /// Encode one frame of samples (`bit_res`-bit signed integers, one vector per channel in speaker order).
-    pub fn encode_frame(&mut self, pcm: &[Vec<i32>]) -> Vec<u8> {
-        let cfg = self.cfg.clone();
-        let nch = cfg.channels;
-        assert_eq!(pcm.len(), nch);
-        let len = cfg.frame_samples;
-        assert!(pcm.iter().all(|c| c.len() == len));
-
+    /// Choose predictors for every channel of one channel set.
+    fn plan_set(&self, pcm: &[Vec<i32>]) -> SetPlan {
+        let nch = pcm.len();
         let (orig_order, coeffs, coded) = if nch >= 2 { self.decorrelate(pcm) } else { (vec![0], vec![], pcm.to_vec()) };
-        let any_decor = coeffs.iter().any(|c| *c != 0);
-        let (orig_order, coeffs, coded) = if any_decor || nch < 2 { (orig_order, coeffs, coded) } else { ((0..nch).collect(), vec![0; nch / 2], pcm.to_vec()) };
-        let me: &XllEncoder = &*self;
+        let decor = coeffs.iter().any(|c| *c != 0);
+        let (orig_order, coeffs, coded) = if decor || nch < 2 { (orig_order, coeffs, coded) } else { ((0..nch).collect(), vec![0; nch / 2], pcm.to_vec()) };
+        let me: &XllEncoder = self;
         let plans: Vec<ChannelPlan> = std::thread::scope(|sc| {
             let hs: Vec<_> = coded.into_iter().map(|x| sc.spawn(move || me.plan_channel(x))).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
+        SetPlan { plans, orig_order, coeffs, decor }
+    }
 
+    /// Encode one frame of samples (`bit_res`-bit signed integers, one vector per channel: the channels of
+    /// the first set in speaker order, then those of the next set, ...).
+    pub fn encode_frame(&mut self, pcm: &[Vec<i32>]) -> Vec<u8> {
+        let cfg = self.cfg.clone();
+        let len = cfg.frame_samples;
+        assert_eq!(pcm.len(), cfg.sets.iter().map(|s| s.channels).sum::<usize>());
+        assert!(pcm.iter().all(|c| c.len() == len));
+        let mut set_plans = Vec::new();
+        let mut at = 0;
+        for set in &cfg.sets {
+            set_plans.push(self.plan_set(&pcm[at..at + set.channels]));
+            at += set.channels;
+        }
         // band data: one block per segment; try several segment counts and keep the smallest frame
         let mut best_frame: Option<Vec<u8>> = None;
         for &nseg in &[1usize, 2, 4, 8] {
             if len / nseg < 16 || len / nseg > if cfg.sample_rate > 48_000 { 512 } else { 256 } {
                 continue;
             }
-            let seg_len = len / nseg;
+            let segs: Vec<Vec<Vec<u8>>> = set_plans.iter().map(|sp| self.set_segments(sp, nseg)).collect();
+            let frame = self.assemble(&set_plans, &segs, nseg);
+            if best_frame.as_ref().map_or(true, |f| frame.len() < f.len()) {
+                best_frame = Some(frame);
+            }
+        }
+        best_frame.expect("no valid segmentation")
+    }
+
+    /// The entropy-coded segments of one channel set.
+    fn set_segments(&self, sp: &SetPlan, nseg: usize) -> Vec<Vec<u8>> {
+        let plans = &sp.plans;
+        let seg_len = self.cfg.frame_samples / nseg;
         let nabits = self.nabits();
         let mut segs: Vec<Vec<u8>> = Vec::new();
-        let mut prev: Option<Vec<(bool, u32)>> = None;
         for seg in 0..nseg {
             let mut w = BitWriter::new();
             // coding choices per channel
             let mut choice_b: Vec<Code> = Vec::new();
-            let mut choice_a: Vec<Code> = Vec::new();
             let mut part_a_len: Vec<usize> = Vec::new();
-            for p in &plans {
+            for p in plans {
                 let a_len = if seg == 0 { p.adapt_order } else { 0 };
                 let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
-                let ua: Vec<u32> = slice[..a_len].iter().map(|v| zigzag(*v)).collect();
                 let ub: Vec<u32> = slice[a_len..].iter().map(|v| zigzag(*v)).collect();
-                choice_a.push(choose_code(&ua).0);
                 choice_b.push(choose_code(&ub).0);
                 part_a_len.push(a_len);
             }
-            let params: Vec<(bool, u32)> = choice_b.iter().map(|c| match c { Code::Rice(k) => (true, *k), Code::Linear(w) => (false, *w) }).collect();
             let reuse = false; // a reused parameter set would keep segment 0's part A length in some decoders
             if seg > 0 {
                 w.put(u32::from(reuse), 1);
@@ -455,7 +502,6 @@ impl XllEncoder {
                     w.put(stored_param(choice_b[i], nabits, rice), nabits);
                 }
             }
-            prev = Some(params);
             // residual data
             for (i, p) in plans.iter().enumerate() {
                 let rice = matches!(choice_b[i], Code::Rice(_));
@@ -468,42 +514,50 @@ impl XllEncoder {
             w.align(8);
             segs.push(w.into_bytes());
         }
-        let frame = self.assemble(&plans, &orig_order, &coeffs, &segs, any_decor, nseg);
-        if best_frame.as_ref().map_or(true, |f| frame.len() < f.len()) {
-            best_frame = Some(frame);
-        }
-        }
-        best_frame.expect("no valid segmentation")
+        segs
     }
 
-    fn assemble(&self, plans: &[ChannelPlan], orig_order: &[usize], coeffs: &[i32], segs: &[Vec<u8>], decor: bool, nseg: usize) -> Vec<u8> {
+    fn set_header(&self, index: usize, sp: &SetPlan) -> Vec<u8> {
         let cfg = &self.cfg;
-        let nch = cfg.channels;
-        // ---- channel set sub-header
+        let set = &cfg.sets[index];
+        let nch = set.channels;
         let mut h = BitWriter::new();
         h.put(0, 10); // size placeholder, patched below
         h.put(nch as u32 - 1, 4);
-        h.put(if cfg.residual_of_core { 0 } else { (1u32 << nch) - 1 }, nch as u32);
+        h.put(if set.residual_of_core { 0 } else { (1u32 << nch) - 1 }, nch as u32);
         h.put(cfg.bit_res - 1, 5);
         h.put(cfg.bit_res - 1, 5);
         h.put(fs_index(cfg.sample_rate), 4);
         h.put(0, 2); // no interpolation
         h.put(0, 2); // not a replacement set
-        h.put(1, 1); // primary channel set
-        h.put(0, 1); // no downmix coefficients
-        h.put(1, 1); // part of a hierarchy
+        h.put(u32::from(index == 0), 1); // primary channel set
+        match &set.dmix {
+            Some(d) => {
+                h.put(1, 1); // downmix coefficients present
+                h.put(1, 1); // and already applied by the encoder
+                h.put(1, 1); // part of a hierarchy
+                for row in &d.rows {
+                    h.put(row.scale_code as u32, 9);
+                    for c in &row.coeff_codes {
+                        h.put(*c as u32, 9);
+                    }
+                }
+            }
+            None => {
+                h.put(0, 1); // no downmix coefficients
+                h.put(u32::from(cfg.sets.len() > 1), 1); // part of a hierarchy
+            }
+        }
         h.put(1, 1); // channel mask enabled
-        let mask_bits = 32 - cfg.ch_mask.leading_zeros();
-        let mask_bits = mask_bits.max(6);
-        h.put(cfg.ch_mask, mask_bits);
+        h.put(set.ch_mask, self.mask_bits());
         // (sample rates above 96 kHz are not supported: a single frequency band)
-        h.put(u32::from(decor), 1);
+        h.put(u32::from(sp.decor), 1);
         let order_bits = if nch <= 1 { 0 } else { 32 - (nch as u32 - 1).leading_zeros() };
-        if decor {
-            for o in orig_order {
+        if sp.decor {
+            for o in &sp.orig_order {
                 h.put(*o as u32, order_bits);
             }
-            for c in coeffs {
+            for c in &sp.coeffs {
                 if *c != 0 {
                     h.put(1, 1);
                     h.put(signed_to_raw(*c, 7), 7);
@@ -512,15 +566,15 @@ impl XllEncoder {
                 }
             }
         }
-        for p in plans {
+        for p in &sp.plans {
             h.put(p.adapt_order as u32, 4);
         }
-        for p in plans {
+        for p in &sp.plans {
             if p.adapt_order == 0 {
                 h.put(p.fixed_order as u32, 2);
             }
         }
-        for p in plans {
+        for p in &sp.plans {
             for i in &p.rc_idx {
                 h.put(signed_to_raw(*i, 8), 8);
             }
@@ -533,13 +587,29 @@ impl XllEncoder {
         hb[1] = (hb[1] & 0x3F) | ((((total - 1) & 3) as u8) << 6);
         let crc = crc16(&hb);
         hb.extend_from_slice(&crc.to_be_bytes());
+        hb
+    }
 
-        // ---- NAVI
-        let max_seg = segs.iter().map(|s| s.len()).max().unwrap();
+    fn mask_bits(&self) -> u32 {
+        let m = self.cfg.sets.iter().fold(0u32, |m, s| m | s.ch_mask);
+        (32 - m.leading_zeros()).max(6)
+    }
+
+    fn assemble(&self, set_plans: &[SetPlan], set_segs: &[Vec<Vec<u8>>], nseg: usize) -> Vec<u8> {
+        let cfg = &self.cfg;
+        let mut hb = Vec::new();
+        for (i, sp) in set_plans.iter().enumerate() {
+            hb.extend_from_slice(&self.set_header(i, sp));
+        }
+
+        // ---- NAVI: one size per segment and channel set
+        let max_seg = set_segs.iter().flatten().map(|s| s.len()).max().unwrap();
         let nb4ssize = (32 - (max_seg as u32 - 1).leading_zeros()).max(1);
         let mut nv = BitWriter::new();
-        for s in segs {
-            nv.put(s.len() as u32 - 1, nb4ssize);
+        for seg in 0..nseg {
+            for segs in set_segs {
+                nv.put(segs[seg].len() as u32 - 1, nb4ssize);
+            }
         }
         nv.align(8);
         let mut nb = nv.into_bytes();
@@ -547,18 +617,19 @@ impl XllEncoder {
         nb.extend_from_slice(&crc.to_be_bytes());
 
         // ---- common header (fixed layout, 14 bytes with the CRC)
-        let body_len: usize = segs.iter().map(|s| s.len()).sum();
+        let body_len: usize = set_segs.iter().flatten().map(|s| s.len()).sum();
         let fbits = 16u32;
         let header_len = (74 + fbits as usize).div_ceil(8) + 2;
         let mut frame_len = header_len + hb.len() + nb.len() + body_len;
         frame_len += (4 - frame_len % 4) % 4;
+        let mask_bits = self.mask_bits();
         let mut tmp = BitWriter::new();
         tmp.put(SYNC_XLL, 32);
         tmp.put(0, 4); // version 1
         tmp.put((header_len - 1) as u32, 8);
         tmp.put(fbits - 1, 5);
         tmp.put((frame_len - 1) as u32, fbits);
-        tmp.put(0, 4); // one channel set
+        tmp.put(cfg.sets.len() as u32 - 1, 4);
         tmp.put(nseg.trailing_zeros(), 4);
         tmp.put((cfg.frame_samples / nseg).trailing_zeros(), 4);
         tmp.put(nb4ssize - 1, 5);
@@ -575,8 +646,10 @@ impl XllEncoder {
         out.extend_from_slice(&cb);
         out.extend_from_slice(&hb);
         out.extend_from_slice(&nb);
-        for s in segs {
-            out.extend_from_slice(s);
+        for seg in 0..nseg {
+            for segs in set_segs {
+                out.extend_from_slice(&segs[seg]);
+            }
         }
         out.resize(frame_len, 0);
         out

@@ -1,6 +1,7 @@
 //! Native DTS core (Digital Surround) encoder, written from ETSI TS 102 114.
 
 pub mod bits;
+pub mod dmix_table;
 pub mod core_exact;
 pub mod encoder;
 pub mod exss;

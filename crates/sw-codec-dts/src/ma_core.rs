@@ -7,7 +7,8 @@
 use crate::encoder::{Config as CoreConfig, Encoder as CoreEncoder};
 use crate::exss::{exss_frame, ExssParams};
 use crate::ma::map_layout;
-use crate::native::map_layout as core_map_layout;
+use crate::native::map_channels as core_map_channels;
+use crate::ma::Hier;
 use crate::xll::{XllConfig, XllEncoder};
 use sw_core::ChannelLayout;
 
@@ -57,8 +58,10 @@ pub struct MaCoreEncoder {
     exss: ExssParams,
     /// Source samples per XLL channel (coded order), not yet fully consumed.
     buf: Vec<Vec<i32>>,
-    /// Core slot (primary channels in stream order, then LFE) for every XLL channel.
-    xll_to_core: Vec<usize>,
+    /// Core slot (primary channels in stream order, then LFE) for every XLL channel (none for channels
+    /// that only the lossless extension carries).
+    xll_to_core: Vec<Option<usize>>,
+    hier: Option<Hier>,
     /// Source samples per frame (XLL frame size).
     n: usize,
     /// Source samples the core input runs ahead of the output.
@@ -81,8 +84,14 @@ pub struct MaCoreEncoder {
 
 impl MaCoreEncoder {
     pub fn new(cfg: MaCoreConfig) -> Result<MaCoreEncoder, crate::Error> {
-        let cmap = core_map_layout(cfg.layout)?;
         let xmap = map_layout(cfg.layout);
+        // the core carries the channels of the first set
+        let base = xmap.set_sizes[0];
+        let base_chs: Vec<sw_core::Channel> = xmap.order[..base].iter().map(|&i| cfg.layout.channels[i]).collect();
+        let cmap = core_map_channels(&base_chs, cfg.layout.id)?;
+        if base != cfg.layout.channels.len() && xmap.hier.is_none() {
+            return Err(crate::Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", cfg.layout.id)));
+        }
         let nprim = cmap.order.len();
         let ratio = match cfg.sample_rate {
             44_100 | 48_000 => 1,
@@ -103,12 +112,15 @@ impl MaCoreEncoder {
         core.enable_exact_decode(ratio == 2);
         let n = core.frame_samples() * ratio;
         let nch = xmap.order.len();
-        let xll_to_core: Vec<usize> = xmap
-            .order
-            .iter()
-            .map(|&lc| cmap.order.iter().position(|&o| o == lc).or_else(|| (cmap.lfe == Some(lc)).then_some(nprim)).expect("layout channel missing from the core"))
+        let xll_to_core: Vec<Option<usize>> = (0..nch)
+            .map(|x| {
+                if x >= base {
+                    return None;
+                }
+                Some(cmap.order.iter().position(|&o| o == x).or_else(|| (cmap.lfe == Some(x)).then_some(nprim)).expect("layout channel missing from the core"))
+            })
             .collect();
-        let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, channels: nch, ch_mask: xmap.xll_mask, bit_res: cfg.bit_res, residual_of_core: true, frame_samples: n };
+        let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
         let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0 };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let (l48, phase) = if ratio == 1 {
@@ -124,6 +136,7 @@ impl MaCoreEncoder {
             exss,
             buf: vec![Vec::new(); nch],
             xll_to_core,
+            hier: xmap.hier.clone(),
             n,
             lookahead,
             ratio,
@@ -146,7 +159,11 @@ impl MaCoreEncoder {
 
     /// Feed source samples per XLL channel (any number); returns the encoded frames that became ready.
     pub fn push(&mut self, frame: &[Vec<i32>]) -> Vec<Vec<u8>> {
-        for (b, f) in self.buf.iter_mut().zip(frame) {
+        let mut sent = frame.to_vec();
+        if let Some(h) = &self.hier {
+            h.apply(&mut sent);
+        }
+        for (b, f) in self.buf.iter_mut().zip(&sent) {
             b.extend_from_slice(f);
         }
         let mut jobs = Vec::new();
@@ -233,20 +250,46 @@ impl MaCoreEncoder {
         let n = self.n;
         let start = self.emitted * n - self.dropped;
         let nch = self.buf.len();
-        let ncore = self.xll_to_core.iter().copied().max().map_or(0, |m| m + 1);
+        let ncore = self.xll_to_core.iter().flatten().copied().max().map_or(0, |m| m + 1);
         let mut core_in: Vec<Vec<f64>> = vec![Vec::new(); ncore];
-        for (x, &slot) in self.xll_to_core.iter().enumerate() {
-            core_in[slot] = self.core_input(x, self.emitted);
+        for (x, slot) in self.xll_to_core.iter().enumerate() {
+            if let Some(slot) = *slot {
+                let mut v = self.core_input(x, self.emitted);
+                if let Some(h) = &self.hier {
+                    let g = h.core_gain(x);
+                    v.iter_mut().for_each(|s| *s *= g);
+                }
+                core_in[slot] = v;
+            }
         }
         let t0 = std::time::Instant::now();
         let mut core_bytes = self.core.encode_frame(&core_in);
         self.t_core += t0.elapsed();
         let round = if self.shift > 0 { 1i32 << (self.shift - 1) } else { 0 };
         let mut resid: Vec<Vec<i32>> = Vec::with_capacity(nch);
-        for (x, &slot) in self.xll_to_core.iter().enumerate() {
+        for (x, slot) in self.xll_to_core.iter().enumerate() {
+            let Some(slot) = *slot else {
+                resid.push(self.buf[x][start..start + n].to_vec());
+                continue;
+            };
             let c = &self.core.last_core_pcm[slot];
             debug_assert_eq!(c.len(), n);
-            resid.push((0..n).map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift)).collect());
+            match &self.hier {
+                // the decoder undoes the downmix scale on the core before adding the residual
+                Some(h) => {
+                    let inv = h.inv[x] as i64;
+                    resid.push(
+                        (0..n)
+                            .map(|i| {
+                                let up = ((c[i] as i64 * inv + (1 << 15)) >> 16) as i32;
+                                let core = (((up as i64 + round as i64) >> self.shift) as i32).clamp(-(1 << 23), (1 << 23) - 1);
+                                self.buf[x][start + i] - core
+                            })
+                            .collect(),
+                    )
+                }
+                None => resid.push((0..n).map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift)).collect()),
+            }
         }
         core_bytes.resize(core_bytes.len() + self.core_pad, 0);
         self.emitted += 1;

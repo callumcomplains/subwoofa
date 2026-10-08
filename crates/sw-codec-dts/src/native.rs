@@ -31,10 +31,17 @@ pub struct LayoutMap {
 }
 
 pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
+    map_channels(layout.channels, layout.id)
+}
+
+/// Like `map_layout` for a plain list of channels (side surrounds count as surrounds; the indices of the
+/// result refer to `channels`).
+pub fn map_channels(channels: &[Channel], name: &str) -> Result<LayoutMap, Error> {
     use Channel::*;
-    let pos = |c: Channel| layout.channels.iter().position(|x| *x == c);
+    let canon: Vec<Channel> = channels.iter().map(|c| match c { Lss => Ls, Rss => Rs, c => *c }).collect();
+    let pos = |c: Channel| canon.iter().position(|x| *x == c);
     let lfe = pos(Lfe);
-    let main: Vec<Channel> = layout.channels.iter().copied().filter(|c| *c != Lfe).collect();
+    let main: Vec<Channel> = canon.iter().copied().filter(|c| *c != Lfe).collect();
     let mut has = main.clone();
     has.sort_by_key(|c| *c as u8);
     let want = |list: &[Channel]| {
@@ -59,7 +66,7 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
     } else if want(&[L, R, C, Ls, Rs]) {
         (9, &[C, L, R, Ls, Rs])
     } else {
-        return Err(Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", layout.id)));
+        return Err(Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", name)));
     };
     Ok(LayoutMap { amode, order: order.iter().map(|c| pos(*c).unwrap()).collect(), lfe })
 }
