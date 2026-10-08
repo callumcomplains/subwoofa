@@ -246,6 +246,9 @@ const AC3_LAYOUTS: &[&str] = &[
     "2.1", "2.0", "2.0-ltrt", "1.0",
 ];
 
+/// Layouts DTS Express can carry: front L R / C, surrounds Ls Rs, optional LFE.
+const EXPRESS_LAYOUTS: &[&str] = &["5.1", "5.0", "4.1-quad", "4.0-quad", "3.1", "3.0", "2.1", "2.0", "1.0"];
+
 /// Validate a destination/stream/layout/sample-rate combination.
 pub fn validate(
     dest: Destination,
@@ -269,6 +272,9 @@ pub fn validate(
     // AC-3 only defines the standard front/surround channel modes (up to 5.1); anything with
     // 6.x/7.x, heights or wides needs E-AC-3 or a lossless format.
     if stream == StreamType::Ac3 && !AC3_LAYOUTS.contains(&layout.id) {
+        return Err(Invalid::LayoutNotSupported);
+    }
+    if stream == StreamType::DtsExpress && !EXPRESS_LAYOUTS.contains(&layout.id) {
         return Err(Invalid::LayoutNotSupported);
     }
     Ok(())

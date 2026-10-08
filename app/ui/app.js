@@ -11,7 +11,7 @@ let opts = null;         // last options() answer
 let unlocked = false;
 
 const COMMON_RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000];
-const DEFAULT_BITRATE = { ac3: 640, eac3: 1024, dts: 1509 };
+const DEFAULT_BITRATE = { ac3: 640, eac3: 1024, dts: 1509, "dts-express": 256 };
 
 // Plain-language names for each layout variant (the id is stable; this is only for display).
 const VARIANT = {
@@ -198,7 +198,7 @@ function renderBitrate(from) {
   if (lossless && !unlocked) br.value = "";
   else if (from === "dest" || from === "stream" || !br.value) {
     br.value = lossless ? "" : (DEFAULT_BITRATE[$("stream").value] ?? o.bitrate_max);
-    if (!lossless) br.value = Math.min(o.bitrate_max, br.value);
+    if (!lossless) br.value = Math.max(o.bitrate_min, Math.min(o.bitrate_max, br.value));
   } else if (from !== "bitrate" && !unlocked && !bitrateOk()) {
     br.value = Math.min(o.bitrate_max, Math.max(o.bitrate_min, Number(br.value)));
   }
