@@ -12,6 +12,10 @@
     <span class="meters" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
     <b>SUBWOOFA</b>
   </div>
+  <nav class="modes" aria-label="Mode">
+    <button id="modeEncode" aria-pressed="true">Encode</button>
+    <button id="modeTools" aria-pressed="false">StreamTools</button>
+  </nav>
   <div class="bar-right">
     <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
     <span id="engine" class="status"><i class="lamp"></i><span>checking engine</span></span>
@@ -105,6 +109,58 @@
   <ul id="qList"></ul>
 </section>
 
+<section id="tools" class="tools" aria-label="StreamTools" hidden>
+  <div class="tools-open">
+    <button id="tOpen">Open stream…</button>
+    <input id="tPath" readonly placeholder="A DTS, DTS-HD, TrueHD or MLP stream (.dts .dtshd .thd .mlp)">
+  </div>
+  <div class="tools-cols">
+    <div class="tools-info">
+      <h2>Stream</h2>
+      <dl id="tInfo" class="kv selectable"><dt>No stream open</dt><dd></dd></dl>
+      <h2>Bit rate over time</h2>
+      <canvas id="tPbr" width="720" height="170"></canvas>
+      <div id="tPbrNote" class="hint"></div>
+    </div>
+    <div class="tools-ops">
+      <div class="op-tabs" role="tablist">
+        <button data-op="trim" aria-pressed="true">Trim</button>
+        <button data-op="split" aria-pressed="false">Split</button>
+        <button data-op="append" aria-pressed="false">Append</button>
+        <button data-op="verify" aria-pressed="false">Verify</button>
+      </div>
+      <div class="op" data-op="trim">
+        <p class="hint">Keeps the part between two times, cut on frame boundaries (TrueHD and MLP start at the nearest earlier restart point).</p>
+        <div class="op-row">
+          <label class="f small"><span>From (s)</span><input id="tFrom" type="number" min="0" step="0.1" value="0"></label>
+          <label class="f small"><span>To (s, blank = end)</span><input id="tTo" type="number" min="0" step="0.1"></label>
+          <button id="tTrim" class="go small">Trim…</button>
+        </div>
+      </div>
+      <div class="op" data-op="split" hidden>
+        <p class="hint">Cuts the stream at each time and writes numbered files next to the name you choose.</p>
+        <div class="op-row">
+          <label class="f"><span>Split at (seconds, comma separated)</span><input id="tAt" type="text" placeholder="60, 120.5"></label>
+          <button id="tSplit" class="go small">Split…</button>
+        </div>
+      </div>
+      <div class="op" data-op="append" hidden>
+        <p class="hint">Joins streams of the same format and sample rate end to end; the open stream comes first.</p>
+        <ul id="tAppendList" class="plainlist selectable"></ul>
+        <div class="op-row">
+          <button id="tAppendAdd" class="plain">Add stream…</button>
+          <button id="tAppendRun" class="go small">Append…</button>
+        </div>
+      </div>
+      <div class="op" data-op="verify" hidden>
+        <p class="hint">Decodes the whole stream and reports anything the decoder complains about, with an MD5 of the decoded audio.</p>
+        <div class="op-row"><button id="tVerify" class="go small">Verify</button></div>
+      </div>
+      <pre id="tLog" class="selectable">Open a stream to begin.</pre>
+    </div>
+  </div>
+</section>
+
 <footer class="out">
   <div class="dest-path">
     <button id="browse" class="plain">Output folder…</button>
@@ -128,7 +184,7 @@
     </label>
     <div class="opt-row">
       <label class="f small"><span>Max concurrent encodes</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
-      <label class="opt inline"><input type="checkbox" id="optNative"><span><b>Use native encoders</b><small>Where Subwoofa has its own encoder (AC-3 so far) use it instead of FFmpeg. Experimental.</small></span></label>
+      <label class="opt inline"><input type="checkbox" id="optNative"><span><b>Use native encoders</b><small>Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP and the DTS family) use it instead of FFmpeg. Formats FFmpeg cannot make (DTS-HD MA, HRA, ES, 96/24) always use it.</small></span></label>
       <label class="f small"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
       <label class="opt inline"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b><small>Native TrueHD only: add a stereo substream so stereo-only players get a proper downmix. Makes the file roughly 5 to 8% larger.</small></span></label>
       <label class="opt inline"><input type="checkbox" id="optVerify" checked><span><b>Auto verify</b><small>Lossless encodes are decoded and compared with the source (MD5); lossy ones must decode cleanly.</small></span></label>

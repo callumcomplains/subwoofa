@@ -14,6 +14,50 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ToolsCmd {
+    /// Format, rate, channels, length, bit rates.
+    Info { file: PathBuf },
+    /// Bit rate over time (mean and peak per window).
+    Pbr {
+        file: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        window: f64,
+    },
+    /// Keep the part between two times (on frame boundaries).
+    Trim {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 0.0)]
+        start: f64,
+        #[arg(long)]
+        end: Option<f64>,
+    },
+    /// Cut at the given times (seconds) into numbered files.
+    Split {
+        file: PathBuf,
+        /// Output path without the number and extension, e.g. `D:/out/part`
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, required = true, num_args = 1..)]
+        at: Vec<f64>,
+    },
+    /// Join streams of the same format end to end.
+    Append {
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Decode the whole stream and report decoder complaints and the PCM MD5.
+    Verify {
+        file: PathBuf,
+        #[arg(long)]
+        ffmpeg: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// List channel layouts.
     Layouts,
@@ -36,6 +80,11 @@ enum Cmd {
         /// ... starting at this restart interval
         #[arg(long, default_value_t = 0)]
         first: usize,
+    },
+    /// StreamTools: inspect, cut and join DTS / DTS-HD and TrueHD / MLP streams.
+    Tools {
+        #[command(subcommand)]
+        op: ToolsCmd,
     },
     /// Check a downmix for clipping (three or more consecutive full-scale samples).
     DownmixCheck {
@@ -155,6 +204,7 @@ fn run() -> Result<(), String> {
                 println!("RMS over span: {:.3} dBFS", 10.0 * (sum / n.max(1) as f64).log10());
             }
         }
+        Cmd::Tools { op } => run_tools(op)?,
         Cmd::StreamInfo { path, count, first } => {
             let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             print!("{}", sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary());
@@ -315,4 +365,52 @@ fn default_cap(stream: StreamType) -> u32 {
         StreamType::DtsDigitalSurround => 1509,
         _ => u32::MAX,
     }
+}
+
+fn run_tools(op: ToolsCmd) -> Result<(), String> {
+    use sw_tools::Stream;
+    let e = |e: sw_tools::Error| e.to_string();
+    match op {
+        ToolsCmd::Info { file } => {
+            let i = Stream::open(&file).map_err(e)?.info();
+            println!("{} ({})", i.description, i.format);
+            println!("{} Hz, {} channels, {} frames, {:.3} s", i.sample_rate, i.channels, i.frames, i.duration_secs);
+            println!("{:.1} MB, average {:.0} kbps, peak {:.0} kbps, {} restart point(s){}", i.bytes as f64 / 1e6, i.average_kbps, i.peak_kbps, i.restart_points, if i.container { ", .dtshd container" } else { "" });
+        }
+        ToolsCmd::Pbr { file, window } => {
+            for p in Stream::open(&file).map_err(e)?.pbr(window) {
+                println!("{:9.2}  mean {:7.0}  peak {:7.0} kbps", p.secs, p.mean_kbps, p.peak_kbps);
+            }
+        }
+        ToolsCmd::Trim { file, output, start, end } => {
+            let s = Stream::open(&file).map_err(e)?;
+            let (first, n, at) = s.trim(&output, start, end).map_err(e)?;
+            println!("wrote {} frames from frame {first} ({at:.3} s) to {}", n, output.display());
+        }
+        ToolsCmd::Split { file, output, at } => {
+            let s = Stream::open(&file).map_err(e)?;
+            let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("bin").to_string();
+            for p in s.split(&output, &ext, &at).map_err(e)? {
+                println!("wrote {}", p.display());
+            }
+        }
+        ToolsCmd::Append { inputs, output } => {
+            let refs: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+            sw_tools::append(&refs, &output).map_err(e)?;
+            println!("wrote {}", output.display());
+        }
+        ToolsCmd::Verify { file, ffmpeg } => {
+            let ff = ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg).ok_or("ffmpeg not found")?;
+            let r = sw_tools::verify(&file, &ff).map_err(e)?;
+            println!("{} frames, {:.3} s, PCM md5 {}", r.frames, r.duration_secs, r.pcm_md5.as_deref().unwrap_or("?"));
+            for m in &r.messages {
+                println!("decoder: {m}");
+            }
+            println!("{}", if r.passed { "Stream passes verification with no errors." } else { "Stream FAILED verification." });
+            if !r.passed {
+                return Err("verification failed".into());
+            }
+        }
+    }
+    Ok(())
 }

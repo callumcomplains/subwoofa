@@ -182,3 +182,32 @@ dialog h2 { margin-bottom: 14px; }
 menu { margin: 16px 0 0; padding: 0; display: flex; justify-content: flex-end; }
 
 @media (max-width: 860px) { .work { grid-template-columns: 1fr; } .layouts { border-right: 0; border-bottom: 1px solid var(--rule); } }
+
+/* mode switch and StreamTools */
+.modes { display: flex; gap: 2px; }
+.modes button { border-color: transparent; color: var(--dim); letter-spacing: .08em; text-transform: uppercase; font-size: 11px; padding: 4px 12px; }
+.modes button[aria-pressed=true] { color: var(--lamp-ink); background: var(--lamp); border-color: var(--lamp); }
+body.tools-mode .strip, body.tools-mode .work, body.tools-mode .queue, body.tools-mode .out { display: none; }
+body.tools-mode .tools { grid-row: 2 / span 4; }
+.tools { padding: 12px 16px; min-height: 0; overflow: auto; display: grid; gap: 12px; align-content: start; }
+.tools[hidden] { display: none; }
+.tools-open { display: flex; gap: 8px; }
+.tools-open input { flex: 1; }
+.tools-cols { display: grid; grid-template-columns: minmax(380px, 1.2fr) minmax(300px, 1fr); gap: 20px; min-height: 0; }
+.tools-info, .tools-ops { display: grid; gap: 8px; align-content: start; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; font-family: var(--mono); font-size: 12px; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; }
+#tPbr { width: 100%; max-width: 760px; height: auto; background: var(--field); border: 1px solid var(--rule); border-radius: var(--r); }
+.op-tabs { display: flex; gap: 2px; }
+.op-tabs button[aria-pressed=true] { border-color: var(--lamp); color: var(--lamp); }
+.op { display: grid; gap: 8px; }
+.op[hidden] { display: none; }
+.op-row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.plainlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font: 12px var(--mono); }
+.plainlist li { display: flex; gap: 8px; align-items: center; }
+.plainlist li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tLog { margin: 0; min-height: 90px; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 12px var(--mono); border-top: 1px solid var(--rule); padding-top: 8px; }
+
+/* the hidden attribute must win over component display rules */
+[hidden] { display: none !important; }

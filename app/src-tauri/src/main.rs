@@ -21,6 +21,8 @@ struct StreamInfo {
     available: bool,
     /// Whether Subwoofa's own encoder (no FFmpeg needed) can make it.
     native: bool,
+    /// Whether the FFmpeg backend can make it.
+    ffmpeg: bool,
 }
 
 #[derive(Serialize)]
@@ -54,8 +56,9 @@ fn catalog() -> Catalog {
                     name: s.display_name(),
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
-                    available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
+                    available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
                     native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
+                    ffmpeg: ff::supports(*s),
                 })
                 .collect(),
         })
@@ -67,8 +70,9 @@ fn catalog() -> Catalog {
             name: s.display_name(),
             lossless: s.is_lossless(),
             sample_rates: s.sample_rates(),
-            available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
+            available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
             native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
+            ffmpeg: ff::supports(*s),
         })
         .collect();
     Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }
@@ -169,6 +173,64 @@ fn probe(path: String) -> Result<Probe, String> {
         duration: v["format"]["duration"].as_str().and_then(|d| d.parse().ok()),
         start_secs: None,
     })
+}
+
+/* ---- StreamTools ---- */
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn tools_info(path: String) -> Result<sw_tools::Info, String> {
+    blocking(move || sw_tools::Stream::open(std::path::Path::new(&path)).map(|s| s.info()).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+async fn tools_pbr(path: String, window: f64) -> Result<Vec<sw_tools::PbrPoint>, String> {
+    blocking(move || sw_tools::Stream::open(std::path::Path::new(&path)).map(|s| s.pbr(window.max(0.1))).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+async fn tools_trim(path: String, output: String, start: f64, end: Option<f64>) -> Result<String, String> {
+    blocking(move || {
+        let s = sw_tools::Stream::open(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+        let (first, n, at) = s.trim(std::path::Path::new(&output), start, end).map_err(|e| e.to_string())?;
+        Ok(format!("Wrote {n} frames starting at frame {first} ({at:.3} s) to {output}"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn tools_split(path: String, output: String, at: Vec<f64>) -> Result<Vec<String>, String> {
+    blocking(move || {
+        let s = sw_tools::Stream::open(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+        let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("bin").to_string();
+        // the save dialog returns a file name with an extension: drop it, the parts add their own
+        let prefix = std::path::Path::new(&output).with_extension("");
+        let paths = s.split(&prefix, &ext, &at).map_err(|e| e.to_string())?;
+        Ok(paths.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn tools_append(inputs: Vec<String>, output: String) -> Result<String, String> {
+    blocking(move || {
+        let refs: Vec<&std::path::Path> = inputs.iter().map(|p| std::path::Path::new(p)).collect();
+        sw_tools::append(&refs, std::path::Path::new(&output)).map_err(|e| e.to_string())?;
+        Ok(format!("Wrote {output}"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn tools_verify(path: String) -> Result<sw_tools::VerifyReport, String> {
+    blocking(move || {
+        let ff = ff::find_ffmpeg().ok_or("ffmpeg was not found, and it does the decoding for the check")?;
+        sw_tools::verify(std::path::Path::new(&path), &ff).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /* ---- queue ---- */
@@ -312,7 +374,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, probe, downmix_default, downmix_safe, downmix_check,
-            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log
+            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log,
+            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_verify
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");

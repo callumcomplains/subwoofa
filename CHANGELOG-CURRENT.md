@@ -30,3 +30,13 @@ Newest entries at the bottom. Started 2026-10-08.
   - Speed is about 1x real time for 5.1 at 96 kHz (the 64-band analysis is a direct matched filter; a polyphase version would be several times faster).
   - Not yet: 96/24 with 6.x ES layouts, X96 inside MA (the "96/24 Core" option), Huffman-coded side information (the extension currently spends a little more on side info than necessary).
 - **MLP / DVD-Audio native (done).** The lossless TrueHD engine now also writes MLP: MLP major sync (format info, channel assignment, DVD-Audio flag, channel meaning), one substream, no downmix, 32-bit end-of-stream marker, assignments 0-12 (mono, stereo, L-R-Cs, quad, 2.1, 3.0, 4.0, 5.0, 3.1, 4.1, 5.1) with their coded channel order, 16/20/24-bit word length, 44.1-192 kHz. The `mlp` stream type is native in the CLI, queue and GUI. Verified: FFmpeg decodes it bit-exactly (5.1 at 48 and 96 kHz on real material, stereo 16-bit 44.1 kHz and 5.1 24-bit 96 kHz in tests `mlp_stereo_16_bit_44_1` / `mlp_five_one_24_bit_96`). Raw `.mlp` stream only (no DVD-Audio disc authoring).
+- **StreamTools (done, first version).** New crate `sw-tools` + a "StreamTools" mode in the GUI (switch in the header) + `subwoofa tools ...` on the CLI. It indexes DTS / DTS-HD (raw `.dts`, `.cpt`, `.dtshd`, with or without core) and TrueHD / MLP streams frame by frame without loading them (the 4.7 GB DTSHDMASE Oppenheimer file indexes in about 1.5 s), and offers:
+  - **Info** (format, rate, channels, length, size, average/peak kbps, restart points; recognises X96 and XCH),
+  - **Bit rate over time** chart (mean and peak, replaces the PBR graph of the old tool),
+  - **Trim** (frame-accurate cut points; TrueHD/MLP start at the nearest earlier restart point),
+  - **Split** at any number of times into numbered files,
+  - **Append** (checks format and sample rate match),
+  - **Verify** (decodes everything with FFmpeg, reports decoder complaints and the MD5 of the decoded PCM).
+  Container headers (`.dtshd`) are patched (frame count, sample count, data size); splitting the 7.1 test file at 20 s and 40 s and appending the three parts reproduces the original file byte for byte; a trimmed `.dtshd` passes both the Verify tool and DTSHDVerify.
+  - Not done from the old tool's StreamTools: Join/Replace, Re-stripe, Add Silence.
+- GUI fixes found while testing: the `hidden` attribute lost against component display rules (the MA core checkbox and DTS options showed for AC-3) - now global; the new DTS formats were still listed as "(planned)" and routed to FFmpeg - the catalog now knows which streams FFmpeg can make and the app uses the native encoder for the rest. End-to-end through the app queue with auto-verify: DTS-HD HRA, DTS-ES and MLP jobs all pass.

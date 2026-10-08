@@ -16,6 +16,7 @@ sw-core = { path = "../../crates/sw-core" }
 sw-backend-ffmpeg = { path = "../../crates/sw-backend-ffmpeg" }
 sw-pcm = { path = "../../crates/sw-pcm" }
 sw-queue = { path = "../../crates/sw-queue" }
+sw-tools = { path = "../../crates/sw-tools" }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
