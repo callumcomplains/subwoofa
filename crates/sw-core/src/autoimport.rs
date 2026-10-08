@@ -26,11 +26,26 @@ fn tokens(stem: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// Remove `chNN` position tokens ("ch01", "Ch12") so per-channel file numbering does not defeat matching.
+fn strip_numbering(s: &str) -> String {
+    let mut out = String::new();
+    let mut last = 0;
+    for (a, b) in tokens(s) {
+        let t = &s[a..b];
+        if t.len() > 2 && t[..2].eq_ignore_ascii_case("ch") && t[2..].bytes().all(|c| c.is_ascii_digit()) {
+            out.push_str(&s[last..a]);
+            last = b;
+        }
+    }
+    out.push_str(&s[last..]);
+    out
+}
+
 /// Find the channel ID token in `stem` that equals `ch` and return (prefix, suffix) around it.
 fn split_around(stem: &str, ch: Channel) -> Option<(String, String)> {
     for (s, e) in tokens(stem) {
         if Channel::from_id(&stem[s..e]) == Some(ch) {
-            return Some((stem[..s].to_string(), stem[e..].to_string()));
+            return Some((strip_numbering(&stem[..s]), strip_numbering(&stem[e..])));
         }
     }
     None

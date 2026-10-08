@@ -27,6 +27,7 @@ fn xll_bit(c: Channel) -> u32 {
         Lw => 17,
         Rw => 18,
         Oh => 19,
+        _ => 31,
     }
 }
 
@@ -46,6 +47,7 @@ fn exss_bit(c: Channel) -> u32 {
         Lw | Rw => 0x400,
         Lss | Rss => 0x800,
         Lhs | Rhs => 0x2000,
+        _ => 0,
     }
 }
 

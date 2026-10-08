@@ -397,6 +397,11 @@ pub fn map_channel_mask(layout: &ChannelLayout, mask: u32) -> Option<Vec<usize>>
             Channel::Oh => vec![TC],
             Channel::Lw => vec![FLC],
             Channel::Rw => vec![FRC],
+            Channel::Tfl => vec![TFL],
+            Channel::Tfr => vec![TFR],
+            Channel::Tfc => vec![TFC],
+            Channel::Tc => vec![TC],
+            Channel::Lfe2 | Channel::Tsl | Channel::Tsr | Channel::Tbl | Channel::Tbr | Channel::Tbc | Channel::Bfc | Channel::Bfl | Channel::Bfr => vec![],
         }
     };
     let present: Vec<u32> = (0..32).filter(|b| mask >> b & 1 == 1).collect();
@@ -494,6 +499,7 @@ pub struct StemSet {
     pub frames: u64,
     pub time_reference: Option<u64>,
     scratch: Vec<Vec<f32>>,
+    mix: Option<sw_core::downmix::Matrix>,
 }
 
 impl StemSet {
@@ -519,7 +525,13 @@ impl StemSet {
         let frames = readers.iter().map(|r| r.info.frames).max().unwrap_or(0);
         let time_reference = readers.iter().find_map(|r| r.info.time_reference);
         let nfiles = readers.len();
-        Ok(StemSet { layout, readers, slots, sample_rate: rate, bits, frames, time_reference, scratch: vec![Vec::new(); nfiles] })
+        Ok(StemSet { layout, readers, slots, sample_rate: rate, bits, frames, time_reference, scratch: vec![Vec::new(); nfiles], mix: None })
+    }
+
+    /// Mix the layout channels down through `matrix` (inputs in layout order) before they are returned, so
+    /// the set reads as the matrix's output channels.
+    pub fn set_downmix(&mut self, matrix: sw_core::downmix::Matrix) {
+        self.mix = Some(matrix);
     }
 
     pub fn layout(&self) -> &'static ChannelLayout {
@@ -561,6 +573,21 @@ impl StemSet {
             if *g < n {
                 r.pos = r.info.frames;
             }
+        }
+        if let Some(m) = &self.mix {
+            let nin = planar.len();
+            let mut mixed: Vec<Vec<f32>> = vec![vec![0.0; n]; m.outputs.len()];
+            for (o, row) in m.cells.iter().enumerate() {
+                for (i, cell) in row.iter().enumerate().take(nin) {
+                    let g = cell.linear();
+                    if g != 0.0 {
+                        for (acc, x) in mixed[o].iter_mut().zip(&planar[i]) {
+                            *acc += g * x;
+                        }
+                    }
+                }
+            }
+            *planar = mixed;
         }
         Ok(n)
     }

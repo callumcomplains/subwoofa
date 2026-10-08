@@ -158,6 +158,9 @@ enum Cmd {
         /// Native DTS: attenuate the rear channels by 3 dB first.
         #[arg(long)]
         rear_3db: bool,
+        /// Layout of the input files when richer than --layout (e.g. 22.2): mixed down to --layout. Native engine.
+        #[arg(long)]
+        source_layout: Option<String>,
     },
 }
 
@@ -237,13 +240,42 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout } => {
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             let layout: &'static ChannelLayout =
                 ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
             formats::validate(dest, stream, layout, sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
+            if let Some(src) = source_layout.as_deref().filter(|s| !s.is_empty()) {
+                let src_layout: &'static ChannelLayout = ChannelLayout::find(src).ok_or(format!("unknown layout '{src}'"))?;
+                let map = collect_inputs(src_layout, auto_import, inputs)?;
+                let spec = sw_queue::run::EncodeSpec {
+                    dest: dest.id().to_string(),
+                    stream: stream.id().to_string(),
+                    layout: layout.id.to_string(),
+                    sample_rate,
+                    bitrate,
+                    dialnorm,
+                    start,
+                    duration,
+                    inputs: map.iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect(),
+                    output: output.to_string_lossy().into_owned(),
+                    unlocked: false,
+                    engine: "native".into(),
+                    downmix: !no_downmix,
+                    channel_order: channel_order.clone(),
+                    es_phase_shift,
+                    rear_minus_3db: rear_3db,
+                    source_layout: Some(src.to_string()),
+                };
+                let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).map_err(|e| match e {
+                    sw_queue::run::Failure::Canceled => "canceled".to_string(),
+                    sw_queue::run::Failure::Error(m) => m,
+                })?;
+                println!("{} ({})", out.message, output.display());
+                return Ok(());
+            }
 
             let map = collect_inputs(layout, auto_import, inputs)?;
             let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));

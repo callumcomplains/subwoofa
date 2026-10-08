@@ -70,7 +70,19 @@ pub(crate) fn ff_name(c: Channel) -> Option<&'static str> {
         Lh | Lhs => "TFL",
         Rh | Rhs => "TFR",
         Ch => "TFC",
-        Oh => "TC",
+        Oh | Tc => "TC",
+        Tfl => "TFL",
+        Tfr => "TFR",
+        Tfc => "TFC",
+        Tbl => "TBL",
+        Tbr => "TBR",
+        Tbc => "TBC",
+        Tsl => "TSL",
+        Tsr => "TSR",
+        Bfc => "BFC",
+        Bfl => "BFL",
+        Bfr => "BFR",
+        Lfe2 => "LFE2",
     })
 }
 

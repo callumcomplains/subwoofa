@@ -39,6 +39,10 @@ pub struct EncodeSpec {
     /// DTS: attenuate the rear channels by 3 dB first.
     #[serde(default)]
     pub rear_minus_3db: bool,
+    /// Layout of the input files when it is richer than the output layout (e.g. "22.2"): the inputs are
+    /// mixed down to `layout` by constant-power panning. Native engine only.
+    #[serde(default)]
+    pub source_layout: Option<String>,
 }
 
 fn yes() -> bool {
@@ -134,7 +138,18 @@ fn execute_inner(
 
     // Read the real format of the inputs natively (rate, bit depth, length, timecode).
     let order = sw_pcm::ChannelOrder::parse(&spec.channel_order).ok_or("channel order must be auto, mask or file")?;
-    let stems = sw_pcm::StemSet::open_ordered(layout, &inputs, order).map_err(|e| e.to_string())?;
+    let src_layout: &'static ChannelLayout = match &spec.source_layout {
+        Some(id) if !id.is_empty() => ChannelLayout::find(id).ok_or("unknown source layout")?,
+        _ => layout,
+    };
+    let mut stems = sw_pcm::StemSet::open_ordered(src_layout, &inputs, order).map_err(|e| e.to_string())?;
+    let downmixed = src_layout.id != layout.id;
+    if downmixed {
+        if spec.engine != "native" {
+            return Err("mixing a richer input layout down needs the native engine".into());
+        }
+        stems.set_downmix(sw_core::downmix::Matrix::pan(src_layout.channels, layout.channels));
+    }
     if !spec.unlocked && stems.sample_rate != spec.sample_rate {
         return Err(format!("input files are {} Hz but the encode is set to {} Hz", stems.sample_rate, spec.sample_rate).into());
     }
@@ -155,7 +170,7 @@ fn execute_inner(
         log.push_str(&format!("Broadcast time reference: {} samples ({})\n", t, fmt_secs(t as f64 / stems.sample_rate as f64)));
     }
     log.push_str(&format!("Unlocked:     {}\n", spec.unlocked));
-    for ch in layout.channels {
+    for ch in src_layout.channels {
         if let Some(p) = inputs.get(ch) {
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
@@ -164,13 +179,13 @@ fn execute_inner(
     if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa | StreamType::DtsExpress) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
-    let mut stems = stems;
+
 
     let ffmpeg = ff::find_ffmpeg();
     if ffmpeg.is_none() && !native {
         return Err("ffmpeg not found on PATH".into());
     }
-    let slots = sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())?;
+    let slots = if downmixed { Vec::new() } else { sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())? };
     let job = ff::Job {
         stream,
         layout,
@@ -269,7 +284,7 @@ fn execute_inner(
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
     log.push_str(&format!("\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n", fmt_secs(span), enc_secs, span / enc_secs.max(0.001), size as f64 / 1e6, avg_kbps));
 
-    if !verify {
+    if !verify || downmixed {
         return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
     }
     if ffmpeg.is_none() {

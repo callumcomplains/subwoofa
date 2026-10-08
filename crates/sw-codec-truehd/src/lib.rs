@@ -50,6 +50,7 @@ fn thd_position(c: Channel) -> Option<(usize, usize)> {
         Lw => (10, 0),
         Rw => (10, 1),
         Ch => (11, 0),
+        _ => return None,
     })
 }
 

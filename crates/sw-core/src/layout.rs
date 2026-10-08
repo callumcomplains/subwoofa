@@ -27,18 +27,18 @@ impl ChannelLayout {
         self.channels.len()
     }
     pub fn has_lfe(&self) -> bool {
-        self.channels.contains(&Lfe)
+        self.channels.iter().any(|c| matches!(c, Lfe | Lfe2))
     }
     /// Full-bandwidth channels (everything except LFE), e.g. 5 for 5.1.
     pub fn main_channels(&self) -> usize {
-        self.channels.iter().filter(|c| **c != Lfe).count()
+        self.channels.iter().filter(|c| !matches!(c, Lfe | Lfe2)).count()
     }
     pub fn has_heights(&self) -> bool {
         self.channels.iter().any(|c| c.is_height())
     }
     /// "5.1", "7.0", "2.0" style label.
     pub fn short_label(&self) -> String {
-        format!("{}.{}", self.main_channels(), u8::from(self.has_lfe()))
+        format!("{}.{}", self.main_channels(), self.channels.iter().filter(|c| matches!(c, Lfe | Lfe2)).count())
     }
     pub fn find(id: &str) -> Option<&'static ChannelLayout> {
         LAYOUTS.iter().find(|l| l.id.eq_ignore_ascii_case(id))
@@ -53,6 +53,7 @@ macro_rules! lay {
 
 /// All primary-audio layouts, richest first (the order shown in the GUI drop-down).
 pub static LAYOUTS: &[ChannelLayout] = &[
+    lay!("22.2", "NHK 22.2 (24 ch) C L R Lw Rw Lss Rss Lb Rb Cb LFE LFE2 Tfc Tfl Tfr Tsl Tsr Tc Tbl Tbr Tbc Bfc Bfl Bfr", Discrete, [C, L, R, Lw, Rw, Lss, Rss, Lsr, Rsr, Cs, Lfe, Lfe2, Tfc, Tfl, Tfr, Tsl, Tsr, Tc, Tbl, Tbr, Tbc, Bfc, Bfl, Bfr]),
     lay!("7.1-side-rear", "7.1 L R C LFE Lss Rss Lsr Rsr", Discrete, [L, R, C, Lfe, Lss, Rss, Lsr, Rsr]),
     lay!("7.1-ls-rs-lsr-rsr", "7.1 L R C LFE Ls Rs Lsr Rsr", Discrete, [L, R, C, Lfe, Ls, Rs, Lsr, Rsr]),
     lay!("7.1-height", "7.1 L R C LFE Ls Rs Lh Rh", Discrete, [L, R, C, Lfe, Ls, Rs, Lh, Rh]),
@@ -90,13 +91,13 @@ mod tests {
 
     #[test]
     fn table_is_sane() {
-        assert_eq!(LAYOUTS.len(), 29);
+        assert_eq!(LAYOUTS.len(), 30);
         let mut ids: Vec<_> = LAYOUTS.iter().map(|l| l.id).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), LAYOUTS.len(), "layout ids must be unique");
         for l in LAYOUTS {
-            assert!(l.channel_count() <= 8, "{} exceeds 8 channels", l.id);
+            assert!(l.channel_count() <= 8 || l.id == "22.2", "{} exceeds 8 channels", l.id);
         }
     }
 

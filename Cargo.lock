@@ -3064,6 +3064,7 @@ dependencies = [
  "sw-codec-truehd",
  "sw-core",
  "sw-pcm",
+ "sw-queue",
  "sw-tools",
 ]
 

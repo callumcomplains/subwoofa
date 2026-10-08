@@ -100,6 +100,9 @@ impl Matrix {
 
     /// Default Lo/Ro stereo downmix for any layout.
     pub fn lo_ro(layout: &ChannelLayout) -> Matrix {
+        if layout.channels.iter().any(|c| matches!(c, Tfc | Tc | Bfc | Lfe2)) {
+            return Matrix::pan(layout.channels, &[L, R]);
+        }
         let mut m = Matrix::empty(layout.channels, &[L, R]);
         for &ch in layout.channels {
             let (l, r): (f32, f32) = match ch {
@@ -112,7 +115,7 @@ impl Matrix {
                 Rh | Rhs => (OFF, M3),
                 Cs => (-6.0206, -6.0206),
                 Oh => (-6.0206, -6.0206),
-                Lfe => (OFF, OFF),
+                _ => (OFF, OFF),
             };
             m.set(L, ch, l);
             m.set(R, ch, r);
@@ -122,6 +125,9 @@ impl Matrix {
 
     /// Default 5.1 downmix for 6.x/7.x layouts (surplus channels folded into the nearest bed).
     pub fn to_51(layout: &ChannelLayout) -> Matrix {
+        if layout.channels.iter().any(|c| matches!(c, Tfc | Tc | Bfc | Lfe2)) {
+            return Matrix::pan(layout.channels, &[L, R, C, Lfe, Ls, Rs]);
+        }
         let mut m = Matrix::empty(layout.channels, &[L, R, C, Lfe, Ls, Rs]);
         for &ch in layout.channels {
             // (target, gain dB) pairs
@@ -142,6 +148,7 @@ impl Matrix {
                 Rh | Rhs => &[(R, M3)],
                 Ch => &[(C, M3)],
                 Oh => &[(L, -6.0206), (R, -6.0206)],
+                _ => &[],
             };
             for &(t, g) in routes {
                 m.set(t, ch, g);
@@ -266,5 +273,97 @@ mod tests {
         let mut out = [0.0];
         m.apply(&[0.5], &mut out);
         assert_eq!(out[0], -0.5);
+    }
+}
+
+/// Nominal speaker position: azimuth in degrees (positive to the left), elevation in degrees.
+fn position(ch: Channel, wide_is_front_centre: bool) -> Option<(f32, f32)> {
+    Some(match ch {
+        L | Lt => (30.0, 0.0),
+        R | Rt => (-30.0, 0.0),
+        C => (0.0, 0.0),
+        Ls => (110.0, 0.0),
+        Rs => (-110.0, 0.0),
+        Cs => (180.0, 0.0),
+        Lsr => (135.0, 0.0),
+        Rsr => (-135.0, 0.0),
+        Lss => (90.0, 0.0),
+        Rss => (-90.0, 0.0),
+        Lw => (if wide_is_front_centre { 15.0 } else { 60.0 }, 0.0),
+        Rw => (if wide_is_front_centre { -15.0 } else { -60.0 }, 0.0),
+        Lh => (30.0, 45.0),
+        Rh => (-30.0, 45.0),
+        Lhs => (90.0, 45.0),
+        Rhs => (-90.0, 45.0),
+        Ch => (0.0, 45.0),
+        Tfc => (0.0, 45.0),
+        Tfl => (45.0, 45.0),
+        Tfr => (-45.0, 45.0),
+        Tsl => (90.0, 45.0),
+        Tsr => (-90.0, 45.0),
+        Tbl => (135.0, 45.0),
+        Tbr => (-135.0, 45.0),
+        Tbc => (180.0, 45.0),
+        Bfc => (0.0, -30.0),
+        Bfl => (45.0, -30.0),
+        Bfr => (-45.0, -30.0),
+        Oh | Tc | Lfe | Lfe2 => return None,
+    })
+}
+
+impl Matrix {
+    /// Generic downmix by constant-power panning between the two nearest output speakers (in azimuth);
+    /// elevated and lowered sources lose 3 dB, overhead sources are spread over every output speaker, and
+    /// the LFE channels go to the output LFE (-3 dB each when there are two).
+    pub fn pan(inputs: &[Channel], outputs: &[Channel]) -> Matrix {
+        let mut m = Matrix::empty(inputs, outputs);
+        let wide_front = inputs.contains(&Tfc);
+        let mut spk: Vec<(f32, Channel)> = outputs
+            .iter()
+            .filter_map(|&o| position(o, false).filter(|p| p.1 == 0.0).map(|p| (p.0.rem_euclid(360.0), o)))
+            .collect();
+        spk.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let lfe_n = inputs.iter().filter(|c| matches!(c, Lfe | Lfe2)).count();
+        for &ch in inputs {
+            if matches!(ch, Lfe | Lfe2) {
+                m.set(Lfe, ch, if lfe_n > 1 { M3 } else { 0.0 });
+                continue;
+            }
+            if spk.is_empty() {
+                continue;
+            }
+            let Some((az, el)) = position(ch, wide_front) else {
+                // overhead: equal power into every speaker, 3 dB down
+                let g = -10.0 * (spk.len() as f32).log10() + M3;
+                for &(_, o) in &spk {
+                    m.set(o, ch, g);
+                }
+                continue;
+            };
+            let az = az.rem_euclid(360.0);
+            let trim = if el != 0.0 { M3 } else { 0.0 };
+            // neighbours around the circle
+            let n = spk.len();
+            if n == 1 {
+                m.set(spk[0].1, ch, trim);
+                continue;
+            }
+            let hi = spk.iter().position(|s| s.0 >= az).unwrap_or(0);
+            let lo = (hi + n - 1) % n;
+            let (a_lo, a_hi) = (spk[lo].0, spk[hi].0);
+            if (a_hi - az).abs() < 1e-3 {
+                m.set(spk[hi].1, ch, trim);
+                continue;
+            }
+            let span = (a_hi - a_lo).rem_euclid(360.0);
+            let t = ((az - a_lo).rem_euclid(360.0) / span).clamp(0.0, 1.0);
+            let (g_lo, g_hi) = ((t * std::f32::consts::FRAC_PI_2).cos(), (t * std::f32::consts::FRAC_PI_2).sin());
+            for (o, g) in [(spk[lo].1, g_lo), (spk[hi].1, g_hi)] {
+                if g > 1e-4 {
+                    m.set(o, ch, 20.0 * g.log10() + trim);
+                }
+            }
+        }
+        m
     }
 }

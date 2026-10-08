@@ -31,6 +31,22 @@ pub enum Channel {
     /// Left/Right total (matrix-encoded stereo).
     Lt,
     Rt,
+    /// Second low-frequency channel (22.2).
+    Lfe2,
+    /// Top layer (22.2): front centre/left/right, side left/right, centre, back left/right/centre.
+    Tfc,
+    Tfl,
+    Tfr,
+    Tsl,
+    Tsr,
+    Tc,
+    Tbl,
+    Tbr,
+    Tbc,
+    /// Bottom layer (22.2): front centre/left/right.
+    Bfc,
+    Bfl,
+    Bfr,
 }
 
 impl Channel {
@@ -58,6 +74,19 @@ impl Channel {
             Oh => "Oh",
             Lt => "Lt",
             Rt => "Rt",
+            Lfe2 => "LFE2",
+            Tfc => "Tfc",
+            Tfl => "Tfl",
+            Tfr => "Tfr",
+            Tsl => "Tsl",
+            Tsr => "Tsr",
+            Tc => "Tc",
+            Tbl => "Tbl",
+            Tbr => "Tbr",
+            Tbc => "Tbc",
+            Bfc => "Bfc",
+            Bfl => "Bfl",
+            Bfr => "Bfr",
         }
     }
 
@@ -87,6 +116,23 @@ impl Channel {
             "oh" => Oh,
             "lt" => Lt,
             "rt" => Rt,
+            "lfe2" | "lf2" | "sw2" => Lfe2,
+            "tfc" => Tfc,
+            "tfl" => Tfl,
+            "tfr" => Tfr,
+            "tsl" => Tsl,
+            "tsr" => Tsr,
+            "tc" => Tc,
+            "tbl" => Tbl,
+            "tbr" => Tbr,
+            "tbc" => Tbc,
+            "bfc" => Bfc,
+            "bfl" => Bfl,
+            "bfr" => Bfr,
+            "lb" => Lsr,
+            "rb" => Rsr,
+            "cb" => Cs,
+            "lfe1" => Lfe,
             _ => return None,
         })
     }
@@ -95,7 +141,7 @@ impl Channel {
     pub const fn is_height(self) -> bool {
         matches!(
             self,
-            Channel::Lh | Channel::Rh | Channel::Lhs | Channel::Rhs | Channel::Ch | Channel::Oh
+            Channel::Lh | Channel::Rh | Channel::Lhs | Channel::Rhs | Channel::Ch | Channel::Oh | Channel::Tfc | Channel::Tfl | Channel::Tfr | Channel::Tsl | Channel::Tsr | Channel::Tc | Channel::Tbl | Channel::Tbr | Channel::Tbc
         )
     }
 }
