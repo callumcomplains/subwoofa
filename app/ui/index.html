@@ -128,6 +128,7 @@
         <button data-op="trim" aria-pressed="true">Trim</button>
         <button data-op="split" aria-pressed="false">Split</button>
         <button data-op="append" aria-pressed="false">Append</button>
+        <button data-op="replace" aria-pressed="false">Replace</button>
         <button data-op="verify" aria-pressed="false">Verify</button>
       </div>
       <div class="op" data-op="trim">
@@ -151,6 +152,18 @@
         <div class="op-row">
           <button id="tAppendAdd" class="plain">Add stream…</button>
           <button id="tAppendRun" class="go small">Append…</button>
+        </div>
+      </div>
+      <div class="op" data-op="replace" hidden>
+        <p class="hint">Swaps a stretch of the open stream for another stream (same format, rate and channels) starting at the time you give, or inserts it without removing anything. Cuts move to frames decoding can start at.</p>
+        <div class="op-row">
+          <label class="f"><span>Replacement stream</span><input id="tRepPath" readonly placeholder="Choose a stream…"></label>
+          <button id="tRepOpen" class="plain">Choose…</button>
+        </div>
+        <div class="op-row">
+          <label class="f small"><span>At (s)</span><input id="tRepAt" type="number" min="0" step="0.1" value="0"></label>
+          <label class="chk"><input type="checkbox" id="tRepInsert"><span>Insert only</span></label>
+          <button id="tRepRun" class="go small">Write…</button>
         </div>
       </div>
       <div class="op" data-op="verify" hidden>

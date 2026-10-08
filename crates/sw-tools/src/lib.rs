@@ -615,6 +615,84 @@ pub fn append(inputs: &[&Path], out: &Path) -> Result<()> {
     Ok(())
 }
 
+
+impl Stream {
+    /// First frame at or after `i` that decoding can begin at (the frame count when there is none).
+    fn restart_at_or_after(&self, mut i: usize) -> usize {
+        while i < self.frames.len() && !self.frames[i].restart {
+            i += 1;
+        }
+        i
+    }
+}
+
+fn check_compatible(a: &Stream, b: &Stream) -> Result<()> {
+    if a.format != b.format || a.sample_rate != b.sample_rate || a.channels != b.channels {
+        return Err(Error::Format(format!(
+            "{} ({} Hz, {} ch) does not match {} ({} Hz, {} ch)",
+            b.path.display(),
+            b.sample_rate,
+            b.channels,
+            a.path.display(),
+            a.sample_rate,
+            a.channels
+        )));
+    }
+    Ok(())
+}
+
+/// Write the given frame ranges of several streams, one after the other, into one file with the header of
+/// `head` patched for the new totals.
+fn write_pieces(head: &Stream, pieces: &[(&Stream, usize, usize)], out: &Path) -> Result<()> {
+    let frames: u32 = pieces.iter().map(|(_, a, b)| (b - a) as u32).sum();
+    let ticks: u64 = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.ticks as u64).sum();
+    let bytes: u64 = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.len as u64).sum();
+    let mut w = BufWriter::new(File::create(out)?);
+    if head.is_container() {
+        w.write_all(&patch_container(&head.header, frames, ticks, bytes))?;
+    }
+    for (s, a, b) in pieces {
+        let mut src = BufReader::new(File::open(&s.path)?);
+        copy_frames(&mut src, &mut w, s.data_start, &s.frames[*a..*b])?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+/// Replace the part of `base` that `insert` covers, starting at `at` seconds, with `insert` (the Join/Replace
+/// tool). Cut points move to frames decoding can start at. Returns (seconds where the insert begins, seconds
+/// of base removed).
+pub fn replace(base: &Path, insert: &Path, at: f64, out: &Path) -> Result<(f64, f64)> {
+    let (a, b) = (Stream::open(base)?, Stream::open(insert)?);
+    check_compatible(&a, &b)?;
+    let mut first = a.frame_at(at);
+    if a.format != Format::Dts {
+        first = a.restart_at_or_before(first);
+    }
+    let end_secs = a.frame_start_secs(first) + b.duration_secs();
+    let mut last = a.frame_at(end_secs);
+    if a.format != Format::Dts {
+        last = a.restart_at_or_after(last);
+    }
+    let last = last.max(first);
+    let pieces = [(&a, 0, first), (&b, 0, b.frames.len()), (&a, last, a.frames.len())];
+    write_pieces(&a, &pieces, out)?;
+    Ok((a.frame_start_secs(first), a.frame_start_secs(last) - a.frame_start_secs(first)))
+}
+
+/// Insert all of `insert` into `base` at `at` seconds without removing anything.
+pub fn insert(base: &Path, insert: &Path, at: f64, out: &Path) -> Result<f64> {
+    let (a, b) = (Stream::open(base)?, Stream::open(insert)?);
+    check_compatible(&a, &b)?;
+    let mut first = a.frame_at(at);
+    if a.format != Format::Dts {
+        first = a.restart_at_or_before(first);
+    }
+    let pieces = [(&a, 0, first), (&b, 0, b.frames.len()), (&a, first, a.frames.len())];
+    write_pieces(&a, &pieces, out)?;
+    Ok(a.frame_start_secs(first))
+}
+
 fn copy_frames<R: Read + Seek, W: Write>(src: &mut R, w: &mut W, data_start: u64, frames: &[Frame]) -> Result<()> {
     // frames are contiguous in practice: copy runs in large reads
     let mut i = 0;
@@ -730,5 +808,31 @@ mod tests {
         let joined = dir.join("joined.thd");
         append(&[&parts[0], &parts[1]], &joined).unwrap();
         assert_eq!(std::fs::read(&joined).unwrap(), std::fs::read(&src).unwrap());
+    }
+
+    #[test]
+    fn replace_and_insert_swap_whole_restart_groups() {
+        let dir = std::env::temp_dir().join(format!("sw_tools_rep_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.thd");
+        std::fs::write(&base, fake_thd(40)).unwrap();
+        let mut marked = fake_thd(8);
+        for i in 0..8 {
+            marked[i * 64 + 20] = 0xAA;
+        }
+        let ins = dir.join("ins.thd");
+        std::fs::write(&ins, &marked).unwrap();
+        let out = dir.join("out.thd");
+        // 12 frames in (a restart): replacing eight frames removes frames 12..20
+        let at = 12.0 * 40.0 / 48_000.0;
+        let (start, removed) = replace(&base, &ins, at, &out).unwrap();
+        assert!((start - at).abs() < 1e-9 && (removed - 8.0 * 40.0 / 48_000.0).abs() < 1e-9);
+        let data = std::fs::read(&out).unwrap();
+        assert_eq!(data.len(), 40 * 64);
+        for i in 0..40 {
+            assert_eq!(data[i * 64 + 20] == 0xAA, (12..20).contains(&i), "frame {i}");
+        }
+        insert(&base, &ins, at, &out).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap().len(), 48 * 64);
     }
 }

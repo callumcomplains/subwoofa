@@ -49,6 +49,24 @@ enum ToolsCmd {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Replace the stretch of the first stream that the second covers (Join/Replace), starting at --at seconds.
+    Replace {
+        base: PathBuf,
+        with: PathBuf,
+        #[arg(long)]
+        at: f64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Insert the second stream into the first at --at seconds without removing anything.
+    Insert {
+        base: PathBuf,
+        with: PathBuf,
+        #[arg(long)]
+        at: f64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Decode the whole stream and report decoder complaints and the PCM MD5.
     Verify {
         file: PathBuf,
@@ -439,6 +457,14 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
             let refs: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
             sw_tools::append(&refs, &output).map_err(e)?;
             println!("wrote {}", output.display());
+        }
+        ToolsCmd::Replace { base, with, at, output } => {
+            let (start, removed) = sw_tools::replace(&base, &with, at, &output).map_err(e)?;
+            println!("wrote {} (insert at {:.3} s, {:.3} s of the original replaced)", output.display(), start, removed);
+        }
+        ToolsCmd::Insert { base, with, at, output } => {
+            let start = sw_tools::insert(&base, &with, at, &output).map_err(e)?;
+            println!("wrote {} (inserted at {:.3} s)", output.display(), start);
         }
         ToolsCmd::Verify { file, ffmpeg } => {
             let ff = ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg).ok_or("ffmpeg not found")?;

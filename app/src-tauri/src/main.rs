@@ -225,6 +225,21 @@ async fn tools_append(inputs: Vec<String>, output: String) -> Result<String, Str
 }
 
 #[tauri::command]
+async fn tools_replace(path: String, with: String, at: f64, output: String, insert: bool) -> Result<String, String> {
+    blocking(move || {
+        let (base, with, out) = (std::path::Path::new(&path), std::path::Path::new(&with), std::path::Path::new(&output));
+        if insert {
+            let t = sw_tools::insert(base, with, at, out).map_err(|e| e.to_string())?;
+            Ok(format!("Wrote {output}\nInserted at {t:.3} s"))
+        } else {
+            let (t, removed) = sw_tools::replace(base, with, at, out).map_err(|e| e.to_string())?;
+            Ok(format!("Wrote {output}\nReplaced {removed:.3} s starting at {t:.3} s"))
+        }
+    })
+    .await
+}
+
+#[tauri::command]
 async fn tools_verify(path: String) -> Result<sw_tools::VerifyReport, String> {
     blocking(move || {
         let ff = ff::find_ffmpeg().ok_or("ffmpeg was not found, and it does the decoding for the check")?;
@@ -380,7 +395,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_verify
+            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_verify
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");

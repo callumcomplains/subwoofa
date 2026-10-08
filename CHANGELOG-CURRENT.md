@@ -76,3 +76,9 @@ Newest entries at the bottom. Started 2026-10-08.
 - Per block and per band (the four bands of Table 7.25) the encoder sends sum/difference when it leaves less energy to code, using the spec's "minimum sum" rule; flags are only resent when they change; blocks whose two channels differ in block switching are never rematrixed.
 - Joint-stereo test material at 96 kbps: 19.2 dB with plain L/R, 21.0 dB rematrixed (decoded by FFmpeg).
 - `SW_AC3_NOREMAT=1` switches it off for A/B tests. Coupling is still not implemented.
+
+## StreamTools: Replace and Insert
+- `subwoofa tools replace BASE WITH --at SECS -o OUT` swaps the stretch of BASE that WITH covers for WITH (the Join/Replace tool); `tools insert` adds WITH at a point without removing anything. Both work on DTS, DTS-HD, TrueHD and MLP, copy bytes untouched, snap cuts to frames decoding can start at (restart points for TrueHD/MLP) and patch the `.dtshd` header totals.
+- GUI: new Replace tab in StreamTools (replacement stream, time, "Insert only").
+- Checked on a 30 s DTS-HD MA 7.1 stream: replacing 12 s onward with a 4 s cut of itself gives the same length, 2813 restart points and a clean decode in the verifier.
+- Still not implemented: Re-stripe and Add Silence (generating silence needs an encoder configured exactly like the source stream).

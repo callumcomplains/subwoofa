@@ -703,6 +703,19 @@ function initTools() {
     try { toolsLog(await invoke("tools_append", { inputs: [tools.path, ...tools.extra], output: out }), "ok"); }
     catch (e) { toolsLog(String(e), "bad"); }
   };
+  $("tRepOpen").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: STREAM_FILTERS });
+    if (f) $("tRepPath").value = f;
+  };
+  $("tRepRun").onclick = async () => {
+    if (!needStream()) return;
+    if (!$("tRepPath").value) { toolsLog("Choose the replacement stream first.", "bad"); return; }
+    const out = await dialog.save({ defaultPath: suggestName("_replaced"), filters: STREAM_FILTERS });
+    if (!out) return;
+    toolsLog("Writing…");
+    try { toolsLog(await invoke("tools_replace", { path: tools.path, with: $("tRepPath").value, at: Number($("tRepAt").value) || 0, output: out, insert: $("tRepInsert").checked }), "ok"); }
+    catch (e) { toolsLog(String(e), "bad"); }
+  };
   $("tVerify").onclick = async () => {
     if (!needStream()) return;
     toolsLog("Decoding…");
