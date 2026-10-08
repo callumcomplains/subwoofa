@@ -30,7 +30,11 @@ Early foundation. What works today:
 | `--start` / `--duration` partial encodes | done |
 | Downmix matrices (Lo/Ro, 7.x to 5.1), safe trim, clip check (CLI `downmix-check` and GUI) | done |
 | Desktop GUI (Tauri): format cascade, layout picker, bit-rate presets, unlocked mode, downmix tab | done |
-| DTS Express (LBR), HRA/MA at 96/24 and above 7.1, AC-3 block switching / coupling | planned - see `docs/ROADMAP.md` |
+| Native DTS-HD Express (LBR): 1.0 to 5.1 with LFE at 48 kHz, 48-510 kbps, `.dtshd` (modest quality; no tonal components yet) | working |
+| AC-3 block switching (spec transient detector) and 2/0 rematrixing | working |
+| NHK 22.2 input (24 mono files, auto-import) mixed down to any supported layout by panning | working |
+| StreamTools replace / insert (CLI and GUI) | working |
+| HRA/MA at 96/24 core and above 7.1, AC-3 coupling, E-AC-3 tools | planned - see `docs/ROADMAP.md` |
 | Dolby Atmos | deferred |
 
 ## Build
