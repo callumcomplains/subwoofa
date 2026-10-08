@@ -243,6 +243,10 @@ const SUBBANDS: usize = BANDS;
 const AMP_MAX: usize = 56;
 const MIN_MONO: usize = 2;
 const MAX_MONO: usize = 18;
+/// Narrowest coded bandwidth (in bands) the rate control may fall back to.
+const MIN_K: usize = 6;
+/// Channel pairs need the whole mono region (the decoder reads indices for it in the second pass).
+const MIN_K_PAIR: usize = MAX_MONO;
 
 /// Everything derived from the time samples of one channel for one frame and quantizer profile.
 struct ChanCoding {
@@ -265,9 +269,25 @@ impl LbrEncoder {
         if cfg.channels == 0 || cfg.channels > 5 {
             return Err(crate::Error::Unsupported("DTS Express: 1 to 5 full-band channels".into()));
         }
+        let floor = Self::min_bitrate(cfg.channels, cfg.lfe);
+        if cfg.bitrate < floor {
+            return Err(crate::Error::Unsupported(format!(
+                "this layout needs at least {} kbps in DTS Express (the encoder cannot code it any smaller yet); {} kbps was asked for",
+                floor / 1000 + 1,
+                cfg.bitrate / 1000
+            )));
+        }
         let frame_bytes = (cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 8) as usize;
         let n = cfg.channels;
         Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, cfg })
+    }
+
+    /// Smallest bit rate (bits per second) the encoder can honour: about 108 kbps per channel pair at its
+    /// cheapest setting, about 35 kbps for a lone channel, a few kbps for the LFE.
+    pub fn min_bitrate(channels: usize, lfe: bool) -> u32 {
+        let pairs = channels / 2;
+        let lone = channels % 2;
+        (pairs as u32 * 108_000 + lone as u32 * if channels == 1 { 48_000 } else { 36_000 }) + if lfe { 3_000 } else { 0 }
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -383,7 +403,7 @@ impl LbrEncoder {
         // binary search finds the first one that fits
         let mut cands: Vec<(u32, usize)> = Vec::new();
         for &p in &profiles {
-            for k in (24..=SUBBANDS).rev() {
+            for k in (if self.cfg.channels > 1 { MIN_K_PAIR } else { MIN_K }..=SUBBANDS).rev() {
                 cands.push((p, k));
             }
         }
@@ -395,6 +415,18 @@ impl LbrEncoder {
             let bytes: usize = chunks.iter().map(|c| c.len()).sum();
             (bytes <= budget).then_some(chunks)
         };
+        if let Ok(v) = std::env::var("SW_LBR_FIXED") {
+            let mut it = v.split(',').map(|s| s.parse::<usize>().unwrap());
+            let (p, k) = (it.next().unwrap() as u32, it.next().unwrap());
+            let mut chunks = Vec::new();
+            for pair in 0..npairs {
+                chunks.extend(self.write_pair(pair, ts, p, k));
+            }
+            if std::env::var_os("SW_LBR_DEBUG").is_some() {
+                eprintln!("fixed bytes {} chunks {:?}", chunks.iter().map(|c| c.len()).sum::<usize>(), chunks.iter().map(|c| c.len()).collect::<Vec<_>>());
+            }
+            return self.assemble(chunks);
+        }
         let (mut lo, mut hi) = (0usize, cands.len());
         let mut chosen: Option<Vec<Vec<u8>>> = None;
         while lo < hi {
@@ -410,7 +442,7 @@ impl LbrEncoder {
         let chunks = chosen.unwrap_or_else(|| {
             let mut c = Vec::new();
             for pair in 0..npairs {
-                c.extend(self.write_pair(pair, ts, 0, 18));
+                c.extend(self.write_pair_ex(pair, ts, 0, if self.cfg.channels > 1 { MIN_K_PAIR } else { MIN_K }, true));
             }
             c
         });
@@ -436,10 +468,17 @@ impl LbrEncoder {
         out.push((((br >> 16) & 0xF) | (((br >> 16) & 0xF) << 4)) as u8);
         out.extend_from_slice(&(br as u16).to_le_bytes());
         out.extend_from_slice(&(br as u16).to_le_bytes());
-        let pad = self.frame_bytes.saturating_sub(out.len() + 3 + body.len());
-        let len = body.len() + pad;
-        out.push(0x86); // frame chunk without checksum
+        // frame chunk with its 16-bit checksum: the id byte, both length bytes and every byte after the checksum
+        if std::env::var_os("SW_LBR_DEBUG").is_some() && out.len() + 5 + body.len() > self.frame_bytes {
+            eprintln!("frame {} overshoots: {} bytes against {}", self.frames, out.len() + 5 + body.len(), self.frame_bytes);
+        }
+        let pad = self.frame_bytes.saturating_sub(out.len() + 3 + 2 + body.len());
+        let len = 2 + body.len() + pad;
+        let mut csum: u32 = 0x84 + (len >> 8) as u32 + (len & 0xFF) as u32;
+        csum += body.iter().map(|b| *b as u32).sum::<u32>();
+        out.push(0x84);
         out.extend_from_slice(&(len as u16).to_be_bytes());
+        out.extend_from_slice(&(csum as u16).to_be_bytes());
         out.extend_from_slice(&body);
         out.resize(out.len() + pad, 0);
         out
@@ -552,12 +591,30 @@ impl LbrEncoder {
 
     /// The four chunks of one channel pair (or of a lone channel).
     fn write_pair(&self, pair: usize, ts: &[Vec<Vec<f64>>], profile: u32, k: usize) -> Vec<Vec<u8>> {
+        self.write_pair_ex(pair, ts, profile, k, false)
+    }
+
+    /// `muted`: emergency mode, every coded sample becomes the zero symbol (keeps the stream legal when even
+    /// the cheapest setting does not fit the frame).
+    fn write_pair_ex(&self, pair: usize, ts: &[Vec<Vec<f64>>], profile: u32, k: usize, muted: bool) -> Vec<Vec<u8>> {
         let ch1 = pair * 2;
         let ch2 = (ch1 + 1).min(self.cfg.channels - 1);
         let stereo = ch1 != ch2;
         let levels = levels_from_profile(profile, SUBBANDS, 48_000);
-        let c1 = self.code_channel(&ts[ch1], &levels, k);
-        let c2 = if stereo { Some(self.code_channel(&ts[ch2], &levels, k)) } else { None };
+        let mut c1 = self.code_channel(&ts[ch1], &levels, k);
+        let mut c2 = if stereo { Some(self.code_channel(&ts[ch2], &levels, k)) } else { None };
+        if muted {
+            for c in std::iter::once(&mut c1).chain(c2.as_mut()) {
+                for sb in 0..SUBBANDS {
+                    let zero = nearest(&alphabet(levels[sb]), 0.0) as i32;
+                    for slot in c.q[sb].iter_mut() {
+                        for v in slot.iter_mut() {
+                            *v = zero;
+                        }
+                    }
+                }
+            }
+        }
         let pid = pair as u8;
         let mut chunks = Vec::new();
 

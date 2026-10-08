@@ -87,7 +87,8 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     if let Some(l) = lbr {
         a.put(2, 2); // coding mode: low bit rate
         a.put(l.len() as u32 - 1, 14);
-        a.put(0, 1); // no sync distance
+        a.put(1, 1); // LBR sync word present in every frame
+        a.put(0, 2); // sync distance 0 frames
     } else if p.with_core || xbr.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
         let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
@@ -192,5 +193,13 @@ pub fn dtshd_header(h: &DtsHdHeader, data_len: u64) -> Vec<u8> {
     chunk(b"AUPR-HDR", &aupr);
     out.extend_from_slice(b"STRMDATA");
     out.extend_from_slice(&data_len.to_be_bytes());
+    out
+}
+
+/// Container header for a DTS Express (LBR) stream: constant bit rate, extension substream only (no core).
+pub fn dtshd_header_lbr(h: &DtsHdHeader, data_len: u64) -> Vec<u8> {
+    let mut out = dtshd_header(h, data_len);
+    out[16 + 11] = 0x10; // only the extension substream mask
+    out[48 + 2] = 0x08; // LBR encoding, no backward compatible core, constant rate
     out
 }

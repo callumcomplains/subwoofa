@@ -82,3 +82,9 @@ Newest entries at the bottom. Started 2026-10-08.
 - GUI: new Replace tab in StreamTools (replacement stream, time, "Insert only").
 - Checked on a 30 s DTS-HD MA 7.1 stream: replacing 12 s onward with a 4 s cut of itself gives the same length, 2813 restart points and a clean decode in the verifier.
 - Still not implemented: Re-stripe and Add Silence (generating silence needs an encoder configured exactly like the source stream).
+
+## DTS Express now passes DTS's own verifier
+- The first Express streams decoded in FFmpeg but failed `DTSHDVerify.exe` at frame 0. Causes found by experiment: the extension-substream descriptor must say the LBR sync word is present (and give a sync distance of 0); frames now carry the checksummed frame chunk (id 0x04); and the `.dtshd` header now says "LBR encoding, no core, constant bit rate" instead of copying the lossless template.
+- Result: mono, stereo, 3.0, 4.0, 2.1/3.1/4.1, 5.0 and 5.1 streams verify with every frame accepted.
+- Constant frame size is enforced. A channel pair cannot be coded below the full mono region (the decoder reads those band indices in its second pass), so the cheapest setting costs about 108 kbps per pair, 36-48 kbps for a lone channel and 3 kbps for the LFE. The encoder now refuses lower rates with a clear message, the format catalogue shows the real minimum per layout (for example 5.1: 255 to 510 kbps), and if a loud frame still does not fit, the cheapest legal setting with muted coefficients is written instead of an oversize frame.
+- Still open for Express: band-limit flags (would allow lower rates), tonal components, LFE at 24 bits.

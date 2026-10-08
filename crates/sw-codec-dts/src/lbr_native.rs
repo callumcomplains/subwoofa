@@ -1,6 +1,6 @@
 //! File-level driver for DTS Express: stems in, `.dtshd` out (extension substream frames only).
 
-use crate::exss::{dtshd_header, exss_frame_lbr, DtsHdHeader, ExssParams};
+use crate::exss::{dtshd_header_lbr as dtshd_header, exss_frame_lbr, DtsHdHeader, ExssParams};
 use crate::lbr::{LbrConfig, LbrEncoder};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;

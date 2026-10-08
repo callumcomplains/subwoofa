@@ -194,7 +194,13 @@ pub fn bitrate_range_kbps(
             let lo = if layout.main_channels() >= 5 { 754 } else { 255 };
             Some((lo, 1509))
         }
-        StreamType::DtsExpress => Some((48, 510)),
+        StreamType::DtsExpress => {
+            // the native encoder needs about 108 kbps per channel pair, 36-48 for a lone channel, 3 for the LFE
+            let main = layout.main_channels() as u32;
+            let lone = main % 2;
+            let lo = (main / 2) * 108 + lone * if main == 1 { 48 } else { 36 } + u32::from(layout.has_lfe()) * 3;
+            Some((lo.clamp(48, 510), 510))
+        }
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
@@ -219,7 +225,7 @@ pub fn bitrate_presets(
             &[192, 256, 384, 448, 512, 768, 1024, 1411, 1509]
         }
         StreamType::DtsHdHra => &[2046, 2500, 3018, 3500, 4000, 4500, 5000, 5376, 5760],
-        StreamType::DtsExpress => &[48, 64, 96, 128, 192, 256, 384, 510],
+        StreamType::DtsExpress => &[48, 64, 96, 128, 192, 256, 320, 384, 510],
         _ => &[],
     };
     common.iter().copied().filter(|b| (lo..=hi).contains(b)).collect()
