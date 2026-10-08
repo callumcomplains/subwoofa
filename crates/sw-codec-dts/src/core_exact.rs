@@ -399,12 +399,18 @@ impl FixedSynth {
     }
 
     fn step64(&mut self, input32: &[i32; 32], out: &mut [i32]) {
-        let window: &[i32; 1024] = &FIR64_FIXED;
-        let off = self.offset;
         let mut input = [0i32; 64];
         input[..32].copy_from_slice(input32);
+        self.step64_full(&input, out);
+    }
+
+    /// One block of the 64-band bank with all 64 subband samples given (only for `x96` synthesis).
+    pub fn step64_full(&mut self, input: &[i32; 64], out: &mut [i32]) {
+        assert!(self.x96);
+        let window: &[i32; 1024] = &FIR64_FIXED;
+        let off = self.offset;
         let mut synth = [0i32; 64];
-        imdct_half_64(&mut synth, &input);
+        imdct_half_64(&mut synth, input);
         self.hist1[off..off + 64].copy_from_slice(&synth);
         let buf = &self.hist1;
         let at = |idx: usize| -> i64 { buf[(off + idx) & 1023] as i64 };

@@ -84,6 +84,8 @@ pub struct Request<'a> {
     pub es: Option<EsOptions>,
     /// DTS-HD High Resolution: total bit rate (core plus XBR extension) in kbit/s.
     pub hra_kbps: Option<u32>,
+    /// DTS 96/24: the stems are 96 kHz and an X96 extension follows the core.
+    pub x96: bool,
 }
 
 pub struct Stats {
@@ -92,6 +94,9 @@ pub struct Stats {
 }
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+    if req.x96 {
+        return crate::native96::encode_to_file(stems, req, on_progress, cancel);
+    }
     // channels that go into the core (a separate Cs is folded into the surrounds first)
     let mix_cs = req.es.map_or(false, |e| e.mix_cs);
     let core_idx: Vec<usize> = (0..req.layout.channels.len()).filter(|&i| !(mix_cs && req.layout.channels[i] == Channel::Cs)).collect();

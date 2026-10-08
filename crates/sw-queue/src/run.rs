@@ -161,7 +161,7 @@ fn execute_inner(
         }
     }
     let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::DtsHdMa) {
+    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa) {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
     let mut stems = stems;
@@ -217,10 +217,11 @@ fn execute_inner(
             sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
         })?;
-    } else if native && matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra) {
+    } else if native && matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624) {
         let req = sw_codec_dts::native::Request {
             layout,
             bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { spec.bitrate.unwrap_or(1509) },
+            x96: stream == StreamType::Dts9624,
             hra_kbps: if stream == StreamType::DtsHdHra { Some(spec.bitrate.unwrap_or(3018)) } else { None },
             dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
             pcm_bits: (stems.bits as u32).clamp(16, 24),

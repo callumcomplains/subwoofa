@@ -55,7 +55,7 @@ fn catalog() -> Catalog {
                     lossless: s.is_lossless(),
                     sample_rates: s.sample_rates(),
                     available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
-                    native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::DtsHdMa),
+                    native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
                 })
                 .collect(),
         })
@@ -68,7 +68,7 @@ fn catalog() -> Catalog {
             lossless: s.is_lossless(),
             sample_rates: s.sample_rates(),
             available: ff::supports(*s) || matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd),
-            native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::DtsHdMa),
+            native: matches!(*s, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa),
         })
         .collect();
     Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }

@@ -102,6 +102,11 @@ pub struct Encoder {
     /// `last_residual` (`[channel][band][block]`, primary channels only) for the XBR extension.
     pub keep_residual: bool,
     pub last_residual: Vec<Vec<Vec<f64>>>,
+    /// The core's reconstructed subband samples of the last frame (`[channel][band][block]`), kept with
+    /// `keep_residual`.
+    pub last_deq: Vec<Vec<Vec<i32>>>,
+    /// Bytes at the end of every frame reserved for the X96 extension (96/24 streams).
+    pub x96_reserve: usize,
 }
 
 struct ExactState {
@@ -162,6 +167,8 @@ impl Encoder {
             last_core_pcm: Vec::new(),
             keep_residual: false,
             last_residual: Vec::new(),
+            last_deq: Vec::new(),
+            x96_reserve: 0,
             cfg,
         })
     }
@@ -220,7 +227,7 @@ impl Encoder {
     pub fn encode_subbands(&mut self, sub: &[Vec<Vec<f64>>], lfe: Option<(Vec<i32>, u8)>) -> Vec<u8> {
         let blocks = self.cfg.blocks;
         // 3. allocation: highest quality that fits the frame
-        let budget = self.frame_bytes * 8;
+        let budget = (self.frame_bytes - self.x96_reserve) * 8;
         let power: Vec<[f64; BANDS]> = sub
             .iter()
             .map(|c| {
@@ -287,8 +294,10 @@ impl Encoder {
         let bytes = self.pack(&best, lfe.as_ref());
         if self.keep_residual {
             let mut res = Vec::with_capacity(self.cfg.channels);
+            let mut all_deq = Vec::with_capacity(self.cfg.channels);
             for ch in 0..self.cfg.channels {
                 let mut bands = Vec::with_capacity(BANDS);
+                let mut deqs = Vec::with_capacity(BANDS);
                 for b in 0..BANDS {
                     let k = best.abits[ch][b] as usize;
                     let mut deq = vec![0i32; blocks];
@@ -297,10 +306,13 @@ impl Encoder {
                         dequantize(&best.q[ch][b], STEP_LOSSY[k] as i32, scale, &mut deq);
                     }
                     bands.push(sub[ch][b].iter().zip(&deq).map(|(v, d)| v - *d as f64).collect());
+                    deqs.push(deq);
                 }
                 res.push(bands);
+                all_deq.push(deqs);
             }
             self.last_residual = res;
+            self.last_deq = all_deq;
         }
         if self.exact.is_some() {
             self.emulate_decoder(&best, lfe.as_ref());
@@ -542,8 +554,8 @@ impl Encoder {
         w.put(0, 1); // time stamp
         w.put(0, 1); // auxiliary data
         w.put(0, 1); // HDCD
-        w.put(0, 3); // extension audio id: XCH
-        w.put(u32::from(cfg.xch), 1); // extension audio present
+        w.put(if self.x96_reserve > 0 { 2 } else { 0 }, 3); // extension audio id: XCH (0) or X96 (2)
+        w.put(u32::from(cfg.xch || self.x96_reserve > 0), 1); // extension audio present
         w.put(0, 1); // DSYNC only per subframe
         w.put(if cfg.lfe { 2 } else { 0 }, 2); // LFE interpolation by 64
         w.put(1, 1); // predictor history valid
