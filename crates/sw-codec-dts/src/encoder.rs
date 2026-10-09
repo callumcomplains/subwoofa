@@ -87,6 +87,54 @@ const LFE_GAIN: f64 = 1.1541;
 /// Samples the LFE path is delayed to line up with the subband path.
 const LFE_ALIGN: usize = 32;
 
+/// 512-tap decimation filter (unit DC gain) for the LFE channel. The decoder's interpolation filter already
+/// rolls off (-2.5 dB at 80 Hz, -3.9 dB at 100 Hz), so the encoder side is designed as its inverse up to
+/// 110 Hz (boost capped at 6 dB), tapering to zero by 260 Hz: the LFE comes back flat instead of doubly
+/// attenuated.
+fn lfe_decimator() -> Vec<f64> {
+    use std::f64::consts::PI;
+    let n = 512usize;
+    let decoder = |f: f64| -> f64 {
+        let (mut re, mut im) = (0.0, 0.0);
+        for (i, h) in LFE_FIR_64.iter().enumerate() {
+            let a = -2.0 * PI * f / 48_000.0 * i as f64;
+            re += h * a.cos();
+            im += h * a.sin();
+        }
+        (re * re + im * im).sqrt() / 64.0
+    };
+    let dc = decoder(0.0);
+    let want = |f: f64| -> f64 {
+        if f <= 110.0 {
+            (dc / decoder(f)).min(2.0)
+        } else if f < 260.0 {
+            let t = (f - 110.0) / 150.0;
+            (dc / decoder(110.0)).min(2.0) * 0.5 * (1.0 + (PI * t).cos())
+        } else {
+            0.0
+        }
+    };
+    // sample the wanted magnitude, linear phase with the filter centre at (n - 1) / 2
+    let centre = (n as f64 - 1.0) / 2.0;
+    let grid = 4096usize;
+    let mut h = vec![0.0f64; n];
+    for (i, v) in h.iter_mut().enumerate() {
+        let t = i as f64 - centre;
+        let mut acc = want(0.0);
+        for k in 1..grid / 2 {
+            let f = 48_000.0 * k as f64 / grid as f64;
+            if f > 300.0 {
+                break;
+            }
+            acc += 2.0 * want(f) * (2.0 * PI * k as f64 / grid as f64 * t).cos();
+        }
+        let w = 0.5 * (1.0 + (2.0 * PI * (i as f64 + 0.5 - n as f64 / 2.0) / n as f64).cos());
+        *v = acc / grid as f64 * w;
+    }
+    let sum: f64 = h.iter().sum();
+    h.iter().map(|v| v / sum).collect()
+}
+
 pub struct Encoder {
     cfg: Config,
     analysis: Vec<Analysis>,
@@ -111,6 +159,22 @@ pub struct Encoder {
     pub last_deq: Vec<Vec<Vec<i32>>>,
     /// Bytes at the end of every frame reserved for the X96 extension (96/24 streams).
     pub x96_reserve: usize,
+    /// Replaces the core frame's fixed header size in the bit count (XXCH extension encoders).
+    header_bits_override: Option<usize>,
+}
+
+/// An XXCH extension (DTS-HD HRA 6.1/7.1): channels beyond the core's five, coded like core channels in the
+/// extension substream. All masks use the DTS loudspeaker bit positions (C 0, L 1, R 2, Ls 3, Rs 4, LFE 5, Cs 6,
+/// Lsr 7, Rsr 8, Lss 9, Rss 10).
+pub struct XxchParams {
+    /// Speakers of the core (with Ls/Rs written as Lss/Rss when the core carries the sides).
+    pub core_mask: u32,
+    /// Speakers of the channels coded here, in coding order.
+    pub spk_mask: u32,
+    pub mask_bits: u32,
+    /// Embedded downmix: the pre-scaling code (6 bits) applied to every core channel and, per extension
+    /// channel, the core speakers it was added to with the 7-bit coefficient code (sign bit 6, magnitude 0..=63).
+    pub dmix: Option<(u32, Vec<Vec<(u32, u32)>>)>,
 }
 
 struct ExactState {
@@ -155,9 +219,7 @@ impl Encoder {
             return Err(Error::Unsupported(format!("frame size of {frame_bytes} bytes is outside what {} channels need (>= {min})", cfg.channels)));
         }
         let lfe_decim = 64usize;
-        // symmetric 512-tap decimation filter with unit DC gain
-        let sum: f64 = LFE_FIR_64.iter().sum();
-        let lfe_fir: Vec<f64> = LFE_FIR_64.iter().map(|v| v / sum).collect();
+        let lfe_fir = lfe_decimator();
         Ok(Encoder {
             analysis: (0..cfg.channels + usize::from(cfg.xch)).map(|_| Analysis::new(cfg.perfect)).collect(),
             lfe_hist: vec![0.0; 512],
@@ -173,6 +235,7 @@ impl Encoder {
             last_residual: Vec::new(),
             last_deq: Vec::new(),
             x96_reserve: 0,
+            header_bits_override: None,
             cfg,
         })
     }
@@ -226,8 +289,8 @@ impl Encoder {
         self.encode_subbands(&sub, lfe)
     }
 
-    /// Encode one frame from ready-made subband samples `sub[ch][band][block]` (bypasses the analysis bank).
-    pub fn encode_subbands(&mut self, sub: &[Vec<Vec<f64>>], lfe: Option<(Vec<i32>, u8)>) -> Vec<u8> {
+    /// Highest quality plan that fits the frame (the budget is the frame minus any X96 reserve).
+    fn search_plan(&mut self, sub: &[Vec<Vec<f64>>]) -> Plan {
         let blocks = self.cfg.blocks;
         // 3. allocation: highest quality that fits the frame
         let budget = (self.frame_bytes - self.x96_reserve) * 8;
@@ -260,6 +323,13 @@ impl Encoder {
             let used: Vec<f64> = best.abits.iter().map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0).collect();
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
         }
+        best
+    }
+
+    /// Encode one frame from ready-made subband samples `sub[ch][band][block]` (bypasses the analysis bank).
+    pub fn encode_subbands(&mut self, sub: &[Vec<Vec<f64>>], lfe: Option<(Vec<i32>, u8)>) -> Vec<u8> {
+        let blocks = self.cfg.blocks;
+        let best = self.search_plan(sub);
         let t_b = std::time::Instant::now();
         let bytes = self.pack(&best, lfe.as_ref());
         T_PACK.fetch_add(t_b.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -539,6 +609,9 @@ impl Encoder {
 
     /// Frame header + primary audio coding header + fixed parts of the subframe.
     fn header_bits(&self) -> usize {
+        if let Some(h) = self.header_bits_override {
+            return h;
+        }
         let nch = self.cfg.channels;
         104 + 7 + 5 * nch + 5 * nch + 3 * nch + 2 * nch + 3 * nch + 3 * nch + 5 + BANDS * nch
     }
@@ -723,6 +796,184 @@ impl Encoder {
         assert!(bytes.len() <= self.frame_bytes, "frame overflow: {} > {}", bytes.len(), self.frame_bytes);
         bytes.resize(self.frame_bytes, 0);
         bytes
+    }
+
+    /// XXCH extension frame for the channels of this encoder (which must be set up like a core encoder for
+    /// those channels): analysis, rate search to `total_bytes`, packing. `pcm` holds one slice of
+    /// `frame_samples()` per channel.
+    pub fn encode_xxch(&mut self, pcm: &[Vec<f64>], total_bytes: usize, p: &XxchParams) -> Vec<u8> {
+        let nch = self.cfg.channels;
+        let blocks = self.cfg.blocks;
+        assert_eq!(pcm.len(), nch);
+        let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
+        {
+            use rayon::prelude::*;
+            self.analysis.par_iter_mut().zip(sub.par_iter_mut()).zip(pcm.par_iter()).for_each(|((an, out), input)| {
+                for b in 0..blocks {
+                    let mut o = [0f64; BANDS];
+                    an.step(&input[b * 32..b * 32 + 32], &mut o);
+                    for (band, v) in o.iter().enumerate() {
+                        out[band][b] = v * SUBBAND_GAIN;
+                    }
+                }
+            });
+        }
+        self.frame_bytes = total_bytes;
+        self.x96_reserve = 0;
+        // fixed parts: frame header, channel set header without the per-channel selector tables, ADPCM flags
+        let hdr = Self::xxch_set_header_fixed_bits(p, nch).div_ceil(8) * 8 + 16;
+        self.header_bits_override = Some(88 + hdr + BANDS * nch + 8);
+        let plan = self.search_plan(&sub);
+        self.pack_xxch(&plan, p, total_bytes)
+    }
+
+    fn xxch_set_header_fixed_bits(p: &XxchParams, nch: usize) -> usize {
+        let nb = p.mask_bits as usize;
+        let mut bits = 7 + 3 + (nb - 6) + 1;
+        if let Some((_, maps)) = &p.dmix {
+            bits += 1 + 6 + nb * nch + maps.iter().map(|m| 7 * m.len()).sum::<usize>();
+        }
+        bits + nch * (5 + 5 + 3 + 2 + 3 + 3)
+    }
+
+    /// The XXCH frame: frame header, one channel set (header and subframe), padded to `total` bytes.
+    fn pack_xxch(&self, plan: &Plan, p: &XxchParams, total: usize) -> Vec<u8> {
+        let nch = self.cfg.channels;
+        let nssc = self.cfg.blocks / 8;
+        let nb = p.mask_bits;
+        // ---- channel set header
+        let mut w = BitWriter::new();
+        w.put(0, 7); // size, patched below
+        w.put(nch as u32 - 1, 3);
+        w.put(p.spk_mask >> 6, nb - 6);
+        match &p.dmix {
+            Some((scale, maps)) => {
+                w.put(1, 1);
+                w.put(1, 1); // the downmix is already in the core
+                w.put(*scale, 6);
+                for m in maps {
+                    w.put(m.iter().fold(0, |a, (spk, _)| a | (1 << spk)), nb);
+                }
+                for m in maps {
+                    let mut sorted = m.clone();
+                    sorted.sort_by_key(|(spk, _)| *spk);
+                    for (_, code) in sorted {
+                        w.put(code, 7);
+                    }
+                }
+            }
+            None => w.put(0, 1),
+        }
+        for _ in 0..nch {
+            w.put(30, 5); // 32 active subbands
+        }
+        for _ in 0..nch {
+            w.put(31, 5); // no high frequency VQ
+        }
+        for _ in 0..nch {
+            w.put(0, 3); // no joint intensity
+        }
+        for _ in 0..nch {
+            w.put(0, 2); // transient codebook A4
+        }
+        for _ in 0..nch {
+            w.put(6, 3); // 7-bit linear scale factors
+        }
+        for ch in 0..nch {
+            w.put(plan.bhuff[ch] as u32, 3);
+        }
+        for (i, nbits) in SEL_BITS.iter().enumerate() {
+            for ch in 0..nch {
+                w.put(plan.sel[ch][i] as u32, *nbits);
+            }
+        }
+        for (i, g) in GROUP_SIZE.iter().enumerate() {
+            for ch in 0..nch {
+                if (plan.sel[ch][i] as usize) < *g {
+                    w.put(0, 2);
+                }
+            }
+        }
+        w.align(8);
+        let size = w.bit_len() / 8 + 2;
+        let mut head = w.into_bytes();
+        head[0] = (head[0] & 0x01) | (((size - 1) as u8) << 1);
+        let crc = crate::xll::crc16(&head);
+        head.extend_from_slice(&crc.to_be_bytes());
+
+        // ---- subframe: side information then samples
+        let mut w = BitWriter::new();
+        for _ in 0..nch {
+            for _ in 0..BANDS {
+                w.put(0, 1); // no ADPCM
+            }
+        }
+        for ch in 0..nch {
+            for b in 0..BANDS {
+                let a = plan.abits[ch][b] as u32;
+                match plan.bhuff[ch] {
+                    6 => w.put(a, 5),
+                    5 => w.put(a, 4),
+                    j => {
+                        let (c, l) = BITALLOC_HUFF[j as usize][a as usize - 1];
+                        w.put(c as u32, l as u32);
+                    }
+                }
+            }
+        }
+        if nssc > 1 {
+            for ch in 0..nch {
+                for b in 0..BANDS {
+                    if plan.abits[ch][b] > 0 {
+                        let (c, l) = TMODE_HUFF[0][0];
+                        w.put(c as u32, l as u32);
+                    }
+                }
+            }
+        }
+        for ch in 0..nch {
+            for b in 0..BANDS {
+                if plan.abits[ch][b] > 0 {
+                    w.put(plan.scale_idx[ch][b] as u32, 7);
+                }
+            }
+        }
+        for ss in 0..nssc {
+            for ch in 0..nch {
+                for b in 0..BANDS {
+                    let k = plan.abits[ch][b] as usize;
+                    if k == 0 {
+                        continue;
+                    }
+                    let vals = &plan.q[ch][b][ss * 8..ss * 8 + 8];
+                    self.put_samples(&mut w, k, plan.sel[ch][k.min(10) - 1], vals);
+                }
+            }
+        }
+        w.put(0xFFFF, 16);
+        let data = w.into_bytes();
+        let set_bytes = head.len() + data.len();
+
+        // ---- frame header
+        let mut f = BitWriter::new();
+        f.put(0x4700_4A03, 32);
+        let hs = (32 + 6 + 1 + 5 + 2 + 14 + nb as usize).div_ceil(8) + 2;
+        f.put(hs as u32 - 1, 6);
+        f.put(1, 1); // channel set headers carry a CRC
+        f.put(nb - 1, 5);
+        f.put(0, 2); // one channel set
+        f.put(set_bytes as u32 - 1, 14);
+        f.put(p.core_mask, nb);
+        f.align(8);
+        let mut out = f.into_bytes();
+        let crc = crate::xll::crc16(&out[4..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+        debug_assert_eq!(out.len(), hs);
+        out.extend_from_slice(&head);
+        out.extend_from_slice(&data);
+        assert!(out.len() <= total, "XXCH overflow: {} > {}", out.len(), total);
+        out.resize(total, 0);
+        out
     }
 
     /// The XCH extension: the sixth channel coded like a core channel, ending at the end of the frame.

@@ -36,17 +36,22 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
 /// Build one extension substream frame carrying an XBR extension and/or an XLL frame (the core, if any,
 /// lives in the core substream).
 pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) -> Vec<u8> {
-    exss_build(p, xbr, xll, None)
+    exss_build(p, xbr, xll, None, None)
+}
+
+/// Build one extension substream frame carrying an XXCH extension (the core is in the core substream).
+pub fn exss_frame_xxch(p: &ExssParams, xxch: &[u8]) -> Vec<u8> {
+    exss_build(p, None, None, None, Some(xxch))
 }
 
 /// Build one extension substream frame around an LBR (DTS Express) payload.
 pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
-    exss_build(p, None, None, Some(lbr))
+    exss_build(p, None, None, Some(lbr), None)
 }
 
-fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>) -> Vec<u8> {
+fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>, xxch: Option<&[u8]>) -> Vec<u8> {
     let nb4f = 16u32;
-    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len());
+    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len()) + xxch.map_or(0, |x| x.len());
     // ---- asset descriptor (its own byte size)
     let mut a = BitWriter::new();
     a.put(0, 9); // size placeholder
@@ -62,7 +67,7 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         a.put(0, 1); // no embedded stereo downmix
     }
     if p.channels > 6 {
-        a.put(0, 1); // no embedded 5.1 downmix
+        a.put(u32::from(xxch.is_some()), 1); // embedded 5.1 downmix (inside the XXCH extension)
     }
     let mask_bits: u32 = if p.spk_mask <= 0xF { 4 } else if p.spk_mask <= 0xFF { 8 } else if p.spk_mask <= 0xFFF { 12 } else { 16 };
     a.put(1, 1); // speaker mask enabled
@@ -89,12 +94,15 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         a.put(l.len() as u32 - 1, 14);
         a.put(1, 1); // LBR sync word present in every frame
         a.put(0, 2); // sync distance 0 frames
-    } else if p.with_core || xbr.is_some() {
+    } else if p.with_core || xbr.is_some() || xxch.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
         if let Some(b) = xbr {
             a.put(b.len() as u32 - 1, 14);
+        }
+        if let Some(x) = xxch {
+            a.put(x.len() as u32 - 1, 14);
         }
         if let Some(x) = xll {
             write_xll(&mut a, x);
@@ -149,6 +157,9 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     let crc = crc16(&hb[5..]);
     hb.extend_from_slice(&crc.to_be_bytes());
     if let Some(x) = xbr {
+        hb.extend_from_slice(x);
+    }
+    if let Some(x) = xxch {
         hb.extend_from_slice(x);
     }
     if let Some(x) = xll {
