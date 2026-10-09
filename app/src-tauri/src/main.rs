@@ -144,6 +144,21 @@ fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>,
         .collect())
 }
 
+#[derive(Serialize)]
+struct WholeFile {
+    channels: usize,
+    mask: Option<u32>,
+    layout: Option<&'static str>,
+}
+
+/// Which of the given layouts a multichannel file fits (see `sw_pcm::suggest_layout`).
+#[tauri::command]
+fn multichannel_pick(path: String, candidates: Vec<String>) -> Result<WholeFile, String> {
+    let list: Vec<&'static ChannelLayout> = candidates.iter().filter_map(|id| ChannelLayout::find(id)).collect();
+    let (channels, mask, pick) = sw_pcm::suggest_layout(std::path::Path::new(&path), &list).map_err(|e| e.to_string())?;
+    Ok(WholeFile { channels, mask, layout: pick.map(|l| l.id) })
+}
+
 #[derive(Serialize, Default)]
 struct Probe {
     channels: Option<u32>,
@@ -441,7 +456,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            catalog, options, auto_import, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
+            catalog, options, auto_import, multichannel_pick, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
             tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, tools_verify
         ])

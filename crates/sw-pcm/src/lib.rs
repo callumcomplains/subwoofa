@@ -475,6 +475,34 @@ pub fn multichannel_inputs(layout: &'static ChannelLayout, path: &Path) -> Optio
     (n > 2 && n == layout.channel_count()).then(|| layout.channels.iter().map(|c| (*c, path.to_path_buf())).collect())
 }
 
+/// For one multichannel file: its channel count and speaker mask, and the first of `candidates` whose
+/// channels the file can fill (same channel count, and a speaker mask the layout fits; files with no mask or
+/// the common film-order masks are read in file order, so the layout with the film order wins there).
+pub fn suggest_layout(path: &Path, candidates: &[&'static ChannelLayout]) -> Result<(usize, Option<u32>, Option<&'static ChannelLayout>), Error> {
+    let r = PcmReader::open(path)?;
+    let n = r.info().channels as usize;
+    let mask = r.info().channel_mask.or_else(|| default_mask(n));
+    let positional = n <= 2 || matches!(mask, None | Some(0x63F) | Some(0x3F));
+    let mut fits: Vec<&'static ChannelLayout> = candidates
+        .iter()
+        .copied()
+        .filter(|l| l.channel_count() == n && (positional || mask.map_or(false, |m| map_channel_mask(l, m).is_some())))
+        .collect();
+    // the plain layouts before the ES matrix ones that list the same channels
+    fits.sort_by_key(|l| l.id.contains("premixed") || l.id.contains("matrix"));
+    let film: &[Channel] = match n {
+        2 => &[Channel::L, Channel::R],
+        3 => &[Channel::L, Channel::R, Channel::C],
+        4 => &[Channel::L, Channel::R, Channel::Ls, Channel::Rs],
+        5 => &[Channel::L, Channel::R, Channel::C, Channel::Ls, Channel::Rs],
+        6 => &[Channel::L, Channel::R, Channel::C, Channel::Lfe, Channel::Ls, Channel::Rs],
+        8 => &[Channel::L, Channel::R, Channel::C, Channel::Lfe, Channel::Ls, Channel::Rs, Channel::Lsr, Channel::Rsr],
+        _ => &[],
+    };
+    let pick = if positional { fits.iter().copied().find(|l| l.channels == film).or_else(|| fits.first().copied()) } else { fits.first().copied() };
+    Ok((n, mask, pick))
+}
+
 /// Per layout channel: the file and channel index inside it that supplies the channel.
 pub fn slot_map(layout: &'static ChannelLayout, inputs: &HashMap<Channel, PathBuf>, order: ChannelOrder) -> Result<Vec<(PathBuf, usize)>, Error> {
     let (_, slots, paths) = resolve_sources(layout, inputs, order)?;

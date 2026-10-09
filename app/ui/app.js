@@ -161,7 +161,32 @@ async function browseFor(ch) {
   if (ch === inLayout().channels[0]) await autoImport(p); else await setFile(ch, p);
 }
 
+/** One multichannel file for the whole layout: switch to the layout it fits and point every row at it. */
+async function importWhole(path, pick, probe) {
+  if (pick.layout !== curLayoutId()) {
+    inputs = {}; meta = {};
+    await cascade("layout", pick.layout);
+  }
+  for (const ch of inLayout().channels) { inputs[ch] = path; meta[ch] = probe; }
+  renderFiles();
+  update();
+  log(`${probe.channels}-channel file imported as ${curLayout().id} (${curLayout().channels.join(" ")}).`);
+}
+
 async function autoImport(path) {
+  let probe = {};
+  try { probe = await invoke("probe", { path }); } catch { /* not readable: the name-based import reports it */ }
+  if (probe.channels >= 2 && !srcLayoutId) {
+    const pick = await invoke("multichannel_pick", { path, candidates: [curLayoutId(), ...opts.layouts.filter((l) => l !== curLayoutId())] }).catch(() => null);
+    if (pick && pick.layout) {
+      // a stereo file with sibling channel files is one of a set: let the names decide
+      const sibs = probe.channels > 2 ? {} : await invoke("auto_import", { first: path, layout: inLayout().id }).catch(() => ({}));
+      if (Object.keys(sibs).length < 2) { await importWhole(path, pick, probe); return; }
+    } else if (probe.channels > 2) {
+      log(`That file has ${probe.channels} channels, and this format has no layout with ${probe.channels}.`, "bad");
+      return;
+    }
+  }
   const found = await invoke("auto_import", { first: path, layout: inLayout().id });
   const entries = Object.entries(found);
   if (!entries.length) { log("No channel ID found in that file name. Assign files row by row instead.", "bad"); return; }
@@ -521,6 +546,10 @@ async function init() {
   $("x96Core").onchange = () => update();
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
+  $("importMc").onclick = async () => {
+    const p = await dialog.open({ multiple: false, filters: [{ name: "Audio", extensions: ["wav", "aif", "aiff", "flac", "w64"] }] });
+    if (p) await autoImport(p);
+  };
   $("batch").onclick = batchFromFolder;
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
   $("srcLayout").onchange = () => { srcLayoutId = $("srcLayout").value; inputs = {}; meta = {}; renderFiles(); update(); };

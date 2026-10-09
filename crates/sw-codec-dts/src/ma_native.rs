@@ -97,11 +97,16 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let frames_total = want.div_ceil(n as u64);
 
     let core_payload = core_bitrate_kbps.map_or(0, |k| (k * 1000 * 512 / 48_000 / 8) & !3);
+    // A stream with a core opens with two frames of silence, as the commercial encoder does: the decoder has no
+    // history for the first frame (the lossless stage cannot reproduce it exactly when the channels sit in two
+    // sets), and the file's codec delay field tells decoders to drop them, so every source sample is kept.
+    let lead = if req.container && core_bitrate_kbps.is_some() { 2 * n } else { 0 };
     let info = req.container.then(|| {
         let mut i = DtsHdInfo::new(rate, n as u16, want, map.exss_mask as u16, if core_bitrate_kbps.is_some() { Kind::CoreAndExtension } else { Kind::ExtensionOnly });
         i.vbr = true;
         i.core_kbps = core_bitrate_kbps.unwrap_or(0);
         i.core_payload = core_payload;
+        i.codec_delay = lead as u16;
         i
     });
     let mut file = StreamOut::create(req.output, info)?;
@@ -114,6 +119,15 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let mut tm = [0f64; 3];
     let mut bytes = 0u64;
     let mut frames = 0u64;
+    if lead > 0 {
+        if let Enc::Core(e) = &mut enc {
+            for f in e.push(&vec![vec![0i32; lead]; nch]) {
+                file.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
+                bytes += f.len() as u64;
+                frames += 1;
+            }
+        }
+    }
     // several frames per push so the lossless stage can run in parallel
     let chunk = n * 16;
     let mut pcm: Vec<Vec<i32>> = vec![vec![0; chunk]; nch];
