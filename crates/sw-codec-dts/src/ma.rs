@@ -239,6 +239,7 @@ impl MaEncoder {
         let frame_samples = match cfg.sample_rate {
             44_100 | 48_000 => 512,
             88_200 | 96_000 => 1024,
+            176_400 | 192_000 => 2048,
             _ => 512,
         };
         let xll = XllEncoder::new(XllConfig {

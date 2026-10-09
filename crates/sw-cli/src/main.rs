@@ -346,7 +346,8 @@ fn run() -> Result<(), String> {
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
-                    let secs = (stats.frames * 512) as f64 / stems.sample_rate as f64;
+                    let spf = if stems.sample_rate > 96_000 { 2048 } else if stems.sample_rate > 48_000 { 1024 } else { 512 };
+                    let secs = (stats.frames * spf) as f64 / stems.sample_rate as f64;
                     println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
                     return Ok(());
                 }

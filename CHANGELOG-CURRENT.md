@@ -160,3 +160,13 @@ Compared field by field with our output and matched:
 
 Verified with DTSHDVerify and FFmpeg: 2.0 at 64/192/510, 1.0 at 48, 5.0 at 192, 5.1 at 160/256 all pass.
 Not yet learned from the reference: how the commercial encoder splits its 188 kbps (band limit, tonal components); the header byte pattern after the flags is identical to ours at 1/2 band limit.
+
+## DTS-HD MA at 176.4 / 192 kHz (done, lossless-only)
+
+Above 96 kHz XLL carries the signal as two 96 kHz bands. The decoder joins them with 20 integer lifting steps (4 at 22-bit and 8x3 at 23-bit precision) and interleaves them: even samples come from band 1, odd samples from band 0 delayed by 7. Every step is `dst -= round(src * coeff)`, so `xll_bands.rs` runs the same chain backwards and the split is exact.
+- The stream carries seven band-0 history samples per channel in segment 0 of band 1, so every frame stands alone. Those seven samples and the seven free tail samples are tied together by the lifting chain; the encoder fixes the tail at zero and sends the history that results (costs little: a few edge samples per frame).
+- Channel-set sub-header: "extra bands" flag, then the per-band blocks (decorrelation, predictor orders, reflection coefficients), with the extension band adding two flag bits (downmix, MSB/LSB split, scalable resolution). NAVI is band-major. The Rice parameter width gains one bit when there are two bands.
+- One channel set only (no embedded stereo hierarchy) and up to 5.1, as the format allows; no DTS core under it, because no reference stream shows how a 192 kHz core relates to the residual. The queue log says so when a core was requested.
+- Bit-exact against the source through FFmpeg: CRUSH ON 5.1 192/24, whole file, MD5 identical; DTSHDVerify passes (2813/2813 frames on a 30 s excerpt). Size 201.6 MB for 529 MB of PCM (38.1%; TrueHD 36.5%, MLP 35.7% on the same file). Speed 4.8x real time (the two bands are planned in parallel).
+- Test `stereo_and_five_one_192k_two_bands`. Also fixed the CLI's average bit rate line, which assumed 512-sample frames at every rate.
+- Found on the way: `--input L=stereo.wav --input R=stereo.wav` does not pick the left and right channels of one stereo file (a mismatch of +/-1 against the source appeared); mono files or a multichannel `--auto-import` give exact results.

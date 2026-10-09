@@ -14,7 +14,7 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
             *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let noise = ((*seed >> 12) as i32 & 0xFFF) - 2048;
             let t = i as f64 / 48_000.0;
-            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0 + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0) as i32 + noise * 4
+            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0 + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0 + (2.0 * std::f64::consts::PI * 0.31 * i as f64).sin() * 150_000.0) as i32 + noise * 4
         })
         .collect()
 }
@@ -99,6 +99,12 @@ fn stereo_48k() {
 #[test]
 fn five_one_96k() {
     roundtrip("51_96", "5.1", 96_000, 8);
+}
+
+#[test]
+fn stereo_and_five_one_192k_two_bands() {
+    roundtrip("20_192", "2.0", 192_000, 6);
+    roundtrip("51_192", "5.1", 192_000, 4);
 }
 
 #[test]

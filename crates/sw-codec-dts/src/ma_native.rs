@@ -62,8 +62,8 @@ enum Enc {
 
 pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<MaStats, MaError> {
     let rate = stems.sample_rate;
-    if !matches!(rate, 44_100 | 48_000 | 88_200 | 96_000) {
-        return Err(MaError::Unsupported(format!("{rate} Hz: only 44.1, 48, 88.2 and 96 kHz are implemented so far")));
+    if !matches!(rate, 44_100 | 48_000 | 88_200 | 96_000 | 176_400 | 192_000) {
+        return Err(MaError::Unsupported(format!("{rate} Hz: only 44.1 to 192 kHz are implemented so far")));
     }
     let bit_res = (stems.bits as u32).clamp(16, 24);
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
@@ -72,7 +72,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     if nch > 8 {
         return Err(MaError::Unsupported("more than 8 channels".into()));
     }
-    let mut enc = match req.core_bitrate_kbps {
+    if rate > 96_000 && nch > 6 {
+        return Err(MaError::Unsupported("above 96 kHz: up to 5.1 channels".into()));
+    }
+    // a core at 176.4/192 kHz is not implemented (the lossless stream stands alone, as in a core-less MA stream)
+    let core_bitrate_kbps = if rate > 96_000 { None } else { req.core_bitrate_kbps };
+    let mut enc = match core_bitrate_kbps {
         Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
         None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0 })),
     };

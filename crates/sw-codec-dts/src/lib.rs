@@ -26,6 +26,7 @@ mod tables_fixed;
 pub mod xbr;
 pub mod x96;
 pub mod xll;
+pub mod xll_bands;
 mod xll_table;
 
 pub use encoder::{Config, Encoder, Error};
