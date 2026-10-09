@@ -67,6 +67,7 @@ pub struct Dts96Encoder {
     ext_shift: isize,
     ext_adj: isize,
     timing: [std::time::Duration; 4],
+    hra: Option<crate::hra::HraStage>,
 }
 
 impl Dts96Encoder {
@@ -114,7 +115,13 @@ impl Dts96Encoder {
             ext_shift,
             ext_adj: std::env::var("SW_X96_ADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             timing: [std::time::Duration::ZERO; 4],
+            hra: None,
         })
+    }
+
+    /// Add an XBR extension substream to every frame (DTS-HD High Resolution Audio at 96 kHz).
+    pub fn set_hra(&mut self, hra: crate::hra::HraStage) {
+        self.hra = Some(hra);
     }
 
     /// Source samples (96 kHz) per frame.
@@ -226,6 +233,9 @@ impl Dts96Encoder {
         let block = self.x96.encode(&resid, self.x96_bytes);
         self.timing[3] += t0.elapsed();
         frame[start..].copy_from_slice(&block);
+        if let Some(h) = self.hra.as_mut() {
+            frame = h.wrap(frame, &self.core.last_residual);
+        }
         self.emitted += 1;
         // drop samples no later frame needs
         let keep_from = (self.emitted * self.n).saturating_sub(HALF + 4 + 64);

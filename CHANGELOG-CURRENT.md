@@ -177,3 +177,10 @@ The 5.05 GB raw `.dts` from the user's "Pure Audio" download is complete (the ch
 - Took a 60 s excerpt from 2 GB in (`F:\SubwoofaTests\quad\mid.dts`, 60,000,000 bytes), DTSHDVerify passes it. FFmpeg decodes it to 24-bit PCM (the lossless source, 103.7 MB).
 - Re-encoded that PCM with our native MA plus 96/24 core at 1509 kbps: 57.9 MB, **3.5% smaller than the commercial stream** (7722 against about 8000 kbps average). FFmpeg decodes ours bit-exactly (MD5 equal to the PCM from their stream), DTSHDVerify passes 5624/5624 frames.
 - Core headers match bit for bit except the ASPF bit (audio sync word insertion): they set it, we do not. Every commercial stream seen sets it (ES, HRA, 96/24, MA). Not needed to decode; it adds a 0xFFFF check word per sub-subframe. Left as is.
+
+## DTS-HD High Resolution Audio at 96 kHz (done for up to 5.1)
+
+A 96 kHz HRA stream is the 96/24 core (48 kHz core with the X96 extension inside the core frames) plus an XBR extension substream, mask 0x025. The 96/24 encoder now takes the HRA stage: the XBR extension refines the core's 32 subbands from the core's own quantisation residual, and the frame is padded to a constant total rate (up to 5760 kbps, the limit that needs 96 kHz). `.dtshd` container or raw.
+- CRUSH ON 5.1 96/24 (30 s), decoded with FFmpeg: DTS 96/24 at 1509 kbps gives rears 38.6/39.3 dB SNR; HRA at 3018 kbps gives 54.3/56.3 dB and the fronts gain 0.8 dB (49.6 to 50.4, front error then sits above 24 kHz, where XBR does not reach). 5760 kbps decodes identically to 3018: XBR is saturated, the rest is padding.
+- DTSHDVerify passes (3751/3751 frames at both rates), FFmpeg reports profile "DTS-HD HRA", 96 kHz, 6 channels. Test `hra_at_96_khz_is_core_x96_and_xbr`.
+- Not done: HRA above 5.1 channels at 96 kHz (XXCH with X96) gives a clear error; no commercial 96 kHz HRA stream was available to compare against (none in the library scan), so the extension-substream layout at 96 kHz follows the 48 kHz HRA streams plus the X96 mask bit.

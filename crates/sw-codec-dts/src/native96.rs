@@ -26,7 +26,16 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
+    if let Some(kbps) = req.hra_kbps {
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true };
+        enc.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
+    }
+    let container = req.hra_kbps.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let header = |frames: u32, bytes: u64| crate::exss::dtshd_header(&crate::exss::DtsHdHeader { sample_rate: rate, frames, samples_per_frame: n as u16, total_samples: want, ch_mask: crate::ma::map_layout(req.layout).exss_mask as u16, initial_padding: 0 }, bytes);
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
+    if container {
+        out.write_all(&header(0, 0))?;
+    }
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
     let (mut frames, mut bytes) = (0u64, 0u64);
@@ -52,8 +61,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         frames += 1;
         bytes += f.len() as u64;
     }
-    let _ = nprim;
     out.flush()?;
+    if container {
+        use std::io::{Seek, SeekFrom};
+        let mut inner = out.into_inner().map_err(|e| e.into_error())?;
+        inner.seek(SeekFrom::Start(0))?;
+        inner.write_all(&header(frames as u32, bytes))?;
+        inner.flush()?;
+    }
     on_progress(1.0);
     Ok(Stats { frames, bytes })
 }

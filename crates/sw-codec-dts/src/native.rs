@@ -94,7 +94,10 @@ pub struct Stats {
 }
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
-    if req.x96 {
+    if req.hra_kbps.is_some() && stems.sample_rate > 48_000 && crate::native_xxch::xxch_map(req.layout).is_some() {
+        return Err(Error::Unsupported("DTS-HD High Resolution above 5.1 channels is implemented at 48 kHz only".into()).into());
+    }
+    if req.x96 || (req.hra_kbps.is_some() && stems.sample_rate > 48_000) {
         return crate::native96::encode_to_file(stems, req, on_progress, cancel);
     }
     if req.hra_kbps.is_some() {
