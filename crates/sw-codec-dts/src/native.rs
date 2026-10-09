@@ -120,11 +120,13 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let rate = stems.sample_rate;
     let nch = map.order.len();
-    // a DTS CD runs the stream at exactly the CD data rate
-    let bitrate = if rate == 44_100 && req.bitrate_kbps == 1411 { 1_411_200 } else { req.bitrate_kbps * 1000 };
     let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
+    // A DTS CD packs the stream into 14-bit words (16-bit containers, so a player that does not know DTS plays
+    // quiet noise): 1024-sample frames of 3584 bytes, 1234.8 kbit/s of stream in the 1411.2 kbit/s of the disc.
+    let cd14 = wav && rate == 44_100 && req.bitrate_kbps == 1411;
+    let bitrate = if cd14 { 1_234_800 } else { req.bitrate_kbps * 1000 };
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
-    let blocks = if bitrate >= 700_000 || rate > 48_000 { 16 } else { 32 };
+    let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 { 16 } else { 32 };
     let mut enc = Encoder::new(Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: req.hra_kbps.is_some(), blocks })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -191,14 +193,20 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
             data = h.wrap(data, &enc.last_residual);
         }
         if wav {
-            // DTS in PCM: the stream's 16-bit words, byte-swapped into little-endian samples
-            let mut w = data.clone();
-            if w.len() % 2 == 1 {
-                w.push(0);
-            }
-            for pair in w.chunks_exact_mut(2) {
-                pair.swap(0, 1);
-            }
+            // DTS in PCM: either the stream packed into 14-bit words (a DTS CD) or its 16-bit words
+            // byte-swapped into little-endian samples
+            let w = if cd14 {
+                pack_14bit(&data)
+            } else {
+                let mut w = data.clone();
+                if w.len() % 2 == 1 {
+                    w.push(0);
+                }
+                for pair in w.chunks_exact_mut(2) {
+                    pair.swap(0, 1);
+                }
+                w
+            };
             out.write_all(&w)?;
             bytes += w.len() as u64;
         } else {
@@ -247,4 +255,29 @@ fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
     h.extend_from_slice(b"data");
     h.extend_from_slice(&(data_len.min(u32::MAX as u64) as u32).to_le_bytes());
     h
+}
+
+
+/// The 14-bit DTS stream format: the bit stream is cut into 14-bit groups, each stored sign-extended in a 16-bit
+/// little-endian word (a frame whose size is a multiple of 14 bytes fills whole words).
+fn pack_14bit(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() * 8 / 7 + 2);
+    let (mut acc, mut n) = (0u32, 0u32);
+    for &b in data {
+        acc = (acc << 8) | b as u32;
+        n += 8;
+        while n >= 14 {
+            n -= 14;
+            let w = ((acc >> n) & 0x3FFF) as u16;
+            let signed = if w & 0x2000 != 0 { w | 0xC000 } else { w };
+            out.extend_from_slice(&signed.to_le_bytes());
+        }
+        acc &= (1 << n) - 1;
+    }
+    if n > 0 {
+        let w = ((acc << (14 - n)) & 0x3FFF) as u16;
+        let signed = if w & 0x2000 != 0 { w | 0xC000 } else { w };
+        out.extend_from_slice(&signed.to_le_bytes());
+    }
+    out
 }

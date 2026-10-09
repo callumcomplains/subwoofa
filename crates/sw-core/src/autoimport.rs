@@ -74,7 +74,7 @@ fn split_around(stem: &str, ch: Channel) -> Option<(String, String)> {
 /// Channels whose file cannot be found are omitted.
 pub fn auto_import(first: &Path, layout: &ChannelLayout) -> HashMap<Channel, PathBuf> {
     let mut found = HashMap::new();
-    let Some(dir) = first.parent() else { return found };
+    let dir = first.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let Some(ext) = first.extension().and_then(|e| e.to_str()) else { return found };
     let Some(stem) = first.file_stem().and_then(|s| s.to_str()) else { return found };
 

@@ -667,7 +667,8 @@ impl Encoder {
         w.put(self.frame_bytes as u32 - 1, 14);
         w.put(cfg.amode as u32, 6);
         w.put(sfreq_code(cfg.sample_rate).unwrap(), 4);
-        let rate_code = BIT_RATES.iter().take(25).position(|r| *r >= cfg.bitrate).unwrap_or(29) as u32;
+        // 1234.8 kbit/s is the 14-bit DTS CD stream, labelled with the disc's 1411.2 kbit/s rate code
+        let rate_code = if cfg.bitrate == 1_234_800 { 22 } else { BIT_RATES.iter().take(25).position(|r| *r >= cfg.bitrate).unwrap_or(29) as u32 };
         w.put(rate_code, 5);
         w.put(0, 1); // fixed bit
         w.put(0, 1); // dynamic range coefficients
