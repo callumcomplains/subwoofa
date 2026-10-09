@@ -75,18 +75,18 @@ fn codes_of(table: &[(u8, u8)], symbols: usize) -> Vec<Option<(u32, u8)>> {
 }
 
 /// A variable length code table whose decoded value is `symbol - 1` (symbol 0 is the escape).
-struct Vlc {
+pub(crate) struct Vlc {
     codes: Vec<Option<(u32, u8)>>,
 }
 
 impl Vlc {
-    fn new(table: &[(u8, u8)]) -> Vlc {
+    pub(crate) fn new(table: &[(u8, u8)]) -> Vlc {
         let n = table.iter().map(|t| t.0 as usize).max().unwrap() + 1;
         Vlc { codes: codes_of(table, n) }
     }
 
     /// Write the value `v` (what the decoder returns, 0 or more).
-    fn put(&self, w: &mut BitsLe, v: u32) {
+    pub(crate) fn put(&self, w: &mut BitsLe, v: u32) {
         let sym = v as usize + 1;
         if let Some(Some((code, len))) = self.codes.get(sym) {
             put_code(w, *code, *len);
@@ -238,6 +238,11 @@ pub struct LbrEncoder {
     frames: usize,
     frame_bytes: usize,
     geo: Geo,
+    /// Size of the previous frame's coarsest possible residual: what tones must leave room for.
+    min_resid: std::cell::Cell<usize>,
+    /// Tonal components on (Express streams of the decoder's tone model).
+    tonal: bool,
+    groups: Vec<crate::lbr_tonal::Group>,
 }
 
 const SUBBANDS: usize = BANDS;
@@ -314,7 +319,11 @@ impl LbrEncoder {
         let per_channel = cfg.bitrate as f64 / 1000.0 / cfg.channels as f64;
         let band_limit = std::env::var("SW_LBR_BL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if per_channel >= 128.0 { 0 } else if per_channel >= 56.0 { 1 } else { 2 });
         let geo = Geo::new(cfg.sample_rate, band_limit);
-        Ok(LbrEncoder { t: Tables::new(), ana: (0..n).map(|_| Analysis::new()).collect(), buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, cfg })
+        // the decoder scales a band-limited stream's filter bank output by sqrt(2^(2 - limited range)), so the
+        // coefficients are scaled down by the same factor here
+        let gain = if band_limit > 0 { 1.0 / ((1u32 << band_limit) as f64).sqrt() } else { 1.0 };
+        let ana: Vec<Analysis> = (0..n).map(|_| { let mut a = Analysis::new(); a.set_gain(gain); a }).collect();
+        Ok(LbrEncoder { t: Tables::new(), ana, buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, min_resid: std::cell::Cell::new(0), tonal: std::env::var_os("SW_LBR_NOTONES").is_none(), groups: (0..5).map(crate::lbr_tonal::Group::new).collect(), cfg })
     }
 
     /// Smallest bit rate (bits per second) the encoder can honour: about 55 kbps per channel pair at its
@@ -343,7 +352,7 @@ impl LbrEncoder {
         }
         let mut out = Vec::new();
         // a frame needs hops up to 32 f + 32, i.e. samples up to 4096 f + 4096 + 256
-        while self.base + self.buf[0].len() >= (self.frames + 1) * 4096 + 256 + 128 {
+        while self.base + self.buf[0].len() >= (self.frames + 1) * 4096 + 256 + 128 + self.lookahead() {
             out.push(self.next_frame());
         }
         out
@@ -353,7 +362,7 @@ impl LbrEncoder {
     pub fn finish(&mut self) -> Vec<Vec<u8>> {
         let pushed = self.base + self.buf[0].len();
         let frames = pushed.div_ceil(4096);
-        let want = (frames + 1) * 4096 + 512;
+        let want = (frames + 1) * 4096 + 512 + self.lookahead();
         for b in self.buf.iter_mut() {
             b.resize(want - self.base, 0.0);
         }
@@ -367,28 +376,28 @@ impl LbrEncoder {
         out
     }
 
+    /// Samples ahead of a frame's own hops that the tone sets of the frame need (their span reaches 54 steps
+    /// beyond the frame's last step).
+    fn lookahead(&self) -> usize {
+        if self.tonal { 54 * HOP } else { 0 }
+    }
+
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.frames;
-        while self.next_hop <= 32 * f + 32 {
+        let need = 32 * f + 32 + if self.tonal { 54 } else { 0 };
+        while self.next_hop <= need {
             let start = self.next_hop * HOP - self.base;
             for (c, a) in self.ana.iter_mut().enumerate() {
                 let block: Vec<f64> = (0..2 * HOP).map(|i| self.buf[c].get(start + i).copied().unwrap_or(0.0)).collect();
-                a.push_hop(&block);
+                a.compute_hop(&block);
             }
             self.next_hop += 1;
         }
-        let mut ts: Vec<Vec<Vec<f64>>> = self.ana.iter_mut().map(|a| a.take_frame()).collect();
-        if self.geo.band_limit > 0 {
-            // the decoder scales a band-limited stream's filter bank output by sqrt(2^(2 - limited range))
-            let g = 1.0 / ((1u32 << self.geo.band_limit) as f64).sqrt();
-            for ch in ts.iter_mut() {
-                for band in ch.iter_mut() {
-                    for v in band.iter_mut() {
-                        *v *= g;
-                    }
-                }
-            }
+        let tonal_chunks = if self.tonal { self.choose_tones(f) } else { Vec::new() };
+        for a in self.ana.iter_mut() {
+            a.commit_upto(32 * f + 32);
         }
+        let ts: Vec<Vec<Vec<f64>>> = self.ana.iter_mut().map(|a| a.take_frame()).collect();
         // drop what no later hop needs
         let keep_from = self.next_hop * HOP;
         if keep_from > self.base {
@@ -416,7 +425,61 @@ impl LbrEncoder {
             }
         }
         self.frames += 1;
-        self.encode_frame(&ts, lfe)
+        self.encode_frame(&ts, lfe, tonal_chunks)
+    }
+
+    /// Choose the tone sets of frame `f` (all five groups) from the pending coefficients, subtract them there
+    /// and return the tonal chunks.
+    fn choose_tones(&mut self, f: usize) -> Vec<Vec<u8>> {
+        use crate::lbr_tonal as tn;
+        let nch = self.cfg.channels;
+        let lr = 2 - self.geo.band_limit as i32;
+        let kappa = std::env::var("SW_LBR_KAPPA").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
+        let max_g = std::env::var("SW_LBR_GROUPS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(5);
+        let search = tn::Search { max_line: (4 * self.geo.nsb).saturating_sub(6), kappa, max_tones: 12, limited_range: lr };
+        let mut all: Vec<Vec<Vec<tn::Tone>>> = Vec::new();
+        // at most a quarter of the frame goes to tones, and never so much that the coarsest residual of the
+        // previous frame (plus headers) no longer fits
+        let room = self.frame_bytes as i64 - (self.header_len() as i64 + 8 + (self.min_resid.get() as f64 * 1.15) as i64 + if self.cfg.lfe { 60 } else { 0 });
+        let mut bits_left: i64 = ((self.frame_bytes as i64 * 8) / 4).min(room.max(0) * 8 / 2);
+        for g in 0..5usize {
+            let mut subs: Vec<Vec<tn::Tone>> = Vec::new();
+            for j in 0..(1usize << g) {
+                if g >= max_g {
+                    subs.push(Vec::new());
+                    continue;
+                }
+                let grp = &self.groups[g];
+                let first = 32 * f + tn::TONE_DELAY + j * grp.steps;
+                let mut targets: Vec<Vec<[f64; HOP]>> = (0..nch)
+                    .map(|ch| (0..2 * grp.steps).map(|r| self.ana[ch].coefs_mut(first + r).map(|c| *c).unwrap_or([0.0; HOP])).collect())
+                    .collect();
+                let tones = tn::pick(grp, &mut targets, &search, &mut bits_left);
+                if !tones.is_empty() {
+                    for ch in 0..nch {
+                        for r in 0..2 * grp.steps {
+                            if let Some(c) = self.ana[ch].coefs_mut(first + r) {
+                                *c = targets[ch][r];
+                            }
+                        }
+                    }
+                }
+                subs.push(tones);
+            }
+            all.push(subs);
+        }
+        let any = all.iter().flatten().any(|t| !t.is_empty());
+        if !any {
+            return Vec::new();
+        }
+        let scf = tn::scale_factors(&all, lr);
+        let mut out = vec![chunk(0x0E, tn::write_scf(&scf))];
+        for (g, subs) in all.iter().enumerate() {
+            if subs.iter().any(|t| !t.is_empty()) {
+                out.push(chunk(0x1B - g as u8, tn::write_group(g as u32, subs, nch, &scf, lr)));
+            }
+        }
+        out
     }
 
     fn header_len(&self) -> usize {
@@ -440,10 +503,11 @@ impl LbrEncoder {
         }
     }
 
-    fn encode_frame(&self, ts: &[Vec<Vec<f64>>], lfe: Option<Vec<u8>>) -> Vec<u8> {
+    fn encode_frame(&self, ts: &[Vec<Vec<f64>>], lfe: Option<Vec<u8>>, tonal: Vec<Vec<u8>>) -> Vec<u8> {
         let nch = self.cfg.channels;
         let npairs = nch.div_ceil(2);
-        let budget = self.frame_bytes.saturating_sub(self.header_len() + 8 + lfe.as_ref().map_or(0, |c| c.len()));
+        let tonal_bytes: usize = tonal.iter().map(|c| c.len()).sum();
+        let budget = self.frame_bytes.saturating_sub(self.header_len() + 8 + lfe.as_ref().map_or(0, |c| c.len()) + tonal_bytes);
         // candidate profiles from the finest quantizers to the coarsest
         let mut profiles: Vec<u32> = Vec::new();
         for ol in (0..8u32).rev() {
@@ -458,6 +522,13 @@ impl LbrEncoder {
             for k in (MIN_K..=self.geo.nsb).rev() {
                 cands.push((p, k));
             }
+        }
+        if let Some(&(p, k)) = cands.last() {
+            let mut n = 0usize;
+            for pair in 0..npairs {
+                n += self.write_pair(pair, ts, p, k).iter().map(|c| c.len()).sum::<usize>();
+            }
+            self.min_resid.set(n);
         }
         let try_one = |&(p, k): &(u32, usize)| -> Option<Vec<Vec<u8>>> {
             let mut chunks = Vec::new();
@@ -477,6 +548,7 @@ impl LbrEncoder {
             if std::env::var_os("SW_LBR_DEBUG").is_some() {
                 eprintln!("fixed bytes {} chunks {:?}", chunks.iter().map(|c| c.len()).sum::<usize>(), chunks.iter().map(|c| c.len()).collect::<Vec<_>>());
             }
+            chunks.extend(tonal);
             return self.assemble(chunks);
         }
         let (mut lo, mut hi) = (0usize, cands.len());
@@ -500,6 +572,10 @@ impl LbrEncoder {
         });
         let mut chunks = chunks;
         chunks.extend(lfe);
+        let used: usize = chunks.iter().map(|c| c.len()).sum();
+        if used + tonal_bytes + self.header_len() + 8 <= self.frame_bytes {
+            chunks.extend(tonal);
+        }
         self.assemble(chunks)
     }
 

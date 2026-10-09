@@ -137,19 +137,34 @@ pub struct Analysis {
     hop: usize,
     /// Gain applied to the MDCT coefficients (the decoder IMDCT scale is -2^-17).
     scale: f64,
+    /// Scaled MDCT coefficients of hops not yet passed through the band stages (step `committed` first):
+    /// the domain in which the decoder adds its tonal components.
+    pending: std::collections::VecDeque<[f64; HOP]>,
+    committed: usize,
 }
 
 impl Analysis {
     pub fn new() -> Analysis {
         let scale = (2.0 / HOP as f64) * 131072.0;
-        Analysis { win: analysis_window(), cos: cos_table(), ts: vec![vec![0.0; 4]; BANDS], base: -4, hop: 0, scale }
+        Analysis { win: analysis_window(), cos: cos_table(), ts: vec![vec![0.0; 4]; BANDS], base: -4, hop: 0, scale, pending: std::collections::VecDeque::new(), committed: 0 }
     }
 
     /// MDCT of `x[128h .. 128h + 256)` followed by the adjoint of the band stages; accumulates into the
     /// time samples.
     pub fn push_hop(&mut self, block: &[f64]) {
+        self.compute_hop(block);
+        self.commit_upto(self.hop - 1);
+    }
+
+    /// Gain on the coefficients (a band-limited stream is scaled down so the decoder's gain brings it back).
+    pub fn set_gain(&mut self, gain: f64) {
+        self.scale = (2.0 / HOP as f64) * 131072.0 * gain;
+    }
+
+    /// MDCT of `x[128h .. 128h + 256)`; the coefficients wait in `coefs_mut` until `commit_upto`.
+    pub fn compute_hop(&mut self, block: &[f64]) {
         debug_assert_eq!(block.len(), 2 * HOP);
-        let mut c = vec![0f64; HOP];
+        let mut c = [0f64; HOP];
         for (i, (x, w)) in block.iter().zip(self.win.iter()).enumerate() {
             let xw = x * w;
             if xw == 0.0 {
@@ -160,24 +175,44 @@ impl Analysis {
                 *o += xw * cc;
             }
         }
-        let mut v = [[0f64; 4]; BANDS];
-        for b in 0..BANDS {
-            for j in 0..4 {
-                v[b][j] = c[b * 4 + j] * self.scale;
-            }
+        for v in c.iter_mut() {
+            *v *= self.scale;
         }
-        butterflies_inverse(&mut v);
-        let s = self.hop as isize;
+        self.pending.push_back(c);
         self.hop += 1;
-        for b in 0..BANDS {
-            let contrib = bank_adjoint(&v[b]);
-            let first = (4 * s - 4 - self.base) as usize;
-            let t = &mut self.ts[b];
-            if first + 8 > t.len() {
-                t.resize(first + 8, 0.0);
+    }
+
+    /// Coefficients of hop (step) `step` if it has not been committed yet.
+    pub fn coefs_mut(&mut self, step: usize) -> Option<&mut [f64; HOP]> {
+        if step < self.committed {
+            return None;
+        }
+        self.pending.get_mut(step - self.committed)
+    }
+
+    /// Pass the coefficients of every pending hop up to and including `step` through the band stages.
+    pub fn commit_upto(&mut self, step: usize) {
+        while self.committed <= step && !self.pending.is_empty() {
+            let c = self.pending.pop_front().unwrap();
+            let s = self.committed as isize;
+            self.committed += 1;
+            let mut v = [[0f64; 4]; BANDS];
+            for b in 0..BANDS {
+                for j in 0..4 {
+                    v[b][j] = c[b * 4 + j];
+                }
             }
-            for (k, x) in contrib.iter().enumerate() {
-                t[first + k] += *x;
+            butterflies_inverse(&mut v);
+            for b in 0..BANDS {
+                let contrib = bank_adjoint(&v[b]);
+                let first = (4 * s - 4 - self.base) as usize;
+                let t = &mut self.ts[b];
+                if first + 8 > t.len() {
+                    t.resize(first + 8, 0.0);
+                }
+                for (k, x) in contrib.iter().enumerate() {
+                    t[first + k] += *x;
+                }
             }
         }
     }
