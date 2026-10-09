@@ -44,6 +44,11 @@ pub fn exss_frame_xxch(p: &ExssParams, xxch: &[u8]) -> Vec<u8> {
     exss_build(p, None, None, None, Some(xxch))
 }
 
+/// Extension substream frame with XBR (refining the core channels) and XXCH (the extra channels).
+pub fn exss_frame_xbr_xxch(p: &ExssParams, xbr: &[u8], xxch: &[u8]) -> Vec<u8> {
+    exss_build(p, Some(xbr), None, None, Some(xxch))
+}
+
 /// Build one extension substream frame around an LBR (DTS Express) payload.
 pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
     exss_build(p, None, None, Some(lbr), None)

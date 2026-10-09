@@ -4,7 +4,8 @@
 //! 5.1 mix and an XXCH decoder subtracts the rears again.
 
 use crate::encoder::XxchParams;
-use crate::exss::{dtshd_header, exss_frame_xxch, DtsHdHeader, ExssParams};
+use crate::exss::{dtshd_header, exss_frame_xbr_xxch, exss_frame_xxch, DtsHdHeader, ExssParams};
+use crate::xbr::XbrEncoder;
 use crate::native::{NativeError, Request, Stats};
 use crate::{Config, Encoder};
 use std::io::{Seek, SeekFrom, Write};
@@ -62,6 +63,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         blocks,
     };
     let mut core = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
+    core.keep_residual = true;
+    let xbr = XbrEncoder::new(blocks);
     let mut ext = Encoder::new(mk(2, 2, false, 1_536_000))?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -78,6 +81,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let core_mask = 0x1 | 0x2 | 0x4 | (if has_lfe { 0x20 } else { 0 }) | (1 << 9) | (1 << 10);
     let params = XxchParams { core_mask, spk_mask: (1 << 7) | (1 << 8), mask_bits: 11, dmix: Some((55, vec![vec![(9, 119)], vec![(10, 119)]])) };
     let overhead = exss_frame_xxch(&exss, &[0u8]).len() - 1;
+    let overhead_both = exss_frame_xbr_xxch(&exss, &[0u8], &[0u8]).len() - 2;
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);
     let upto = |k: u64| (k * bits_num) / (bits_den * 8);
 
@@ -131,9 +135,26 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         let pad = (4 - data.len() % 4) % 4;
         data.resize(data.len() + pad, 0);
         let total = (upto(f + 1) - upto(f)) as usize;
-        let budget = total.saturating_sub(data.len() + overhead).clamp(64, 16_000);
-        let x = ext.encode_xxch(&ext_pcm, budget, &params);
-        data.extend_from_slice(&exss_frame_xxch(&exss, &x));
+        // the rate beyond what the extra pair needs at the core's per-channel rate goes to XBR for the core
+        // channels and XXCH in the ratio of their channel counts (a commercial 5376 kbps stream splits it that way)
+        let rest = total.saturating_sub(data.len());
+        let per_channel = (data.len() / (5 + usize::from(has_lfe))).max(64);
+        let want_xxch = 2 * per_channel;
+        let (xbr_bytes, xxch_bytes) = if rest > overhead + want_xxch + 600 {
+            let extra = rest - overhead_both - want_xxch;
+            let xxch = want_xxch + extra * 2 / 7;
+            (rest - overhead_both - xxch, xxch)
+        } else {
+            (0, rest.saturating_sub(overhead).clamp(64, 16_000))
+        };
+        let x = ext.encode_xxch(&ext_pcm, xxch_bytes.min(16_000), &params);
+        if xbr_bytes > 0 {
+            let mut b = xbr.encode(&core.last_residual, xbr_bytes);
+            b.resize(xbr_bytes, 0);
+            data.extend_from_slice(&exss_frame_xbr_xxch(&exss, &b, &x));
+        } else {
+            data.extend_from_slice(&exss_frame_xxch(&exss, &x));
+        }
         out.write_all(&data)?;
         frames += 1;
         bytes += data.len() as u64;
