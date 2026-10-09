@@ -150,6 +150,159 @@ fn calc_psd(exp: &[i32], end: usize, b2b: &[u8; 256], psd: &mut [i32], band_psd:
     }
 }
 
+/// Power spectral density and banded PSD from `start` (the coupling channel starts above bin 0).
+fn calc_psd_from(exp: &[i32], start: usize, end: usize, b2b: &[u8; 256], psd: &mut [i32], band_psd: &mut [i32]) {
+    for bin in start..end {
+        psd[bin] = 3072 - (exp[bin] << 7);
+    }
+    let mut bin = start;
+    let mut band = b2b[bin] as usize;
+    loop {
+        let mut v = psd[bin];
+        bin += 1;
+        let band_end = (BAND_START[band + 1] as usize).min(end);
+        while bin < band_end {
+            let max = v.max(psd[bin]);
+            let adr = (max - ((v + psd[bin] + 1) >> 1)).min(255) as usize;
+            v = max + LOG_ADD[adr] as i32;
+            bin += 1;
+        }
+        band_psd[band] = v;
+        band += 1;
+        if end <= BAND_START[band] as usize {
+            break;
+        }
+    }
+}
+
+/// Masking curve of the coupling channel (A/52 7.2.2.4 with the leak start values of cplfleak = cplsleak = 0).
+fn calc_mask_cpl(band_psd: &[i32], start: usize, end: usize, fast_gain: i32, fscod: usize, b2b: &[u8; 256], mask: &mut [i32]) {
+    let (slow_decay, fast_decay) = (SLOW_DECAY[SDCYCOD], FAST_DECAY[FDCYCOD]);
+    let (slow_gain, db_per_bit) = (SLOW_GAIN[SGAINCOD], DB_PER_BIT[DBPBCOD]);
+    let (band_start, band_end) = (b2b[start] as usize, b2b[end - 1] as usize + 1);
+    let (mut fastleak, mut slowleak) = (768, 768);
+    for band in band_start..band_end {
+        fastleak = (fastleak - fast_decay).max(band_psd[band] - fast_gain);
+        slowleak = (slowleak - slow_decay).max(band_psd[band] - slow_gain);
+        let mut excite = fastleak.max(slowleak);
+        let tmp = db_per_bit - band_psd[band];
+        if tmp > 0 {
+            excite += tmp >> 2;
+        }
+        mask[band] = (HEARING_THRESHOLD[band * 3 + fscod] as i32).max(excite);
+    }
+}
+
+fn calc_bap_from(mask: &[i32], psd: &[i32], start: usize, end: usize, snr_offset: i32, b2b: &[u8; 256], bap: &mut [u8]) {
+    let floor = FLOOR[FLOORCOD];
+    if snr_offset == -960 {
+        bap[..end].fill(0);
+        return;
+    }
+    let addr = |p: i32, m: i32| (((p - m) >> 5).clamp(0, 63)) as usize;
+    let mut bin = start;
+    let mut band = b2b[bin] as usize;
+    loop {
+        let m = ((mask[band] - snr_offset - floor).max(0) & 0x1FE0) + floor;
+        band += 1;
+        let band_end = (BAND_START[band] as usize).min(end);
+        while bin < band_end {
+            bap[bin] = BAP_FROM_ADDRESS[addr(psd[bin], m)];
+            bin += 1;
+        }
+        if end <= band_end {
+            break;
+        }
+    }
+}
+
+/// The coupling channel's reference exponent is sent halved, so it has to be even: make it so and bring the
+/// groups after it back inside the +-2 step limit by lowering exponents (never raising them).
+fn pin_reference(virt: &mut [i32]) {
+    virt[0] &= !1;
+    loop {
+        let mut changed = false;
+        for i in 1..virt.len() {
+            if virt[i] > virt[i - 1] + 2 {
+                virt[i] = virt[i - 1] + 2;
+                changed = true;
+            }
+        }
+        for i in (1..virt.len() - 1).rev() {
+            if virt[i] > virt[i + 1] + 2 {
+                virt[i] = virt[i + 1] + 2;
+                changed = true;
+            }
+        }
+        if virt.len() > 1 && virt[0] > virt[1] + 2 {
+            virt[0] = ((virt[1] + 2) & !1).max(0);
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Exponents of the coupling channel: a 4-bit reference (half the even starting exponent), then the groups.
+/// `virt[0]` is the reference and `virt[1 + i]` the exponent of bin `start + i`.
+fn write_cpl_exponents(w: &mut BitWriter, virt: &[i32], strat: Strat) {
+    let g = strat.gsize();
+    let nbins = virt.len() - 1;
+    w.put((virt[0] >> 1) as u32, 4);
+    let mut prev = virt[0];
+    for grp in 0..nbins / (3 * g) {
+        let mut code = 0;
+        for j in 0..3 {
+            let e = virt[1 + (grp * 3 + j) * g];
+            let m = (e - prev + 2) as u32;
+            debug_assert!(m <= 4, "coupling exponent step out of range: {prev} -> {e}");
+            code = code * 5 + m;
+            prev = e;
+        }
+        w.put(code, 7);
+    }
+}
+
+/// Coupling coordinate (master 2 bits, then exponent and mantissa 4 bits each per band) for the gains `g`
+/// the decoder multiplies the coupling channel with (8 x mantissa x 2^-(exp + 3 master)).
+fn quantize_coords(g: &[f64]) -> (u32, Vec<(u32, u32)>) {
+    let e_of = |g: f64| -> i32 {
+        let v = (g / 8.0).max(1e-9);
+        ((-v.log2()).floor() as i32).clamp(0, 24)
+    };
+    let es: Vec<i32> = g.iter().map(|g| e_of(*g)).collect();
+    let emax = es.iter().copied().max().unwrap_or(0);
+    let mstr = (((emax - 14).max(0) + 2) / 3).min(3);
+    let out = g
+        .iter()
+        .zip(&es)
+        .map(|(g, e)| {
+            let v = (g / 8.0).max(1e-9);
+            let exp = (*e - 3 * mstr).clamp(0, 14);
+            let total = exp + 3 * mstr;
+            let mant = ((v * 2f64.powi(total) * 32.0).round() as i32 - 16).clamp(0, 15);
+            (exp as u32, mant as u32)
+        })
+        .collect();
+    (mstr as u32, out)
+}
+
+/// Value of a quantized coupling coordinate (the gain applied to the coupling channel).
+fn coord_gain(mstr: u32, exp: u32, mant: u32) -> f64 {
+    8.0 * (mant + 16) as f64 / 32.0 * 2f64.powi(-((exp + 3 * mstr) as i32))
+}
+
+/// Coupling in use for a frame.
+struct CplInfo {
+    begf: usize,
+    endf: usize,
+    strt: usize,
+    end: usize,
+    /// `[set][channel] = (master, [(exp, mant)] per band)`
+    coords: Vec<Vec<(u32, Vec<(u32, u32)>)>>,
+}
+
 fn lowcomp1(a: i32, b0: i32, b1: i32, c: i32) -> i32 {
     if b0 + 256 == b1 {
         c
@@ -284,12 +437,16 @@ impl Strat {
 /// Everything derived from the coefficients of one channel for one set of blocks.
 struct SetPlan {
     strat: Strat,
+    /// The coupling channel's exponents as sent (reference first, then one per bin from its start).
+    virt: Vec<i32>,
     exp: Vec<i32>,
     psd: Vec<i32>,
     mask: [i32; BANDS],
 }
 
 struct ChannelPlan {
+    start: usize,
+    is_cpl: bool,
     end: usize,
     strat: Strat,
     is_lfe: bool,
@@ -319,6 +476,9 @@ pub struct Encoder {
     cur_blksw: Vec<[bool; BLOCKS]>,
     /// Rematrixing flags per block and band (2/0 mode, AC-3 only).
     cur_remat: Vec<[bool; 4]>,
+    /// Channel coupling for multichannel AC-3 at low rates.
+    coupling: bool,
+    cur_cpl: Option<CplInfo>,
     rematrixing: bool,
     /// E-AC-3 dependent substream: the custom channel map (bit 15 = Left ... bit 0 = LFE) it carries.
     dependent: Option<u16>,
@@ -383,6 +543,8 @@ impl Encoder {
             cur_blksw: vec![[false; BLOCKS]; nfch],
             cur_remat: vec![[false; 4]; BLOCKS],
             rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
+            coupling: !cfg.eac3 && cfg.acmod >= 3 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
+            cur_cpl: None,
             dependent: None,
             cfg,
         })
@@ -417,6 +579,11 @@ impl Encoder {
     }
 
     /// 2/0 mode: allow sum/difference coding per band (on by default).
+    /// Channel coupling above about 7 to 10 kHz for 3/0 and richer modes at low rates (on by default there).
+    pub fn set_coupling(&mut self, on: bool) {
+        self.coupling = on && !self.cfg.eac3 && self.cfg.acmod >= 3;
+    }
+
     pub fn set_rematrixing(&mut self, on: bool) {
         self.rematrixing = on;
     }
@@ -552,24 +719,124 @@ impl Encoder {
         }
     }
 
+    /// Decide on coupling for this frame (not with block switching in it) and describe it.
+    fn plan_coupling(&self, coefs: &mut [Vec<[f32; M]>]) -> Option<CplInfo> {
+        let _ = coefs;
+        if !self.coupling || self.cur_blksw.iter().any(|c| c.iter().any(|b| *b)) {
+            return None;
+        }
+        let per_ch = self.cfg.bitrate_kbps as f64 / (self.nfch as f64 + 0.1);
+        let begf = if per_ch < 40.0 { 2 } else if per_ch < 56.0 { 4 } else if per_ch < 72.0 { 6 } else { 8 };
+        let end_bin = self.end[0];
+        let endf = (((end_bin.saturating_sub(37)) / 12).saturating_sub(3)).min(15);
+        if std::env::var_os("SW_AC3_DEBUG").is_some() {
+            eprintln!("coupling: end_bin {end_bin} begf {begf} endf {endf}");
+        }
+        if endf < begf + 1 {
+            return None;
+        }
+        Some(CplInfo { begf, endf, strt: 37 + 12 * begf, end: 37 + 12 * (endf + 3), coords: Vec::new() })
+    }
+
+    /// Coupling coordinates per set of blocks, from the energy of each channel against the coupling channel.
+    fn fill_coords(&self, c: &mut CplInfo, chans: &[ChannelPlan], orig: &[Vec<[f32; M]>]) {
+        let nbands = 3 + c.endf - c.begf;
+        let cplch = chans.last().unwrap();
+        for &(first, count) in &self.cur_sets {
+            let mut per_ch = Vec::new();
+            for ch in 0..self.nfch {
+                let mut gains = Vec::with_capacity(nbands);
+                for band in 0..nbands {
+                    let (lo, hi) = (c.strt + 12 * band, c.strt + 12 * band + 12);
+                    let (mut ec, mut ep) = (0f64, 0f64);
+                    for blk in first..first + count {
+                        for bin in lo..hi {
+                            ec += (orig[ch][blk][bin] as f64).powi(2);
+                            ep += (cplch.coef[blk][bin] as f64).powi(2);
+                        }
+                    }
+                    gains.push(if ep > 1e-18 { (ec / ep).sqrt().min(7.9) } else { 0.0 });
+                }
+                per_ch.push(quantize_coords(&gains));
+            }
+            c.coords.push(per_ch);
+        }
+    }
+
     /// Encode a frame from already-transformed coefficients (`[channel][block][bin]`).
     fn encode_coefficients(&mut self, mut coefs: Vec<Vec<[f32; M]>>, frmsizecod: u32, words: usize) -> Vec<u8> {
         self.rematrix(&mut coefs);
         let frame_bits = words * 16;
-        let mut chans: Vec<ChannelPlan> = Vec::with_capacity(self.nch);
+        let mut chans: Vec<ChannelPlan> = Vec::with_capacity(self.nch + 1);
+        let orig: Vec<Vec<[f32; M]>> = coefs.iter().take(self.nfch).cloned().collect();
+        let mut cpl = self.plan_coupling(&mut coefs);
         for (ch, coef) in coefs.into_iter().enumerate() {
             let is_lfe = self.cfg.lfe && ch == self.nfch;
-            chans.push(ChannelPlan { end: self.end[ch], strat: if is_lfe { Strat::D15 } else { self.strat }, is_lfe, coef, sets: Vec::new() });
+            let end = match &cpl {
+                Some(c) if ch < self.nfch => c.strt,
+                _ => self.end[ch],
+            };
+            chans.push(ChannelPlan { start: 0, is_cpl: false, end, strat: if is_lfe { Strat::D15 } else { self.strat }, is_lfe, coef, sets: Vec::new() });
+        }
+        if let Some(c) = &cpl {
+            // the coupling channel: the mean of the coupled channels above the coupling start
+            let mut coef = vec![[0f32; M]; BLOCKS];
+            for blk in 0..BLOCKS {
+                for bin in c.strt..c.end {
+                    coef[blk][bin] = (0..self.nfch).map(|ch| chans[ch].coef[blk][bin]).sum::<f32>() / self.nfch as f32;
+                }
+            }
+            // what the channels carry above the start is now the coupling channel's business
+            for ch in 0..self.nfch {
+                for blk in 0..BLOCKS {
+                    for bin in c.strt..M {
+                        chans[ch].coef[blk][bin] = 0.0;
+                    }
+                }
+            }
+            chans.push(ChannelPlan { start: c.strt, is_cpl: true, end: c.end, strat: self.strat, is_lfe: false, coef, sets: Vec::new() });
         }
 
         // 2. exponents, psd and masking per (channel, set of blocks)
         for (ch, cp) in chans.iter_mut().enumerate() {
             for &(first, count) in &self.cur_sets {
+                let lo = cp.start;
                 let mut min_e = vec![24i32; cp.end];
                 for blk in first..first + count {
-                    for (bin, e) in min_e.iter_mut().enumerate() {
-                        *e = (*e).min(exponent_of(cp.coef[blk][bin]));
+                    for bin in lo..cp.end {
+                        min_e[bin] = min_e[bin].min(exponent_of(cp.coef[blk][bin]));
                     }
+                }
+                if cp.is_cpl {
+                    let strat = cp.strat;
+                    let g = strat.gsize();
+                    let nbins = cp.end - lo;
+                    // reference: an even exponent at or below the first group's
+                    let first_group = min_e[lo..lo + g].iter().copied().min().unwrap();
+                    let mut raw = vec![first_group & !1];
+                    raw.extend_from_slice(&min_e[lo..cp.end]);
+                    let mut virt = condition_exponents(&raw, strat);
+                    {
+                        // pin the reference on the group sequence, then spread the groups over their bins again
+                        let mut seq: Vec<i32> = std::iter::once(virt[0]).chain((0..nbins / g).map(|i| virt[1 + i * g])).collect();
+                        pin_reference(&mut seq);
+                        virt[0] = seq[0];
+                        for bin in 0..nbins {
+                            virt[1 + bin] = seq[1 + bin / g];
+                        }
+                    }
+                    let mut exp = vec![0i32; cp.end];
+                    for bin in lo..cp.end {
+                        exp[bin] = virt[1 + bin - lo];
+                    }
+                    let mut psd = vec![0i32; cp.end];
+                    let mut band_psd = [0i32; BANDS];
+                    calc_psd_from(&exp, lo, cp.end, &self.b2b, &mut psd, &mut band_psd);
+                    let mut mask = [0i32; BANDS];
+                    calc_mask_cpl(&band_psd, lo, cp.end, FAST_GAIN[FGAINCOD], self.fscod, &self.b2b, &mut mask);
+                    debug_assert_eq!(virt.len(), nbins + 1);
+                    cp.sets.push(SetPlan { strat, virt, exp, psd, mask });
+                    continue;
                 }
                 let strat = if ch < self.nfch && self.cur_blksw[ch][first] { Strat::D45 } else { cp.strat };
                 let exp = condition_exponents(&min_e, strat);
@@ -578,9 +845,13 @@ impl Encoder {
                 calc_psd(&exp, cp.end, &self.b2b, &mut psd, &mut band_psd);
                 let mut mask = [0i32; BANDS];
                 calc_mask(&band_psd, cp.end, FAST_GAIN[FGAINCOD], cp.is_lfe, self.fscod, &self.b2b, &mut mask);
-                cp.sets.push(SetPlan { strat, exp, psd, mask });
+                cp.sets.push(SetPlan { strat, virt: Vec::new(), exp, psd, mask });
             }
         }
+        if let Some(c) = cpl.as_mut() {
+            self.fill_coords(c, &chans, &orig);
+        }
+        self.cur_cpl = cpl;
 
         // 3. side-information size (everything but mantissas), then find the highest SNR offset that fits
         let side = self.write_frame(&chans, frmsizecod, words, 0, true).0;
@@ -615,6 +886,10 @@ impl Encoder {
 
     fn baps(&self, cp: &ChannelPlan, set: usize, v: u32) -> Vec<u8> {
         let mut bap = vec![0u8; cp.end];
+        if cp.is_cpl {
+            calc_bap_from(&cp.sets[set].mask, &cp.sets[set].psd, cp.start, cp.end, Self::snr_offset(v), &self.b2b, &mut bap);
+            return bap;
+        }
         calc_bap(&cp.sets[set].mask, &cp.sets[set].psd, cp.end, Self::snr_offset(v), &self.b2b, &mut bap);
         bap
     }
@@ -780,9 +1055,35 @@ impl Encoder {
                 w.put(0, 1); // spxinu
             } else if blk == 0 {
                 w.put(1, 1); // cplstre
-                w.put(0, 1); // cplinu
+                match &self.cur_cpl {
+                    Some(c) => {
+                        w.put(1, 1); // cplinu
+                        for _ in 0..self.nfch {
+                            w.put(1, 1); // chincpl
+                        }
+                        w.put(c.begf as u32, 4);
+                        w.put(c.endf as u32, 4);
+                        for _ in 1..3 + c.endf - c.begf {
+                            w.put(0, 1); // every 12-bin sub-band is a band of its own
+                        }
+                    }
+                    None => w.put(0, 1), // cplinu
+                }
             } else {
                 w.put(0, 1);
+            }
+            if let (false, Some(c)) = (cfg.eac3, &self.cur_cpl) {
+                for ch in 0..self.nfch {
+                    w.put(u32::from(new_exps), 1); // cplcoe
+                    if new_exps {
+                        let (mstr, bands) = &c.coords[set][ch];
+                        w.put(*mstr, 2);
+                        for (e, m) in bands {
+                            w.put(*e, 4);
+                            w.put(*m, 4);
+                        }
+                    }
+                }
             }
             if cfg.acmod == 2 {
                 if cfg.eac3 {
@@ -801,6 +1102,9 @@ impl Encoder {
                 }
             }
             if !cfg.eac3 {
+                if self.cur_cpl.is_some() {
+                    w.put(if new_exps { chans.last().unwrap().sets[set].strat.code() } else { 0 }, 2); // cplexpstr
+                }
                 for cp in chans.iter().take(self.nfch) {
                     w.put(if new_exps { cp.sets[set].strat.code() } else { 0 }, 2);
                 }
@@ -809,10 +1113,14 @@ impl Encoder {
                 }
             }
             if new_exps {
-                for cp in chans.iter().take(self.nfch) {
-                    w.put(((cp.end - 73) / 3) as u32, 6); // chbwcod
+                if self.cur_cpl.is_none() {
+                    for cp in chans.iter().take(self.nfch) {
+                        w.put(((cp.end - 73) / 3) as u32, 6); // chbwcod (coupled channels have none)
+                    }
+                } else {
+                    write_cpl_exponents(&mut w, &chans.last().unwrap().sets[set].virt, chans.last().unwrap().sets[set].strat);
                 }
-                for cp in chans.iter() {
+                for cp in chans.iter().filter(|c| !c.is_cpl) {
                     write_exponents(&mut w, &cp.sets[set].exp, cp.sets[set].strat, cp.end);
                     if !cp.is_lfe {
                         w.put(0, 2); // gainrng
@@ -833,13 +1141,26 @@ impl Encoder {
                     w.put(FLOORCOD as u32, 3);
                     w.put(1, 1); // snroffste
                     w.put(csnr, 6);
-                    for _ in 0..chans.len() {
+                    if self.cur_cpl.is_some() {
+                        w.put(fsnr, 4); // cplfsnroffst
+                        w.put(FGAINCOD as u32, 3); // cplfgaincod
+                    }
+                    for _ in 0..chans.iter().filter(|c| !c.is_cpl).count() {
                         w.put(fsnr, 4);
                         w.put(FGAINCOD as u32, 3);
                     }
                 } else {
                     w.put(0, 1); // baie
                     w.put(0, 1); // snroffste
+                }
+                if self.cur_cpl.is_some() {
+                    if blk == 0 {
+                        w.put(1, 1); // cplleake
+                        w.put(0, 3); // cplfleak
+                        w.put(0, 3); // cplsleak
+                    } else {
+                        w.put(0, 1);
+                    }
                 }
                 w.put(0, 1); // deltbaie
                 w.put(0, 1); // skiple
@@ -849,16 +1170,27 @@ impl Encoder {
                 // mantissas: collect the block's quantized values, then emit them with the grouped
                 // quantizers (bap 1, 2, 4) placed where the decoder expects them
                 let mut items: Vec<(usize, i32)> = Vec::new();
-                for (ch, cp) in chans.iter().enumerate() {
+                let collect = |items: &mut Vec<(usize, i32)>, ch: usize, cp: &ChannelPlan| {
                     let bap = &baps[ch][set];
                     let exp = &cp.sets[set].exp;
-                    for bin in 0..cp.end {
+                    for bin in cp.start..cp.end {
                         let b = bap[bin] as usize;
                         if b == 0 {
                             continue;
                         }
                         let m = (cp.coef[blk][bin] * f32::from_bits(((127 + exp[bin]) as u32) << 23)).clamp(-0.999_99, 0.999_99);
                         items.push((b, quantize(b, m)));
+                    }
+                };
+                let cpl_index = chans.len() - 1;
+                for (ch, cp) in chans.iter().enumerate() {
+                    if cp.is_cpl {
+                        continue;
+                    }
+                    collect(&mut items, ch, cp);
+                    // the coupling channel's mantissas follow the first coupled channel's
+                    if ch == 0 && self.cur_cpl.is_some() {
+                        collect(&mut items, cpl_index, &chans[cpl_index]);
                     }
                 }
                 write_mantissas(&mut w, &items);

@@ -2,7 +2,7 @@
 
 1. **Foundation** — workspace, layout/format matrix, CLI, FFmpeg backend, GUI, PCM reader, queue, downmix. *(done)*
    - Remaining: settings save/recall (`.swsettings`), folder-based batch encoding, BWF timecode fields in the GUI.
-2. **Dolby non-Atmos native** — AC-3 *(done: block switching, 2/0 rematrixing; next: coupling, exponent-strategy optimisation)*, then E-AC-3, MLP/TrueHD lossless 2.0–7.1.
+2. **Dolby non-Atmos native** — AC-3 *(done: block switching, 2/0 rematrixing; coupling done; next: exponent-strategy optimisation)*, then E-AC-3, MLP/TrueHD lossless 2.0–7.1.
 3. **DTS** - core, ES (matrix and XCH discrete), 96/24 (X96), HRA (XBR) and the DTSHDMASE-style `.dtshd` container are *done*. Express/LBR is *done* for 1.0 to 5.1 (band-limit modes, 56 kbps per pair and up; tonal components still missing). HRA 7.1/7.0 (XXCH) is done. Remaining: HRA at 96 kHz and 6.1, ADPCM/VQ/transient modes in the core encoder, Huffman side information in X96.
 4. **DTS-HD MA (XLL)** native *(done: core + lossless extension, 1.0 to 7.1 at 44.1 to 96 kHz, embedded downmix hierarchy; 96/24 core option done; next: 192 kHz)*, plus StreamTools *(done: info, bit-rate chart, trim, split, append, verify; replace and insert done; not done: re-stripe, add silence)*.
 5. **Odd formats** — DVD-Audio MLP *(done)*, DTS-CD wav wrapper, multichannel FLAC/Opus/AAC, Ambisonics, 9.1/11.1 containers, remuxing.
