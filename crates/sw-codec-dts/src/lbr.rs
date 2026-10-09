@@ -423,8 +423,14 @@ impl LbrEncoder {
         5 + 11 + 3
     }
 
+    /// The bit rate the LBR header announces: the payload after the 16-byte LBR header, as the commercial
+    /// encoder counts it.
+    fn hdr_br(&self) -> u32 {
+        (((self.frame_bytes.saturating_sub(16)) as u64 * 8 * self.cfg.sample_rate as u64 / 4096) as u32) & !31
+    }
+
     fn br_scale(&self) -> f64 {
-        let per_ch = self.cfg.bitrate as f64 / self.cfg.channels as f64;
+        let per_ch = self.hdr_br() as f64 / self.cfg.channels as f64;
         if per_ch < 14000.0 {
             0.85
         } else if per_ch < 32000.0 {
@@ -509,8 +515,8 @@ impl LbrEncoder {
         out.push(12); // 48 kHz
         out.extend_from_slice(&self.cfg.speaker_mask.to_le_bytes());
         out.extend_from_slice(&0x0800u16.to_le_bytes());
-        out.push(match self.geo.band_limit { 0 => 0x14, 1 => 0x08, _ => 0x10 } | if self.cfg.lfe { 0x02 } else { 0 }); // 16-bit, band limit, no downmix
-        let br = self.cfg.bitrate;
+        out.push(match self.geo.band_limit { 0 => 0x14, 1 => 0x08, _ => 0x10 } | 0x01 | if self.cfg.lfe { 0x02 } else { 0 }); // band limit, LFE; bit 0 is set in every commercial stream seen
+        let br = self.hdr_br();
         out.push((((br >> 16) & 0xF) | (((br >> 16) & 0xF) << 4)) as u8);
         out.extend_from_slice(&(br as u16).to_le_bytes());
         out.extend_from_slice(&(br as u16).to_le_bytes());
@@ -518,7 +524,7 @@ impl LbrEncoder {
         if std::env::var_os("SW_LBR_DEBUG").is_some() && out.len() + 5 + body.len() > self.frame_bytes {
             eprintln!("frame {} overshoots: {} bytes against {}", self.frames, out.len() + 5 + body.len(), self.frame_bytes);
         }
-        let pad = self.frame_bytes.saturating_sub(out.len() + 3 + 2 + body.len());
+        let pad = self.frame_bytes.saturating_sub(out.len() + 3 + 2 + body.len() + 2);
         let len = 2 + body.len() + pad;
         let mut csum: u32 = 0x84 + (len >> 8) as u32 + (len & 0xFF) as u32;
         csum += body.iter().map(|b| *b as u32).sum::<u32>();
@@ -527,14 +533,15 @@ impl LbrEncoder {
         out.extend_from_slice(&(csum as u16).to_be_bytes());
         out.extend_from_slice(&body);
         out.resize(out.len() + pad, 0);
+        out.resize(self.frame_bytes, 0); // the commercial encoder leaves two zero bytes after the chunk
         out
     }
 
     fn g3_avg_only_start(&self) -> usize {
         let per = self.cfg.channels as u32 + 2;
-        let res_profile = if self.cfg.bitrate >= 44000 * per {
+        let res_profile = if self.hdr_br() >= 44000 * per {
             2
-        } else if self.cfg.bitrate >= 25000 * per {
+        } else if self.hdr_br() >= 25000 * per {
             1
         } else {
             0

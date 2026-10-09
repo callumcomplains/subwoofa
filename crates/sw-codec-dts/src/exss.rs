@@ -88,6 +88,10 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     } else {
         a.put(0, 1);
     }
+    let secondary = lbr.is_some();
+    if secondary {
+        a.put(0, 1); // no mixing metadata for this asset
+    }
     let write_xll = |a: &mut BitWriter, x: &[u8]| {
         a.put(x.len() as u32 - 1, nb4f);
         a.put(1, 1); // XLL sync word present
@@ -121,8 +125,16 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     if xll.is_some() {
         a.put(0, 3); // stream id
     }
-    a.put(0, 1); // decode in primary decoder
-    a.put(0, 1); // no revision 2 DRC
+    if secondary {
+        // as in the commercial secondary-audio streams: decoded by the secondary decoder, followed by
+        // seven fixed bits whose meaning is not published
+        a.put(1, 1);
+        a.put(0, 1); // no revision 2 DRC
+        a.put(0b0100101, 7);
+    } else {
+        a.put(0, 1); // decode in primary decoder
+        a.put(0, 1); // no revision 2 DRC
+    }
     a.align(8);
     let mut ab = a.into_bytes();
     let alen = ab.len();
@@ -133,14 +145,16 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     ab[1] = (ab[1] & 0x7F) | (((v & 1) as u8) << 7);
 
     // ---- header
-    let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + 1 + 8 + 1 + nb4f as usize;
+    // secondary audio: presentation mask of 3 bits plus two asset masks, then the mixing configuration (10 bits)
+    let sel_bits = if secondary { 3 + 16 + 1 + 10 } else { 1 + 8 + 1 };
+    let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + nb4f as usize;
     let bits_total = bits_before_desc + alen * 8 + 1;
     let hsize = bits_total.div_ceil(8) + 2;
     let frame_size = hsize + payload;
     let mut h = BitWriter::new();
     h.put(SYNC_EXSS, 32);
     h.put(0, 8); // user defined bits
-    h.put(0, 2); // extension substream index
+    h.put(if secondary { 2 } else { 0 }, 2); // extension substream index (secondary audio lives in 2)
     h.put(0, 1); // short header sizes
     h.put(hsize as u32 - 1, 8);
     h.put(frame_size as u32 - 1, nb4f);
@@ -150,9 +164,21 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     h.put(0, 1); // no time stamp
     h.put(0, 3); // one audio presentation
     h.put(0, 3); // one asset
-    h.put(1, 1); // active extension substream mask
-    h.put(1, 8); // active asset mask
-    h.put(0, 1); // no mixing metadata
+    if secondary {
+        // the presentation mixes the primary audio (substream 0) with this secondary stream (substream 2)
+        h.put(0b101, 3);
+        h.put(1, 8);
+        h.put(1, 8);
+        h.put(1, 1); // mixing metadata present
+        h.put(0, 2); // adjustment level
+        h.put(0, 2); // 4 bits per output mask
+        h.put(0, 2); // one mix output configuration
+        h.put(0xF, 4);
+    } else {
+        h.put(1, 1); // active extension substream mask
+        h.put(1, 8); // active asset mask
+        h.put(0, 1); // no mixing metadata
+    }
     h.put(payload as u32 - 1, nb4f); // asset size
     for b in &ab {
         h.put(*b as u32, 8);

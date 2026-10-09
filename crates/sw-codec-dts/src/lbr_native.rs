@@ -84,7 +84,6 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     let rate = stems.sample_rate;
     let map = map_layout(req.layout)?;
     let nch = map.order.len();
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate: req.bitrate_kbps * 1000 })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
@@ -92,18 +91,22 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     if want == 0 {
         return Err(LbrError::Empty);
     }
-    let n = enc.frame_samples();
+    let n = 4096usize; // samples per Express frame
     let total_channels = nch + usize::from(map.lfe.is_some());
     let exss = ExssParams {
         sample_rate: rate,
         channels: total_channels,
-        bit_res: 16,
+        bit_res: 24,
         spk_mask: map.mask as u32,
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
         x96_in_core: false,
     };
+    // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
+    let overhead = exss_frame_lbr(&exss, &[0u8]).len() - 1;
+    let bitrate = (req.bitrate_kbps as u64 * 1000).saturating_sub(overhead as u64 * 8 * rate as u64 / n as u64) as u32;
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate })?;
     let frames_total = want.div_ceil(n as u64);
     let mut file = std::io::BufWriter::new(std::fs::File::create(req.output)?);
     let header = |frames: u32, bytes: u64| dtshd_header(&DtsHdHeader { sample_rate: rate, frames, samples_per_frame: n as u16, total_samples: want, ch_mask: map.mask, initial_padding: 0 }, bytes);

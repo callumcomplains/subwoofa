@@ -146,3 +146,17 @@ Newest entries at the bottom. Started 2026-10-08.
 
 ## Peak bit rate in every encode log
 - When a job writes a DTS, DTS-HD, TrueHD or MLP stream, the job log now ends with the peak bit rate (single frame and busiest second, with their positions) read back from the finished file by StreamTools, so a disc-authoring limit can be checked without opening another tool. Also noted from the commercial `.dtshd` file MAS wrote: it contains two small metadata chunks (`CORESSMD` and `EXTSS_MD`) that mine lacks; its header's frame-rate field matches the log ("24") and its start-time field is not read by DTS's verifier, so StreamTools re-stripe stays unimplemented until those fields can be verified.
+
+## DTS Express checked against a commercial stream (Source Code, secondary audio)
+
+The user's Source Code `00004.m2ts` (truncated, but the Express track is intact) gave the first real DTS Express reference: stream 29, pid 0x1A00, stereo, 187,872 bit/s. `DTSHDVerify` passes it (712/712 frames), frames are a fixed 2048 bytes.
+
+Compared field by field with our output and matched:
+- Extension substream **index 2** (was 0); the presentation names substreams 0 and 2 (mask 0b101, one asset each) and carries mixing metadata (adjustment level 0, one 4-bit output config, mask 0xF).
+- Asset descriptor: **24-bit** resolution, a mixing-metadata-present bit (0), "decode in secondary decoder" set, followed by seven fixed bits (`0100101`) of unpublished meaning. Copied verbatim.
+- The LBR header now announces the **payload bit rate** (frame minus the 16-byte LBR header, rounded down to a multiple of 32), not the nominal rate. Flag bit 0 is set as in the reference.
+- Frame chunk is followed by two zero bytes inside the frame.
+- The bit rate now counts the **whole** extension substream frame, so a 192 kbps request gives exactly 2048-byte frames (it was 195 kbps average before: the header came on top).
+
+Verified with DTSHDVerify and FFmpeg: 2.0 at 64/192/510, 1.0 at 48, 5.0 at 192, 5.1 at 160/256 all pass.
+Not yet learned from the reference: how the commercial encoder splits its 188 kbps (band limit, tonal components); the header byte pattern after the flags is identical to ours at 1/2 band limit.
