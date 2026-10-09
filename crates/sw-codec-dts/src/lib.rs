@@ -5,6 +5,7 @@ pub mod dmix_table;
 pub mod core_exact;
 pub mod encoder;
 pub mod dts96;
+pub mod dtshd;
 pub mod es;
 pub mod hra;
 pub mod lbr_fb;

@@ -1,9 +1,8 @@
 //! File-level driver for DTS-HD Master Audio: stems in, `.dtshd` (or raw) stream out.
 
-use crate::exss::{dtshd_header, DtsHdHeader};
+use crate::dtshd::{DtsHdInfo, Kind, StreamOut};
 use crate::ma::{map_layout, MaConfig, MaEncoder};
 use crate::ma_core::{MaCoreConfig, MaCoreEncoder};
-use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_core::ChannelLayout;
@@ -77,10 +76,13 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     }
     // a core at 176.4/192 kHz is not implemented (the lossless stream stands alone, as in a core-less MA stream)
     let core_bitrate_kbps = if rate > 96_000 { None } else { req.core_bitrate_kbps };
-    let mut enc = match core_bitrate_kbps {
-        Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
-        None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0 })),
+    let make = || -> Result<Enc, MaError> {
+        Ok(match core_bitrate_kbps {
+            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
+            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0 })),
+        })
     };
+    let mut enc = make()?;
     let n = match &enc {
         Enc::Core(e) => e.frame_samples(),
         Enc::Lossless(e) => e.frame_samples(),
@@ -94,14 +96,16 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     }
     let frames_total = want.div_ceil(n as u64);
 
-    let mut file = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-    let header_len = if req.container {
-        let h = dtshd_header(&DtsHdHeader { sample_rate: rate, frames: frames_total as u32, samples_per_frame: n as u16, total_samples: want, ch_mask: map.exss_mask as u16, initial_padding: 0 }, 0);
-        file.write_all(&h)?;
-        h.len() as u64
-    } else {
-        0
-    };
+    let core_payload = core_bitrate_kbps.map_or(0, |k| (k * 1000 * 512 / 48_000 / 8) & !3);
+    let info = req.container.then(|| {
+        let mut i = DtsHdInfo::new(rate, n as u16, want, map.exss_mask as u16, if core_bitrate_kbps.is_some() { Kind::CoreAndExtension } else { Kind::ExtensionOnly });
+        i.vbr = true;
+        i.core_kbps = core_bitrate_kbps.unwrap_or(0);
+        i.core_payload = core_payload;
+        i
+    });
+    let mut file = StreamOut::create(req.output, info)?;
+    let _ = frames_total;
 
     let scale = (1i64 << (bit_res - 1)) as f32;
     let (lo, hi) = (-(1i64 << (bit_res - 1)), (1i64 << (bit_res - 1)) - 1);
@@ -141,7 +145,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         };
         tm[2] += t_p.elapsed().as_secs_f64();
         for f in ready {
-            file.write_all(&f)?;
+            file.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
             bytes += f.len() as u64;
             frames += 1;
         }
@@ -152,22 +156,27 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     }
     if let Enc::Core(e) = &mut enc {
         for f in e.finish() {
-            file.write_all(&f)?;
+            file.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
             bytes += f.len() as u64;
             frames += 1;
         }
     }
-    if req.container {
-        let h = dtshd_header(&DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: want, ch_mask: map.exss_mask as u16, initial_padding: 0 }, bytes);
-        debug_assert_eq!(h.len() as u64, header_len);
-        file.flush()?;
-        let mut inner = file.into_inner().map_err(|e| e.into_error())?;
-        inner.seek(SeekFrom::Start(0))?;
-        inner.write_all(&h)?;
-        inner.flush()?;
+    // one silent frame, kept at the end of the file for tools that add silence
+    let blackout = if req.container {
+        let mut e = make()?;
+        let zeros = vec![vec![0i32; n * 12]; nch];
+        let mut ready: Vec<Vec<u8>> = match &mut e {
+            Enc::Core(c) => c.push(&zeros),
+            Enc::Lossless(l) => lossless_frames(l, &zeros, n * 12, n),
+        };
+        if let Enc::Core(c) = &mut e {
+            ready.extend(c.finish());
+        }
+        ready.get(ready.len() / 2).cloned()
     } else {
-        file.flush()?;
-    }
+        None
+    };
+    file.finish(blackout.as_deref())?;
     on_progress(1.0);
     Ok(MaStats { frames, bytes })
 }

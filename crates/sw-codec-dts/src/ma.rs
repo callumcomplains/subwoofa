@@ -274,7 +274,7 @@ impl MaEncoder {
                 with_core: false,
                 dialnorm: self.cfg.dialnorm,
                 frame_duration_code: 0,
-                x96_in_core: false,
+                x96_in_core: false, secondary: false,
             },
             &data,
         )

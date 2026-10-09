@@ -232,6 +232,7 @@ fn execute_inner(
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
+            secondary: dest == Destination::BluRaySecondary,
         };
         sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::lbr_native::LbrError::Canceled => Failure::Canceled,

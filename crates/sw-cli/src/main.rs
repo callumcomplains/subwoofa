@@ -67,6 +67,31 @@ enum ToolsCmd {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Relabel the start timecode and frame rate of a .dtshd file (the audio is untouched).
+    Restripe {
+        file: PathBuf,
+        /// New start time, hh:mm:ss:ff
+        #[arg(long, default_value = "00:00:00:00")]
+        start: String,
+        /// New frame rate: 23.976, 24, 25, 29.97, "29.97 drop", 30 or "30 drop"
+        #[arg(long, default_value = "24")]
+        fps: String,
+        /// Write here instead of changing the file in place
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Add silence to the head and/or tail of a .dtshd file written by Subwoofa or the DTS encoder.
+    AddSilence {
+        file: PathBuf,
+        /// Silence at the head, seconds
+        #[arg(long, default_value_t = 0.0)]
+        head: f64,
+        /// Silence at the tail, seconds
+        #[arg(long, default_value_t = 0.0)]
+        tail: f64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Decode the whole stream and report decoder complaints and the PCM MD5.
     Verify {
         file: PathBuf,
@@ -304,7 +329,7 @@ fn run() -> Result<(), String> {
             if engine == "native" {
                 if stream == StreamType::DtsExpress {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output };
+                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output, secondary: dest == Destination::BluRaySecondary };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 4096) as f64 / stems.sample_rate as f64;
@@ -471,6 +496,17 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
         ToolsCmd::Insert { base, with, at, output } => {
             let start = sw_tools::insert(&base, &with, at, &output).map_err(e)?;
             println!("wrote {} (inserted at {:.3} s)", output.display(), start);
+        }
+        ToolsCmd::Restripe { file, start, fps, output } => {
+            let code = sw_tools::fps_code(&fps).ok_or_else(|| format!("unknown frame rate '{fps}'"))?;
+            let tc = sw_tools::parse_timecode(&start).ok_or_else(|| format!("start time '{start}' is not hh:mm:ss:ff"))?;
+            let out = output.unwrap_or_else(|| file.clone());
+            sw_tools::restripe(&file, &out, code, tc).map_err(e)?;
+            println!("restriped {} ({} at {} fps code {})", out.display(), start, fps, code);
+        }
+        ToolsCmd::AddSilence { file, head, tail, output } => {
+            let (h, t) = sw_tools::add_silence(&file, &output, head, tail).map_err(e)?;
+            println!("wrote {} ({} silent frames at the head, {} at the tail)", output.display(), h, t);
         }
         ToolsCmd::Verify { file, ffmpeg } => {
             let ff = ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg).ok_or("ffmpeg not found")?;

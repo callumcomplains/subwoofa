@@ -38,6 +38,13 @@ pub struct Frame {
     pub restart: bool,
 }
 
+/// A chunk of a `.dtshd` container.
+#[derive(Debug, Clone)]
+pub struct Chunk {
+    pub name: [u8; 8],
+    pub body: Vec<u8>,
+}
+
 pub struct Stream {
     pub format: Format,
     /// Container bytes in front of the elementary stream (`.dtshd` header chunks); empty for raw streams.
@@ -51,6 +58,8 @@ pub struct Stream {
     pub sample_rate: u32,
     pub channels: u32,
     pub description: String,
+    /// Chunks after the stream data (frame offsets, timecode, silent frame...); empty for raw streams.
+    pub trailer: Vec<Chunk>,
     path: PathBuf,
 }
 
@@ -444,7 +453,8 @@ impl Stream {
             let (fr, tr, sr, ch, d) = index_dts(&mut r, data_start, data_len)?;
             (Format::Dts, fr, tr, sr, ch, d)
         };
-        Ok(Stream { format, header, data_start, data_len, frames, tick_rate, sample_rate, channels, description, path: path.to_path_buf() })
+        let trailer = if header.is_empty() { Vec::new() } else { read_chunks(&mut r, data_start + data_len, total)? };
+        Ok(Stream { format, header, data_start, data_len, frames, tick_rate, sample_rate, channels, description, trailer, path: path.to_path_buf() })
     }
 
     pub fn is_container(&self) -> bool {
@@ -537,6 +547,10 @@ impl Stream {
             w.write_all(&patch_container(&self.header, frames.len() as u32, ticks, bytes))?;
         }
         copy_frames(&mut src, &mut w, self.data_start, frames)?;
+        if self.is_container() {
+            let sizes: Vec<u32> = frames.iter().map(|f| f.len).collect();
+            write_trailer(&mut w, &self.trailer, &sizes)?;
+        }
         w.flush()?;
         Ok(())
     }
@@ -611,6 +625,10 @@ pub fn append(inputs: &[&Path], out: &Path) -> Result<()> {
         let mut src = BufReader::new(File::open(&s.path)?);
         copy_frames(&mut src, &mut w, s.data_start, &s.frames)?;
     }
+    if first.is_container() {
+        let sizes: Vec<u32> = streams.iter().flat_map(|s| s.frames.iter()).map(|f| f.len).collect();
+        write_trailer(&mut w, &first.trailer, &sizes)?;
+    }
     w.flush()?;
     Ok(())
 }
@@ -655,6 +673,10 @@ fn write_pieces(head: &Stream, pieces: &[(&Stream, usize, usize)], out: &Path) -
         let mut src = BufReader::new(File::open(&s.path)?);
         copy_frames(&mut src, &mut w, s.data_start, &s.frames[*a..*b])?;
     }
+    if head.is_container() {
+        let sizes: Vec<u32> = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.len).collect();
+        write_trailer(&mut w, &head.trailer, &sizes)?;
+    }
     w.flush()?;
     Ok(())
 }
@@ -691,6 +713,58 @@ pub fn insert(base: &Path, insert: &Path, at: f64, out: &Path) -> Result<f64> {
     let pieces = [(&a, 0, first), (&b, 0, b.frames.len()), (&a, first, a.frames.len())];
     write_pieces(&a, &pieces, out)?;
     Ok(a.frame_start_secs(first))
+}
+
+/// The chunks between `pos` and the end of the file.
+fn read_chunks<R: Read + Seek>(r: &mut R, mut pos: u64, total: u64) -> Result<Vec<Chunk>> {
+    let mut out = Vec::new();
+    while pos + 16 <= total {
+        r.seek(SeekFrom::Start(pos))?;
+        let mut h = [0u8; 16];
+        r.read_exact(&mut h)?;
+        if !h[..8].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_') {
+            break;
+        }
+        let size = u64::from_be_bytes(h[8..16].try_into().unwrap());
+        if size > total - pos - 16 {
+            break;
+        }
+        let mut body = vec![0u8; size as usize];
+        r.read_exact(&mut body)?;
+        out.push(Chunk { name: h[..8].try_into().unwrap(), body });
+        pos += 16 + size;
+    }
+    Ok(out)
+}
+
+/// The frame offset table for frames of the given sizes: count, 1, bytes per entry, entries.
+fn navi_table(sizes: &[u32]) -> Vec<u8> {
+    let total: u64 = sizes.iter().map(|s| *s as u64).sum();
+    let wide = total > 0xFF_FFFF;
+    let mut navi = Vec::with_capacity(7 + sizes.len() * 4);
+    navi.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
+    navi.extend_from_slice(&[0, 1, if wide { 4 } else { 3 }]);
+    let mut off = 0u64;
+    for s in sizes {
+        if wide {
+            navi.extend_from_slice(&(off as u32).to_be_bytes());
+        } else {
+            navi.extend_from_slice(&(off as u32).to_be_bytes()[1..]);
+        }
+        off += *s as u64;
+    }
+    navi
+}
+
+/// Write the chunks that follow the stream, rebuilding the frame offset table for the frames just written.
+fn write_trailer<W: Write>(w: &mut W, trailer: &[Chunk], sizes: &[u32]) -> Result<()> {
+    for c in trailer {
+        let body = if &c.name == b"NAVI-TBL" { navi_table(sizes) } else { c.body.clone() };
+        w.write_all(&c.name)?;
+        w.write_all(&(body.len() as u64).to_be_bytes())?;
+        w.write_all(&body)?;
+    }
+    Ok(())
 }
 
 fn copy_frames<R: Read + Seek, W: Write>(src: &mut R, w: &mut W, data_start: u64, frames: &[Frame]) -> Result<()> {
@@ -737,6 +811,194 @@ fn patch_container(header: &[u8], frames: u32, ticks: u64, bytes: u64) -> Vec<u8
         pos += 16 + size;
     }
     h
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Restripe and Add Silence
+
+/// Frame rate codes of the `.dtshd` timecode.
+pub const FPS_23_976: u8 = 1;
+pub const FPS_24: u8 = 2;
+pub const FPS_25: u8 = 3;
+pub const FPS_29_97_DROP: u8 = 4;
+pub const FPS_29_97: u8 = 5;
+pub const FPS_30_DROP: u8 = 6;
+pub const FPS_30: u8 = 7;
+
+/// Frame rate code for a name such as "23.976", "29.97 drop" or "30".
+pub fn fps_code(name: &str) -> Option<u8> {
+    let n = name.trim().to_ascii_lowercase().replace(' ', "");
+    Some(match n.as_str() {
+        "23.976" | "23.98" => FPS_23_976,
+        "24" => FPS_24,
+        "25" => FPS_25,
+        "29.97drop" | "29.97df" => FPS_29_97_DROP,
+        "29.97" => FPS_29_97,
+        "30drop" | "30df" => FPS_30_DROP,
+        "30" => FPS_30,
+        _ => return None,
+    })
+}
+
+fn fps_exact(code: u8) -> (u64, u64) {
+    match code {
+        FPS_23_976 => (24_000, 1001),
+        FPS_25 => (25, 1),
+        FPS_29_97 | FPS_29_97_DROP => (30_000, 1001),
+        FPS_30 | FPS_30_DROP => (30, 1),
+        _ => (24, 1),
+    }
+}
+
+/// Position of `hh:mm:ss:ff` at a frame rate code, as the file stores it: whole samples at 48 kHz and a
+/// remainder in units of 1/(frame rate numerator) sample. Drop-frame rates skip two frame numbers at the
+/// start of every minute that is not a tenth minute.
+pub fn timecode_position(code: u8, h: u32, m: u32, s: u32, f: u32) -> (u32, u32) {
+    let nominal: u64 = match code {
+        FPS_23_976 | FPS_24 => 24,
+        FPS_25 => 25,
+        _ => 30,
+    };
+    let minutes = (h * 60 + m) as u64;
+    let mut frames = (minutes * 60 + s as u64) * nominal + f as u64;
+    if code == FPS_29_97_DROP || code == FPS_30_DROP {
+        frames -= 2 * (minutes - minutes / 10);
+    }
+    let (num, den) = fps_exact(code);
+    let scaled = frames as u128 * 48_000 * den as u128;
+    ((scaled / num as u128) as u32, (scaled % num as u128) as u32)
+}
+
+/// Parse `hh:mm:ss:ff` (also with semicolons).
+pub fn parse_timecode(text: &str) -> Option<(u32, u32, u32, u32)> {
+    let parts: Vec<u32> = text.split(|c| c == ':' || c == ';').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+    (parts.len() == 4).then(|| (parts[0], parts[1], parts[2], parts[3]))
+}
+
+/// Chunks of a `.dtshd` file as (name, payload offset, payload size).
+fn chunk_offsets(path: &Path) -> Result<Vec<(Vec<u8>, u64, u64)>> {
+    let mut f = File::open(path)?;
+    let total = f.metadata()?.len();
+    let mut pos = 0u64;
+    let mut out = Vec::new();
+    while pos + 16 <= total {
+        f.seek(SeekFrom::Start(pos))?;
+        let mut h = [0u8; 16];
+        f.read_exact(&mut h)?;
+        let size = u64::from_be_bytes(h[8..16].try_into().unwrap());
+        if !h[..8].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_') || size > total - pos - 16 {
+            break;
+        }
+        out.push((h[..8].to_vec(), pos + 16, size));
+        pos += 16 + size;
+    }
+    Ok(out)
+}
+
+/// What a restripe reads: the start time and frame rate in a `.dtshd` file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stripe {
+    pub fps_code: u8,
+    pub start_samples: u32,
+    pub reference_samples: u32,
+}
+
+pub fn read_stripe(path: &Path) -> Result<Stripe> {
+    let chunks = chunk_offsets(path)?;
+    let mut f = File::open(path)?;
+    let (_, at, size) = chunks.iter().find(|(n, _, _)| n == b"TIMECODE").ok_or_else(|| Error::Format("the file has no TIMECODE chunk (not a .dtshd written by an encoder)".into()))?;
+    if *size < 32 {
+        return Err(Error::Format("TIMECODE chunk too short".into()));
+    }
+    f.seek(SeekFrom::Start(*at))?;
+    let mut b = [0u8; 32];
+    f.read_exact(&mut b)?;
+    Ok(Stripe { fps_code: b[4], start_samples: u32::from_be_bytes(b[9..13].try_into().unwrap()), reference_samples: u32::from_be_bytes(b[21..25].try_into().unwrap()) })
+}
+
+/// Relabel the start time and frame rate of a `.dtshd` file (the header and the timecode chunk; the reference
+/// time is kept). Writes `out`, or patches `input` in place when they are the same path.
+pub fn restripe(input: &Path, out: &Path, fps_code: u8, start: (u32, u32, u32, u32)) -> Result<()> {
+    if input != out {
+        std::fs::copy(input, out)?;
+    }
+    let chunks = chunk_offsets(out)?;
+    let (samples, fraction) = timecode_position(fps_code, start.0, start.1, start.2, start.3);
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(out)?;
+    let mut patched = 0;
+    for (name, at, size) in &chunks {
+        if name == b"DTSHDHDR" && *size >= 10 {
+            f.seek(SeekFrom::Start(*at + 5))?;
+            f.write_all(&samples.to_be_bytes())?;
+            f.write_all(&[fps_code])?;
+            patched += 1;
+        } else if name == b"TIMECODE" && *size >= 32 {
+            f.seek(SeekFrom::Start(*at + 4))?;
+            f.write_all(&[fps_code])?;
+            f.seek(SeekFrom::Start(*at + 8))?;
+            f.write_all(&[0])?;
+            f.write_all(&samples.to_be_bytes())?;
+            f.write_all(&fraction.to_be_bytes())?;
+            patched += 1;
+        }
+    }
+    if patched < 2 {
+        return Err(Error::Format("the file has no DTSHDHDR and TIMECODE chunks to restripe".into()));
+    }
+    Ok(())
+}
+
+impl Stream {
+    /// The silent frame stored in the file (the BLACKOUT chunk), if there is one.
+    pub fn blackout(&self) -> Option<Vec<u8>> {
+        if let Some(c) = self.trailer.iter().find(|c| &c.name == b"BLACKOUT") {
+            return Some(c.body.clone());
+        }
+        // StreamTools keeps it in front of the stream data
+        let mut pos = 0usize;
+        let h = &self.header;
+        while pos + 16 <= h.len() {
+            let size = u64::from_be_bytes(h[pos + 8..pos + 16].try_into().unwrap()) as usize;
+            if &h[pos..pos + 8] == b"BLACKOUT" && pos + 16 + size <= h.len() {
+                return Some(h[pos + 16..pos + 16 + size].to_vec());
+            }
+            pos += 16 + size;
+        }
+        None
+    }
+}
+
+/// Add silence to the head and/or tail of a `.dtshd` stream: whole frames of the stored silent frame, as many
+/// as fit in the given time (so the length is right to within one frame, as in the commercial tool).
+/// Returns (frames added at the head, frames added at the tail).
+pub fn add_silence(input: &Path, out: &Path, head_secs: f64, tail_secs: f64) -> Result<(usize, usize)> {
+    let s = Stream::open(input)?;
+    if !s.is_container() {
+        return Err(Error::Format("Add Silence needs a .dtshd file".into()));
+    }
+    let silent = s.blackout().ok_or_else(|| Error::Format("this file has no silent frame (BLACKOUT chunk), so silence cannot be added to it".into()))?;
+    let per_frame = s.frames[0].ticks as f64 / s.tick_rate.max(1) as f64;
+    let nh = (head_secs.max(0.0) / per_frame + 1e-9).floor() as usize;
+    let nt = (tail_secs.max(0.0) / per_frame + 1e-9).floor() as usize;
+    let ticks = s.total_ticks() + (nh + nt) as u64 * s.frames[0].ticks as u64;
+    let frames = (s.frames.len() + nh + nt) as u32;
+    let bytes = s.data_len + (nh + nt) as u64 * silent.len() as u64;
+    let mut w = BufWriter::new(File::create(out)?);
+    w.write_all(&patch_container(&s.header, frames, ticks, bytes))?;
+    for _ in 0..nh {
+        w.write_all(&silent)?;
+    }
+    let mut src = BufReader::new(File::open(&s.path)?);
+    copy_frames(&mut src, &mut w, s.data_start, &s.frames)?;
+    for _ in 0..nt {
+        w.write_all(&silent)?;
+    }
+    let mut sizes: Vec<u32> = vec![silent.len() as u32; nh];
+    sizes.extend(s.frames.iter().map(|f| f.len));
+    sizes.extend(std::iter::repeat(silent.len() as u32).take(nt));
+    write_trailer(&mut w, &s.trailer, &sizes)?;
+    w.flush()?;
+    Ok((nh, nt))
 }
 
 #[derive(Debug, Serialize)]
@@ -834,5 +1096,47 @@ mod tests {
         }
         insert(&base, &ins, at, &out).unwrap();
         assert_eq!(std::fs::read(&out).unwrap().len(), 48 * 64);
+    }
+
+    #[test]
+    fn timecode_positions_match_the_commercial_tool() {
+        // sample positions StreamTools wrote for the same timecodes
+        assert_eq!(timecode_position(FPS_24, 0, 0, 1, 0), (48_000, 0));
+        assert_eq!(timecode_position(FPS_23_976, 0, 0, 10, 0), (480_480, 0));
+        assert_eq!(timecode_position(FPS_23_976, 1, 2, 3, 4), (178_890_712, 0));
+        assert_eq!(timecode_position(FPS_25, 1, 0, 0, 0), (172_800_000, 0));
+        assert_eq!(timecode_position(FPS_30, 1, 0, 0, 0), (172_800_000, 0));
+        assert_eq!(timecode_position(FPS_29_97, 1, 0, 0, 0), (172_972_800, 0));
+        assert_eq!(timecode_position(FPS_29_97_DROP, 1, 0, 0, 0), (172_799_827, 6000));
+        assert_eq!(timecode_position(FPS_30_DROP, 1, 0, 0, 0), (172_627_200, 0));
+        assert_eq!(parse_timecode("01:02:03:04"), Some((1, 2, 3, 4)));
+        assert_eq!(fps_code("29.97 DROP"), Some(FPS_29_97_DROP));
+    }
+
+    #[test]
+    fn restripe_patches_header_and_timecode_chunk() {
+        let dir = std::env::temp_dir().join(format!("sw_tools_rs_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = Vec::new();
+        let chunk = |f: &mut Vec<u8>, n: &[u8; 8], b: &[u8]| {
+            f.extend_from_slice(n);
+            f.extend_from_slice(&(b.len() as u64).to_be_bytes());
+            f.extend_from_slice(b);
+        };
+        chunk(&mut f, b"DTSHDHDR", &[0, 0, 0, 0, 0x80, 0, 0, 0, 0, 2, 0, 0x1d, 1, 0, 0, 0]);
+        chunk(&mut f, b"STRMDATA", &[0u8; 64]);
+        let mut tc = vec![0u8; 32];
+        tc[..4].copy_from_slice(&48_000u32.to_be_bytes());
+        tc[4] = 2;
+        chunk(&mut f, b"TIMECODE", &tc);
+        let (a, b) = (dir.join("a.dtshd"), dir.join("b.dtshd"));
+        std::fs::write(&a, &f).unwrap();
+        restripe(&a, &b, FPS_29_97_DROP, (1, 0, 0, 0)).unwrap();
+        let s = read_stripe(&b).unwrap();
+        assert_eq!((s.fps_code, s.start_samples, s.reference_samples), (FPS_29_97_DROP, 172_799_827, 0));
+        let out = std::fs::read(&b).unwrap();
+        assert_eq!(&out[16 + 5..16 + 9], &172_799_827u32.to_be_bytes());
+        assert_eq!(out[16 + 9], FPS_29_97_DROP);
+        assert_eq!(out.len(), f.len());
     }
 }

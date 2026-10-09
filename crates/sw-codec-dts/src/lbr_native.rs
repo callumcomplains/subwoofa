@@ -1,8 +1,8 @@
 //! File-level driver for DTS Express: stems in, `.dtshd` out (extension substream frames only).
 
-use crate::exss::{dtshd_header_lbr as dtshd_header, exss_frame_lbr, DtsHdHeader, ExssParams};
+use crate::dtshd::{DtsHdInfo, Kind, StreamOut};
+use crate::exss::{exss_frame_lbr, ExssParams};
 use crate::lbr::{LbrConfig, LbrEncoder};
-use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_core::{Channel, ChannelLayout};
@@ -28,6 +28,8 @@ pub struct LbrRequest<'a> {
     pub start_secs: f64,
     pub duration_secs: Option<f64>,
     pub output: &'a Path,
+    /// Blu-ray secondary audio: extension substream 2, mixing metadata, 24-bit asset.
+    pub secondary: bool,
 }
 
 pub struct LbrStats {
@@ -96,25 +98,20 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     let exss = ExssParams {
         sample_rate: rate,
         channels: total_channels,
-        bit_res: 24,
+        bit_res: if req.secondary { 24 } else { 16 },
         spk_mask: map.mask as u32,
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
-        x96_in_core: false,
+        x96_in_core: false, secondary: req.secondary,
     };
     // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
-    let overhead = exss_frame_lbr(&exss, &[0u8]).len() - 1;
+    let overhead = exss_frame_lbr(&exss, &[0u8; 4]).len() - 4;
     let bitrate = (req.bitrate_kbps as u64 * 1000).saturating_sub(overhead as u64 * 8 * rate as u64 / n as u64) as u32;
     let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate })?;
     let frames_total = want.div_ceil(n as u64);
-    let mut file = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-    let header = |frames: u32, bytes: u64| dtshd_header(&DtsHdHeader { sample_rate: rate, frames, samples_per_frame: n as u16, total_samples: want, ch_mask: map.mask, initial_padding: 0 }, bytes);
-    let header_len = {
-        let h = header(frames_total as u32, 0);
-        file.write_all(&h)?;
-        h.len() as u64
-    };
+    let _ = frames_total;
+    let mut file = StreamOut::create(req.output, Some(DtsHdInfo::new(rate, n as u16, want, map.mask, Kind::ExtensionOnly)))?;
     let slots: Vec<usize> = map.order.iter().copied().chain(map.lfe).collect();
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
@@ -130,7 +127,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         remaining -= got as u64;
         for p in enc.push(&block) {
             let f = exss_frame_lbr(&exss, &p);
-            file.write_all(&f)?;
+            file.write_frame(&f, f.len())?;
             bytes += f.len() as u64;
             frames += 1;
         }
@@ -138,17 +135,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     }
     for p in enc.finish() {
         let f = exss_frame_lbr(&exss, &p);
-        file.write_all(&f)?;
+        file.write_frame(&f, f.len())?;
         bytes += f.len() as u64;
         frames += 1;
     }
-    file.flush()?;
-    let h = header(frames as u32, bytes);
-    debug_assert_eq!(h.len() as u64, header_len);
-    let mut inner = file.into_inner().map_err(|e| e.into_error())?;
-    inner.seek(SeekFrom::Start(0))?;
-    inner.write_all(&h)?;
-    inner.flush()?;
+    file.finish(None)?;
     on_progress(1.0);
     Ok(LbrStats { frames, bytes })
 }

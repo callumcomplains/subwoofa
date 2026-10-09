@@ -758,6 +758,36 @@ function initTools() {
     try { toolsLog(await invoke("tools_replace", { path: tools.path, with: $("tRepPath").value, at: Number($("tRepAt").value) || 0, output: out, insert: $("tRepInsert").checked }), "ok"); }
     catch (e) { toolsLog(String(e), "bad"); }
   };
+  const FPS_NAMES = { 1: "23.976", 2: "24", 3: "25", 4: "29.97 drop", 5: "29.97", 6: "30 drop", 7: "30" };
+  const showStripe = async () => {
+    if (!tools.path) return;
+    try {
+      const r = await invoke("tools_stripe", { path: tools.path });
+      const fps = FPS_NAMES[r.fps_code] || "?";
+      const secs = r.start_samples / 48000;
+      $("tStripeNow").value = `${fmtTime(secs)} at ${fps} fps`;
+      if (FPS_NAMES[r.fps_code]) $("tStripeFps").value = fps;
+    } catch (e) { $("tStripeNow").value = "no timecode in this file"; }
+  };
+  document.querySelectorAll(".op-tabs button[data-op='restripe']").forEach((b) => b.addEventListener("click", showStripe));
+  $("tStripeRun").onclick = async () => {
+    if (!needStream()) return;
+    const out = await dialog.save({ defaultPath: suggestName("_restriped"), filters: STREAM_FILTERS });
+    if (!out) return;
+    toolsLog("Writing…");
+    try { toolsLog(await invoke("tools_restripe", { path: tools.path, output: out, fps: $("tStripeFps").value, start: $("tStripeStart").value }), "ok"); }
+    catch (e) { toolsLog(String(e), "bad"); }
+  };
+  $("tSilRun").onclick = async () => {
+    if (!needStream()) return;
+    const head = Number($("tSilHead").value) || 0, tail = Number($("tSilTail").value) || 0;
+    if (head <= 0 && tail <= 0) { toolsLog("Give a head and/or tail length.", "bad"); return; }
+    const out = await dialog.save({ defaultPath: suggestName("_silence"), filters: STREAM_FILTERS });
+    if (!out) return;
+    toolsLog("Writing…");
+    try { toolsLog(await invoke("tools_add_silence", { path: tools.path, output: out, head, tail }), "ok"); }
+    catch (e) { toolsLog(String(e), "bad"); }
+  };
   $("tVerify").onclick = async () => {
     if (!needStream()) return;
     toolsLog("Decoding…");

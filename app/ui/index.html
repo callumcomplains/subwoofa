@@ -131,6 +131,8 @@
         <button data-op="split" aria-pressed="false">Split</button>
         <button data-op="append" aria-pressed="false">Append</button>
         <button data-op="replace" aria-pressed="false">Replace</button>
+        <button data-op="restripe" aria-pressed="false">Re-stripe</button>
+        <button data-op="silence" aria-pressed="false">Add silence</button>
         <button data-op="verify" aria-pressed="false">Verify</button>
       </div>
       <div class="op" data-op="trim">
@@ -166,6 +168,23 @@
           <label class="f small"><span>At (s)</span><input id="tRepAt" type="number" min="0" step="0.1" value="0"></label>
           <label class="chk"><input type="checkbox" id="tRepInsert"><span>Insert only</span></label>
           <button id="tRepRun" class="go small">Write…</button>
+        </div>
+      </div>
+      <div class="op" data-op="restripe" hidden>
+        <p class="hint">Relabels the start time and frame rate of a .dtshd file. The audio is not touched, and the reference time stays as it was. Needs a file with a timecode chunk (made by Subwoofa or the DTS encoder).</p>
+        <div class="op-row">
+          <label class="f small"><span>Now</span><input id="tStripeNow" readonly></label>
+          <label class="f small"><span>New start (hh:mm:ss:ff)</span><input id="tStripeStart" value="00:00:00:00" spellcheck="false"></label>
+          <label class="f small"><span>Frame rate</span><select id="tStripeFps"><option>23.976</option><option selected>24</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select></label>
+          <button id="tStripeRun" class="go small">Write…</button>
+        </div>
+      </div>
+      <div class="op" data-op="silence" hidden>
+        <p class="hint">Adds silent frames to the start and/or end of a .dtshd file. Only whole frames are added, so the length is right to within one frame. Needs a file with a stored silent frame (made by Subwoofa MA or the DTS encoder).</p>
+        <div class="op-row">
+          <label class="f small"><span>Head (s)</span><input id="tSilHead" type="number" min="0" step="0.1" value="0"></label>
+          <label class="f small"><span>Tail (s)</span><input id="tSilTail" type="number" min="0" step="0.1" value="0"></label>
+          <button id="tSilRun" class="go small">Write…</button>
         </div>
       </div>
       <div class="op" data-op="verify" hidden>

@@ -4,11 +4,10 @@
 //! 5.1 mix and an XXCH decoder subtracts the rears again.
 
 use crate::encoder::XxchParams;
-use crate::exss::{dtshd_header, exss_frame_xbr_xxch, exss_frame_xxch, DtsHdHeader, ExssParams};
+use crate::exss::{exss_frame_xbr_xxch, exss_frame_xxch, ExssParams};
 use crate::xbr::XbrEncoder;
 use crate::native::{NativeError, Request, Stats};
 use crate::{Config, Encoder};
-use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_core::Channel;
 use sw_pcm::StemSet;
@@ -76,7 +75,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let n = core.frame_samples();
     let nch_total = 7 + usize::from(has_lfe);
     let spk = crate::ma::map_layout(req.layout).exss_mask;
-    let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false };
+    let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, secondary: false };
     // speakers: core C L R LFE Lss Rss, extension Lsr Rsr
     let core_mask = 0x1 | 0x2 | 0x4 | (if has_lfe { 0x20 } else { 0 }) | (1 << 9) | (1 << 10);
     let params = XxchParams { core_mask, spk_mask: (1 << 7) | (1 << 8), mask_bits: 11, dmix: Some((55, vec![vec![(9, 119)], vec![(10, 119)]])) };
@@ -86,15 +85,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let upto = |k: u64| (k * bits_num) / (bits_den * 8);
 
     let container = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
-    let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-    let header = |frames: u32, bytes: u64| dtshd_header(&DtsHdHeader { sample_rate: rate, frames, samples_per_frame: n as u16, total_samples: want, ch_mask: spk as u16, initial_padding: 0 }, bytes);
-    let header_len = if container {
-        let h = header(0, 0);
-        out.write_all(&h)?;
-        h.len() as u64
-    } else {
-        0
-    };
+    let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
+    let info = container.then(|| {
+        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, spk as u16, crate::dtshd::Kind::CoreAndExtension);
+        i.core_kbps = 1509;
+        i.core_payload = core_payload;
+        i
+    });
+    let mut out = crate::dtshd::StreamOut::create(req.output, info)?;
 
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
@@ -155,20 +153,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         } else {
             data.extend_from_slice(&exss_frame_xxch(&exss, &x));
         }
-        out.write_all(&data)?;
+        out.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
         frames += 1;
         bytes += data.len() as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
-    out.flush()?;
-    if container {
-        let h = header(frames as u32, bytes);
-        debug_assert_eq!(h.len() as u64, header_len);
-        let mut inner = out.into_inner().map_err(|e| e.into_error())?;
-        inner.seek(SeekFrom::Start(0))?;
-        inner.write_all(&h)?;
-        inner.flush()?;
-    }
+    out.finish(None)?;
     on_progress(1.0);
     Ok(Stats { frames, bytes })
 }

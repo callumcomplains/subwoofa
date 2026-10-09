@@ -20,6 +20,8 @@ pub struct ExssParams {
     pub frame_duration_code: u32,
     /// The core frames carry an X96 extension (a 96/24 core).
     pub x96_in_core: bool,
+    /// DTS Express as Blu-ray secondary audio: extension substream index 2, mixed with the primary audio.
+    pub secondary: bool,
 }
 
 fn ref_clock_code(rate: u32) -> u32 {
@@ -88,7 +90,7 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     } else {
         a.put(0, 1);
     }
-    let secondary = lbr.is_some();
+    let secondary = lbr.is_some() && p.secondary;
     if secondary {
         a.put(0, 1); // no mixing metadata for this asset
     }
@@ -150,7 +152,9 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + nb4f as usize;
     let bits_total = bits_before_desc + alen * 8 + 1;
     let hsize = bits_total.div_ceil(8) + 2;
-    let frame_size = hsize + payload;
+    // whole 32-bit words: DTS-HD tools (StreamTools) refuse streams whose frames are not padded to 4 bytes
+    let pad = (4 - (hsize + payload) % 4) % 4;
+    let frame_size = hsize + payload + pad;
     let mut h = BitWriter::new();
     h.put(SYNC_EXSS, 32);
     h.put(0, 8); // user defined bits
@@ -201,6 +205,7 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     if let Some(x) = lbr {
         hb.extend_from_slice(x);
     }
+    hb.resize(hb.len() + pad, 0);
     hb
 }
 
@@ -233,7 +238,7 @@ pub fn dtshd_header(h: &DtsHdHeader, data_len: u64) -> Vec<u8> {
     aupr.push(h.total_samples as u8);
     aupr.extend_from_slice(&h.ch_mask.to_be_bytes());
     aupr.extend_from_slice(&h.initial_padding.to_be_bytes());
-    aupr.extend_from_slice(&[0, 0, 0, 0]);
+    aupr.extend_from_slice(&[0, 0, 0]);
     chunk(b"AUPR-HDR", &aupr);
     out.extend_from_slice(b"STRMDATA");
     out.extend_from_slice(&data_len.to_be_bytes());

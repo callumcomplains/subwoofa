@@ -140,21 +140,23 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     let mut hra = req.hra_kbps.map(|kbps| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, secondary: false };
         enc.keep_residual = true;
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     });
     let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
-    let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-    let header_len = if container {
-        let h = crate::exss::dtshd_header(&crate::exss::DtsHdHeader { sample_rate: rate, frames: 0, samples_per_frame: n as u16, total_samples: want, ch_mask: crate::ma::map_layout(req.layout).exss_mask as u16, initial_padding: 0 }, 0);
-        out.write_all(&h)?;
-        h.len() as u64
+    let core_payload = (bitrate / 1000 * 512 / 48_000 / 8) & !3;
+    let mut hd = if container {
+        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        i.core_kbps = bitrate / 1000;
+        i.core_payload = core_payload;
+        Some(crate::dtshd::DtsHdSink::create(req.output, i)?)
     } else {
-        0
+        None
     };
+    let mut out = if container { None } else { Some(std::io::BufWriter::new(std::fs::File::create(req.output)?)) };
     if wav {
-        out.write_all(&wav_header(rate, 0))?;
+        out.as_mut().unwrap().write_all(&wav_header(rate, 0))?;
     }
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
@@ -210,27 +212,27 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
                 }
                 w
             };
-            out.write_all(&w)?;
+            out.as_mut().unwrap().write_all(&w)?;
             bytes += w.len() as u64;
+        } else if let Some(h) = hd.as_mut() {
+            h.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
+            bytes += data.len() as u64;
         } else {
-            out.write_all(&data)?;
+            out.as_mut().unwrap().write_all(&data)?;
             bytes += data.len() as u64;
         }
         frames += 1;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
-    out.flush()?;
-    if container {
-        let h = crate::exss::dtshd_header(&crate::exss::DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: want, ch_mask: crate::ma::map_layout(req.layout).exss_mask as u16, initial_padding: 0 }, bytes);
-        debug_assert_eq!(h.len() as u64, header_len);
-        let mut inner = out.into_inner().map_err(|e| e.into_error())?;
-        use std::io::{Seek, SeekFrom};
-        inner.seek(SeekFrom::Start(0))?;
-        inner.write_all(&h)?;
-        inner.flush()?;
+    if let Some(o) = out.as_mut() {
+        o.flush()?;
+    }
+    if let Some(h) = hd.take() {
+        h.finish(None)?;
     } else if wav {
         use std::io::{Seek, SeekFrom};
         let pad = (4 - bytes % 4) % 4;
+        let mut out = out.take().unwrap();
         out.write_all(&vec![0u8; pad as usize])?;
         out.flush()?;
         let mut inner = out.into_inner().map_err(|e| e.into_error())?;

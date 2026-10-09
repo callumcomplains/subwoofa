@@ -139,9 +139,8 @@ impl Destination {
     pub fn stream_types(self) -> &'static [StreamType] {
         use StreamType::*;
         match self {
-            Destination::BluRayPrimary | Destination::DigitalDelivery => {
-                &[DtsHdMa, DtsHdHra, DtsEs, Dts9624, DtsDigitalSurround]
-            }
+            Destination::BluRayPrimary => &[DtsHdMa, DtsHdHra, DtsEs, Dts9624, DtsDigitalSurround],
+            Destination::DigitalDelivery => &[DtsHdMa, DtsHdHra, DtsEs, Dts9624, DtsDigitalSurround, DtsExpress],
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],

@@ -259,6 +259,35 @@ async fn tools_replace(path: String, with: String, at: f64, output: String, inse
 }
 
 #[tauri::command]
+async fn tools_stripe(path: String) -> Result<serde_json::Value, String> {
+    blocking(move || {
+        let s = sw_tools::read_stripe(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({ "fps_code": s.fps_code, "start_samples": s.start_samples, "reference_samples": s.reference_samples }))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn tools_restripe(path: String, output: String, fps: String, start: String) -> Result<String, String> {
+    blocking(move || {
+        let code = sw_tools::fps_code(&fps).ok_or_else(|| format!("unknown frame rate {fps}"))?;
+        let tc = sw_tools::parse_timecode(&start).ok_or_else(|| format!("{start} is not a timecode (hh:mm:ss:ff)"))?;
+        sw_tools::restripe(std::path::Path::new(&path), std::path::Path::new(&output), code, tc).map_err(|e| e.to_string())?;
+        Ok(format!("Wrote {output}\nStart {start} at {fps} fps"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn tools_add_silence(path: String, output: String, head: f64, tail: f64) -> Result<String, String> {
+    blocking(move || {
+        let (h, t) = sw_tools::add_silence(std::path::Path::new(&path), std::path::Path::new(&output), head, tail).map_err(|e| e.to_string())?;
+        Ok(format!("Wrote {output}\n{h} silent frames at the head, {t} at the tail"))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn tools_verify(path: String) -> Result<sw_tools::VerifyReport, String> {
     blocking(move || {
         let ff = ff::find_ffmpeg().ok_or("ffmpeg was not found, and it does the decoding for the check")?;
@@ -414,7 +443,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_verify
+            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, tools_verify
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");
