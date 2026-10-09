@@ -201,8 +201,16 @@ function renderBitrate(from) {
   syncDtsOpts();
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
+  // above 96 kHz the stream is the lossless extension alone (no core is written)
+  const hi = ma && curRate() > 96000;
+  const coreBox = $("coreOn");
+  if (hi && !coreBox.disabled) coreBox.dataset.was = coreBox.checked ? "1" : "0";
+  if (!hi && coreBox.disabled) coreBox.checked = coreBox.dataset.was !== "0";
+  coreBox.disabled = hi;
+  if (hi) coreBox.checked = false;
+  $("coreWrap").querySelector("span").textContent = hi ? "No DTS core above 96 kHz: the stream is the lossless data alone" : "Backward-compatible core (turn off for lossless data only)";
   syncX96();
-  if (!ma) $("coreOn").checked = true;
+  if (!ma) coreBox.checked = true;
   br.disabled = (lossless && !unlocked) || coreOff();
   $("brange").textContent = lossless ? (unlocked ? "free entry" : "lossless / variable") : unlocked ? `spec ${o.bitrate_min}–${o.bitrate_max}` : `${o.bitrate_min}–${o.bitrate_max}`;
   if (lossless && !unlocked) br.value = "";

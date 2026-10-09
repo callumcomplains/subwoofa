@@ -184,3 +184,7 @@ A 96 kHz HRA stream is the 96/24 core (48 kHz core with the X96 extension inside
 - CRUSH ON 5.1 96/24 (30 s), decoded with FFmpeg: DTS 96/24 at 1509 kbps gives rears 38.6/39.3 dB SNR; HRA at 3018 kbps gives 54.3/56.3 dB and the fronts gain 0.8 dB (49.6 to 50.4, front error then sits above 24 kHz, where XBR does not reach). 5760 kbps decodes identically to 3018: XBR is saturated, the rest is padding.
 - DTSHDVerify passes (3751/3751 frames at both rates), FFmpeg reports profile "DTS-HD HRA", 96 kHz, 6 channels. Test `hra_at_96_khz_is_core_x96_and_xbr`.
 - Not done: HRA above 5.1 channels at 96 kHz (XXCH with X96) gives a clear error; no commercial 96 kHz HRA stream was available to compare against (none in the library scan), so the extension-substream layout at 96 kHz follows the 48 kHz HRA streams plus the X96 mask bit.
+
+## GUI: MA above 96 kHz
+
+Choosing DTS-HD MA at 176.4/192 kHz now unchecks and locks the "backward-compatible core" box, greys the bit rate and says "No DTS core above 96 kHz: the stream is the lossless data alone" (the encoder ignores a core request there). Switching back to 96 kHz or below restores the previous setting. HRA at 96 kHz offers 2046 to 5760 kbps. Checked in the running app.
