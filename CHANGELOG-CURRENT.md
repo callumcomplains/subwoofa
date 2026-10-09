@@ -170,3 +170,10 @@ Above 96 kHz XLL carries the signal as two 96 kHz bands. The decoder joins them 
 - Bit-exact against the source through FFmpeg: CRUSH ON 5.1 192/24, whole file, MD5 identical; DTSHDVerify passes (2813/2813 frames on a 30 s excerpt). Size 201.6 MB for 529 MB of PCM (38.1%; TrueHD 36.5%, MLP 35.7% on the same file). Speed 4.8x real time (the two bands are planned in parallel).
 - Test `stereo_and_five_one_192k_two_bands`. Also fixed the CLI's average bit rate line, which assumed 512-sample frames at every rate.
 - Found on the way (not a bug): giving a stereo file to a single channel slot (`--input L=stereo.wav --input R=stereo.wav`) mixes the two channels down into that slot, so a nearly-centred master decodes within +/-1 of the source instead of exactly. Use mono files or a multichannel `--auto-import` for exact results.
+
+## The Who - Quadrophenia (DTS-HD MA 5.1, 96 kHz, 96/24 core): a second real 96/24-core MA reference
+
+The 5.05 GB raw `.dts` from the user's "Pure Audio" download is complete (the chapter WAVs are not, and Chapter 01 is a 2-channel file, not this mix). It is a real DTS-HD MA stream: core frames of 2012 bytes (1509 kbps, 512 samples), X96 inside the core, extension substream mask 0x205, XLL after it.
+- Took a 60 s excerpt from 2 GB in (`F:\SubwoofaTests\quad\mid.dts`, 60,000,000 bytes), DTSHDVerify passes it. FFmpeg decodes it to 24-bit PCM (the lossless source, 103.7 MB).
+- Re-encoded that PCM with our native MA plus 96/24 core at 1509 kbps: 57.9 MB, **3.5% smaller than the commercial stream** (7722 against about 8000 kbps average). FFmpeg decodes ours bit-exactly (MD5 equal to the PCM from their stream), DTSHDVerify passes 5624/5624 frames.
+- Core headers match bit for bit except the ASPF bit (audio sync word insertion): they set it, we do not. Every commercial stream seen sets it (ES, HRA, 96/24, MA). Not needed to decode; it adds a 0xFFFF check word per sub-subframe. Left as is.
