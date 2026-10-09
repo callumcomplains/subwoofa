@@ -90,14 +90,26 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, spk as u16, crate::dtshd::Kind::CoreAndExtension);
         i.core_kbps = 1509;
         i.core_payload = core_payload;
+        i.codec_delay = 1024;
         i
     });
     let mut out = crate::dtshd::StreamOut::create(req.output, info)?;
 
     let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut remaining = want;
+    // filter bank delay: in a .dtshd the stream starts with silence so the delay is 1024 samples, which the
+    // file states; a raw stream starts that many samples into the source instead (see `native.rs`)
+    let delay = core.delay();
+    let (skip, lead) = if container { (0usize, 1024usize.saturating_sub(delay)) } else { (delay.min(want as usize), 0) };
+    let mut left = skip as u64;
+    while left > 0 {
+        let k = left.min(n as u64) as usize;
+        stems.read_planar(&mut planar, k)?;
+        left -= k as u64;
+    }
+    let mut remaining = want - skip as u64;
+    let mut lead_left = lead;
     let (mut frames, mut bytes) = (0u64, 0u64);
-    let total_frames = want.div_ceil(n as u64) + 1;
+    let total_frames = (remaining + lead as u64).div_ceil(n as u64) + 1;
     let mut core_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 5 + usize::from(has_lfe)];
     let mut ext_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 2];
     let to24 = |v: f32| v as f64 * 8_388_608.0;
@@ -105,7 +117,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
         }
-        let got = (remaining as usize).min(n);
+        let zeros = lead_left.min(n);
+        lead_left -= zeros;
+        let got = (remaining as usize).min(n - zeros);
         if got > 0 {
             stems.read_planar(&mut planar, got)?;
         }
@@ -119,13 +133,13 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
                     // the sides carry the rear on the same side
                     v += to24(planar[map.rear[slot - 3]][i]) * REAR_COEFF;
                 }
-                core_pcm[slot][i] = v.clamp(-8_388_608.0, 8_388_607.0);
+                core_pcm[slot][zeros + i] = v.clamp(-8_388_608.0, 8_388_607.0);
             }
             if let Some(l) = map.lfe {
-                core_pcm[5][i] = (to24(planar[l][i]) * SCALE).clamp(-8_388_608.0, 8_388_607.0);
+                core_pcm[5][zeros + i] = (to24(planar[l][i]) * SCALE).clamp(-8_388_608.0, 8_388_607.0);
             }
             for (slot, &src) in map.rear.iter().enumerate() {
-                ext_pcm[slot][i] = to24(planar[src][i]).clamp(-8_388_608.0, 8_388_607.0);
+                ext_pcm[slot][zeros + i] = to24(planar[src][i]).clamp(-8_388_608.0, 8_388_607.0);
             }
         }
         remaining -= got as u64;

@@ -145,11 +145,19 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     });
     let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    // The decoder's filter bank delays its output. In a .dtshd file the stream starts with silence so the delay
+    // comes to 1024 samples (what the commercial encoder does) and the file says so: decoders that honour the
+    // field drop exactly that many samples and every source sample is kept. A raw stream has nowhere to say it,
+    // so there the encoder starts that many samples into the source and the decoded audio lines up (losing
+    // the first few milliseconds, which fall in the decoder's start-up).
+    let delay = enc.delay() + mix_delay;
+    let (skip, lead) = if container { (0usize, 1024usize.saturating_sub(delay)) } else { (delay.min(want as usize), 0) };
     let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let mut hd = if container {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
         i.core_kbps = bitrate / 1000;
         i.core_payload = core_payload;
+        i.codec_delay = (delay + lead) as u16;
         Some(crate::dtshd::DtsHdSink::create(req.output, i)?)
     } else {
         None
@@ -159,17 +167,26 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         out.as_mut().unwrap().write_all(&wav_header(rate, 0))?;
     }
     let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut remaining = want;
+    let mut left = skip as u64;
+    while left > 0 {
+        let k = left.min(n as u64) as usize;
+        stems.read_planar(&mut planar, k)?;
+        left -= k as u64;
+    }
+    let mut remaining = want - skip as u64;
+    let mut lead_left = lead;
     let mut frames = 0u64;
     let mut bytes = 0u64;
     // one extra frame flushes the filter bank delay
-    let total_frames = (want + mix_delay as u64).div_ceil(n as u64) + 1;
+    let total_frames = (remaining + (mix_delay + lead) as u64).div_ceil(n as u64) + 1;
     let mut pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; nch + usize::from(xch) + usize::from(map.lfe.is_some())];
     for _ in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
         }
-        let got = (remaining as usize).min(n);
+        let zeros = lead_left.min(n);
+        lead_left -= zeros;
+        let got = (remaining as usize).min(n - zeros);
         if got > 0 {
             stems.read_planar(&mut planar, got)?;
         }
@@ -189,7 +206,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
             let dst = &mut pcm[slot];
             dst.iter_mut().for_each(|v| *v = 0.0);
             for i in 0..got {
-                dst[i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
+                dst[zeros + i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
             }
         }
         remaining -= got.min(remaining as usize) as u64;

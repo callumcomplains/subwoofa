@@ -96,11 +96,13 @@ pub struct DtsHdInfo {
     pub vbr: bool,
     pub fps_code: u8,
     pub start: Position,
+    /// Samples the decoder's output lags the source by (players that read the field drop them).
+    pub codec_delay: u16,
 }
 
 impl DtsHdInfo {
     pub fn new(sample_rate: u32, samples_per_frame: u16, total_samples: u64, ch_mask: u16, kind: Kind) -> DtsHdInfo {
-        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default() }
+        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), codec_delay: 0 }
     }
 }
 
@@ -165,7 +167,7 @@ fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: 
     a.extend_from_slice(&((info.total_samples >> 8) as u32).to_be_bytes());
     a.push(info.total_samples as u8);
     a.extend_from_slice(&info.ch_mask.to_be_bytes());
-    a.extend_from_slice(&[0, 0]); // codec delay
+    a.extend_from_slice(&info.codec_delay.to_be_bytes());
     a.extend_from_slice(&[0, 0, 0]);
     chunk(&mut out, b"AUPR-HDR", &a);
     out.extend_from_slice(b"STRMDATA");
