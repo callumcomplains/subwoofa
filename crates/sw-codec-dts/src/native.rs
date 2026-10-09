@@ -145,7 +145,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     });
     let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
-    let core_payload = (bitrate / 1000 * 512 / 48_000 / 8) & !3;
+    let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let mut hd = if container {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
         i.core_kbps = bitrate / 1000;

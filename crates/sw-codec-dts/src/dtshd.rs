@@ -115,7 +115,7 @@ fn be24(v: u32) -> [u8; 3] {
 }
 
 /// The chunks in front of the stream data, ending with the STRMDATA chunk header.
-fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: u32) -> Vec<u8> {
+fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: u32, ext_payload: u32) -> Vec<u8> {
     let mut out = Vec::new();
     let flags: u8 = match info.kind {
         Kind::CoreAndExtension => 0x08 | 0x10 | if info.vbr { 0x05 } else { 0 },
@@ -140,16 +140,20 @@ fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: 
         let mut e = Vec::new();
         e.extend_from_slice(&be24(avg_kbps));
         e.push(0);
-        if info.kind == Kind::ExtensionOnly && !info.vbr {
-            e.extend_from_slice(&[0x00, 0x0a, 0xa8, 0x00]);
-        } else {
+        if info.vbr {
+            // variable rate: peak rate (kbit/s) and the buffer size
             e.extend_from_slice(&(peak_kbps.min(0xFFFF) as u16).to_be_bytes());
             e.extend_from_slice(&128u16.to_be_bytes());
+        } else {
+            // constant rate: the extension frame bytes
+            e.extend_from_slice(&be24(ext_payload));
+            e.push(0);
         }
         chunk(&mut out, b"EXTSS_MD", &e);
     }
     let kind_byte = match info.kind {
-        Kind::CoreAndExtension => 5,
+        Kind::CoreAndExtension if info.vbr => 5,
+        Kind::CoreAndExtension => 1, // constant rate extension, as the encoder writes HRA
         Kind::CoreOnly => 1,
         Kind::ExtensionOnly if info.vbr => 5, // lossless data without a core
         Kind::ExtensionOnly => 8,
@@ -183,7 +187,7 @@ pub struct DtsHdSink {
 impl DtsHdSink {
     pub fn create(path: &std::path::Path, info: DtsHdInfo) -> std::io::Result<DtsHdSink> {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-        let h = leading(&info, 0, 0, 0, 0);
+        let h = leading(&info, 0, 0, 0, 0, 0);
         out.write_all(&h)?;
         Ok(DtsHdSink { out, info, header_len: h.len() as u64, sizes: Vec::new(), bytes: 0, ext_peak: 0, ext_total: 0 })
     }
@@ -243,7 +247,8 @@ REVISION = 0
         let secs = frames as f64 * info.samples_per_frame as f64 / info.sample_rate as f64;
         let avg = if info.kind == Kind::CoreAndExtension || info.vbr { (self.ext_total as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32 } else { (self.bytes as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32 };
         let peak = (self.ext_peak as f64 * 8.0 * info.sample_rate as f64 / info.samples_per_frame as f64 / 1000.0).ceil() as u32;
-        let h = leading(&info, frames, self.bytes, avg, peak);
+        let ext_payload = (self.ext_total / frames.max(1) as u64) as u32;
+        let h = leading(&info, frames, self.bytes, avg, peak, ext_payload);
         debug_assert_eq!(h.len() as u64, self.header_len);
         let mut inner = self.out.into_inner().map_err(|e| e.into_error())?;
         inner.seek(SeekFrom::Start(0))?;
