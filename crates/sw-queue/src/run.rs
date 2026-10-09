@@ -289,7 +289,9 @@ fn execute_inner(
     let enc_secs = t0.elapsed().as_secs_f64();
     let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
+    let peak_note = peak_bit_rate_note(&spec.output);
     log.push_str(&format!("\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n", fmt_secs(span), enc_secs, span / enc_secs.max(0.001), size as f64 / 1e6, avg_kbps));
+    log.push_str(&peak_note);
 
     if !verify || downmixed {
         return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
@@ -307,4 +309,20 @@ fn execute_inner(
         }
         Err(e) => Err(Failure::from(e)),
     }
+}
+
+/// Peak bit rate of a finished stream (the figure disc authoring checks), or nothing if the file is not a
+/// stream StreamTools can index.
+fn peak_bit_rate_note(path: &str) -> String {
+    let Ok(st) = sw_tools::Stream::open(std::path::Path::new(path)) else { return String::new() };
+    let win = st.pbr(1.0);
+    let (Some(top), Some(busiest)) = (win.iter().max_by(|a, b| a.peak_kbps.total_cmp(&b.peak_kbps)), win.iter().max_by(|a, b| a.mean_kbps.total_cmp(&b.mean_kbps))) else { return String::new() };
+    format!(
+        "Peak bit rate: {:.0} kbps in a single frame (at {}), busiest second {:.0} kbps (at {}), {} frames.\n",
+        top.peak_kbps,
+        fmt_secs(top.secs),
+        busiest.mean_kbps,
+        fmt_secs(busiest.secs),
+        st.frames.len()
+    )
 }

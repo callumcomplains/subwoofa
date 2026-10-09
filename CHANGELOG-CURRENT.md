@@ -143,3 +143,6 @@ Newest entries at the bottom. Started 2026-10-08.
 - Same-rate quality on City of God 5.1 (SNR against the stems, front channels): 192 kbps +1.6 dB, 320 kbps +2.2 dB, 384 kbps +2.4 dB; surrounds +0.3 to 0.4 dB. FFmpeg decodes with CRC checking and no complaint at 3.0, 4.0, 5.0 and 5.1 from 96 to 640 kbps.
 - Bugs fixed on the way: the coupling reference exponent must be even (it is sent halved), and fixing it has to happen on the group sequence, not per bin.
 - Not done: coupling phase flags (2/0 mode), band structure (every 12-bin sub-band is its own band), E-AC-3 enhanced coupling.
+
+## Peak bit rate in every encode log
+- When a job writes a DTS, DTS-HD, TrueHD or MLP stream, the job log now ends with the peak bit rate (single frame and busiest second, with their positions) read back from the finished file by StreamTools, so a disc-authoring limit can be checked without opening another tool. Also noted from the commercial `.dtshd` file MAS wrote: it contains two small metadata chunks (`CORESSMD` and `EXTSS_MD`) that mine lacks; its header's frame-rate field matches the log ("24") and its start-time field is not read by DTS's verifier, so StreamTools re-stripe stays unimplemented until those fields can be verified.

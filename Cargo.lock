@@ -3170,6 +3170,7 @@ dependencies = [
  "sw-codec-truehd",
  "sw-core",
  "sw-pcm",
+ "sw-tools",
 ]
 
 [[package]]
