@@ -102,6 +102,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
+        x96_in_core: false,
     };
     let frames_total = want.div_ceil(n as u64);
     let mut file = std::io::BufWriter::new(std::fs::File::create(req.output)?);

@@ -9,6 +9,8 @@ use crate::exss::{exss_frame, ExssParams};
 use crate::ma::map_layout;
 use crate::native::map_channels as core_map_channels;
 use crate::ma::Hier;
+use crate::qmf64::{Analysis64, BANDS as BANDS64};
+use crate::x96::X96Encoder;
 use crate::xll::{XllConfig, XllEncoder};
 use sw_core::ChannelLayout;
 
@@ -18,6 +20,9 @@ pub struct MaCoreConfig {
     pub bit_res: u32,
     pub core_bitrate: u32,
     pub dialnorm: i32,
+    /// 96 kHz only: give the core an X96 extension (a 96/24 core), so decoders that play just the core
+    /// substream still get the full band. A lossless decoder ignores it.
+    pub x96: bool,
 }
 
 /// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
@@ -83,6 +88,17 @@ pub struct MaCoreEncoder {
     xll_cfg: XllConfig,
     core_pad: usize,
     shift: u32,
+    x96: Option<X96State>,
+    /// Primary channels of the core (the LFE slot comes after them).
+    nprim: usize,
+}
+
+/// The X96 part of a 96/24 core: 64-band analysis of the programme, aligned with the core's subbands.
+struct X96State {
+    ext: Vec<Analysis64>,
+    enc: X96Encoder,
+    bytes: usize,
+    delay: usize,
 }
 
 impl MaCoreEncoder {
@@ -114,6 +130,16 @@ impl MaCoreEncoder {
             perfect: false,
             blocks: 16,
         })?;
+        let x96 = if cfg.x96 && ratio == 2 {
+            let bytes = (core.frame_bytes() / 8).max(96) & !3;
+            core.keep_residual = true;
+            core.x96_reserve = bytes;
+            let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
+            let delay = ext[0].delay();
+            Some(X96State { ext, enc: X96Encoder::new(16), bytes, delay })
+        } else {
+            None
+        };
         core.enable_exact_decode(ratio == 2);
         let n = core.frame_samples() * ratio;
         let nch = xmap.order.len();
@@ -126,7 +152,7 @@ impl MaCoreEncoder {
             })
             .collect();
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0 };
+        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: x96.is_some() };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {
@@ -137,7 +163,10 @@ impl MaCoreEncoder {
             frac = phase - phase.floor();
             (l48, phase.floor() as usize)
         };
-        let lookahead = if ratio == 1 { l48 } else { 2 * (l48 + 1) + phase + HALF + 2 };
+        let mut lookahead = if ratio == 1 { l48 } else { 2 * (l48 + 1) + phase + HALF + 2 };
+        if let Some(x) = &x96 {
+            lookahead = lookahead.max(x.delay + 64 * 16 + 64);
+        }
         Ok(MaCoreEncoder {
             core,
             exss,
@@ -158,6 +187,8 @@ impl MaCoreEncoder {
             xll_cfg,
             core_pad,
             shift: 24 - cfg.bit_res,
+            x96,
+            nprim,
         })
     }
 
@@ -217,6 +248,58 @@ impl MaCoreEncoder {
         self.pending.take().map(|h| h.join().expect("lossless worker panicked")).unwrap_or_default()
     }
 
+    /// Analyse the (core-domain) programme with the 64-band bank, subtract what the core coded in the lower
+    /// half and code the rest into the X96 block at the end of the core frame.
+    fn add_x96(&mut self, frame: &mut [u8]) {
+        use rayon::prelude::*;
+        let blocks = 16usize;
+        let (n, f_off, dropped, nprim) = (self.n, self.emitted * self.n, self.dropped, self.nprim);
+        let gain0 = (1u64 << self.shift) as f64;
+        let hier = &self.hier;
+        let bufs = &self.buf;
+        let deq = &self.core.last_deq;
+        let work: Vec<(usize, usize)> = self.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.filter(|s| *s < nprim).map(|s| (x, s))).collect();
+        let x96 = self.x96.as_mut().unwrap();
+        let delay = x96.delay;
+        let _ = n;
+        let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); nprim];
+        let jobs: Vec<(usize, usize, &mut Analysis64, &mut Vec<Vec<f64>>)> = {
+            let mut anas: Vec<Option<&mut Analysis64>> = x96.ext.iter_mut().map(Some).collect();
+            let mut outs: Vec<Option<&mut Vec<Vec<f64>>>> = resid.iter_mut().map(Some).collect();
+            work.iter().map(|&(x, slot)| (x, slot, anas[slot].take().unwrap(), outs[slot].take().unwrap())).collect()
+        };
+        jobs.into_par_iter().for_each(|(x, slot, ana, out)| {
+            let g = gain0 * hier.as_ref().map_or(1.0, |h| h.core_gain(x));
+            let src = &bufs[x];
+            let mut bands = vec![vec![0f64; blocks]; BANDS64];
+            for b in 0..blocks {
+                let start = (f_off + b * 64) as isize + delay as isize - dropped as isize;
+                let mut input = [0f64; 64];
+                for (i, v) in input.iter_mut().enumerate() {
+                    let idx = start + i as isize;
+                    if idx >= 0 && (idx as usize) < src.len() {
+                        *v = src[idx as usize] as f64 * g;
+                    }
+                }
+                let mut o = [0f64; BANDS64];
+                ana.step(&input, &mut o);
+                for band in 0..BANDS64 {
+                    bands[band][b] = o[band];
+                }
+            }
+            for band in 0..32 {
+                for b in 0..blocks {
+                    bands[band][b] -= deq[slot][band][b] as f64;
+                }
+            }
+            *out = bands;
+        });
+        let bytes = x96.bytes;
+        let block = x96.enc.encode(&resid, bytes);
+        let start = frame.len() - bytes;
+        frame[start..].copy_from_slice(&block);
+    }
+
     /// Core-rate input samples for one channel and frame, in 24-bit units.
     fn core_input(&self, x: usize, frame: usize) -> Vec<f64> {
         let n48 = self.n / self.ratio;
@@ -265,6 +348,9 @@ impl MaCoreEncoder {
         let t0 = std::time::Instant::now();
         let mut core_bytes = self.core.encode_frame(&core_in);
         self.t_core += t0.elapsed();
+        if self.x96.is_some() {
+            self.add_x96(&mut core_bytes);
+        }
         let round = if self.shift > 0 { 1i32 << (self.shift - 1) } else { 0 };
         let mut resid: Vec<Vec<i32>> = Vec::with_capacity(nch);
         for (x, slot) in self.xll_to_core.iter().enumerate() {

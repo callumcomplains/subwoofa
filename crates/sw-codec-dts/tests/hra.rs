@@ -28,7 +28,7 @@ fn xbr_improves_on_the_core() {
     let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 2, channels, lfe: false, bitrate, dialnorm: 0, pcm_bits: 24, es: false, xch: false, perfect: true, blocks: 16 }).unwrap();
     enc.keep_residual = true;
     let n = enc.frame_samples();
-    let exss = ExssParams { sample_rate: 48_000, channels, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0 };
+    let exss = ExssParams { sample_rate: 48_000, channels, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false };
     let mut stage = HraStage::new(2500, 48_000, n, 16, exss);
     let frames = 60;
     let total = n * frames;

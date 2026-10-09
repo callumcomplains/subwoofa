@@ -18,6 +18,8 @@ pub struct ExssParams {
     pub dialnorm: u32,
     /// Frame duration code (duration = 512 * (code + 1) reference clock ticks).
     pub frame_duration_code: u32,
+    /// The core frames carry an X96 extension (a 96/24 core).
+    pub x96_in_core: bool,
 }
 
 fn ref_clock_code(rate: u32) -> u32 {
@@ -101,7 +103,7 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         a.put(0, 2); // sync distance 0 frames
     } else if p.with_core || xbr.is_some() || xxch.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
         if let Some(b) = xbr {
             a.put(b.len() as u32 - 1, 14);

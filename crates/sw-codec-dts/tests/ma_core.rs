@@ -48,12 +48,16 @@ fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
 
 
 fn core_roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32) {
+    core_roundtrip_x(name, layout_id, rate, frames, bit_res, false)
+}
+
+fn core_roundtrip_x(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32, x96: bool) {
     if !have_ffmpeg() {
         return;
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0 }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96 }).unwrap();
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 7u32;
@@ -95,6 +99,12 @@ fn core_roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res
     assert_eq!(bad, 0, "{name}: {bad} samples differ");
 }
 
+/// A 96/24 core (X96 in the core frames) must not disturb the lossless extension.
+#[test]
+fn core_with_x96_plus_xll_five_one_96k() {
+    core_roundtrip_x("c51x96", "5.1", 96_000, 12, 24, true);
+}
+
 #[test]
 fn core_plus_xll_five_one_48k() {
     core_roundtrip("c51", "5.1", 48_000, 24, 24);
@@ -115,7 +125,7 @@ fn seven_one_embedded_five_one_downmix() {
     let layout = ChannelLayout::find("7.1-side-rear").unwrap();
     let map = map_layout(layout);
     let frames = 16;
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false}).unwrap();
     let n = enc.frame_samples();
     let mut seed = 5u32;
     let sigs: Vec<Vec<i32>> = (0..8).map(|c| signal(c, n * frames, &mut seed)).collect();

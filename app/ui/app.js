@@ -188,12 +188,20 @@ function renderRates(want) {
   $("ratecustom").hidden = $("rate").value !== "custom";
 }
 
+/** The 96/24 core option exists for DTS-HD MA at 96 kHz with a core. */
+function syncX96() {
+  const ok = $("stream").value === "dtshd-ma" && curRate() === 96000 && $("coreOn").checked;
+  $("x96Wrap").hidden = !ok;
+  if (!ok) $("x96Core").checked = false;
+}
+
 function renderBitrate(from) {
   const br = $("bitrate"), o = opts;
   const lossless = o.bitrate_min == null;
   syncDtsOpts();
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
+  syncX96();
   if (!ma) $("coreOn").checked = true;
   br.disabled = (lossless && !unlocked) || coreOff();
   $("brange").textContent = lossless ? (unlocked ? "free entry" : "lossless / variable") : unlocked ? `spec ${o.bitrate_min}–${o.bitrate_max}` : `${o.bitrate_min}–${o.bitrate_max}`;
@@ -365,7 +373,7 @@ function jobSpec(inputsFor, name) {
     sample_rate: curRate(),
     bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
     dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
-    es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
+    es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
   };
@@ -501,7 +509,8 @@ async function init() {
   $("rate").onchange = () => { $("ratecustom").hidden = $("rate").value !== "custom"; cascade("rate"); };
   $("ratecustom").oninput = () => cascade("rate");
   $("bitrate").oninput = () => { syncChips(); update(); };
-  $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncChips(); update(); };
+  $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncX96(); syncChips(); update(); };
+  $("x96Core").onchange = () => update();
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("batch").onclick = batchFromFolder;

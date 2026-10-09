@@ -137,7 +137,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     let mut hra = req.hra_kbps.map(|kbps| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0 };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false };
         enc.keep_residual = true;
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     });

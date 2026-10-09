@@ -43,6 +43,9 @@ pub struct EncodeSpec {
     /// mixed down to `layout` by constant-power panning. Native engine only.
     #[serde(default)]
     pub source_layout: Option<String>,
+    /// DTS-HD MA at 96 kHz: the core carries an X96 extension (a 96/24 core).
+    #[serde(default)]
+    pub core_x96: bool,
 }
 
 fn yes() -> bool {
@@ -243,6 +246,7 @@ fn execute_inner(
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
             container: spec.output.to_ascii_lowercase().ends_with(".dtshd"),
+            x96: spec.core_x96,
         };
         sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,

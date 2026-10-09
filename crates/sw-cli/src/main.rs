@@ -179,6 +179,9 @@ enum Cmd {
         /// Layout of the input files when richer than --layout (e.g. 22.2): mixed down to --layout. Native engine.
         #[arg(long)]
         source_layout: Option<String>,
+        /// DTS-HD MA at 96 kHz: give the core an X96 extension (a 96/24 core).
+        #[arg(long)]
+        core_96_24: bool,
     },
 }
 
@@ -258,7 +261,7 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24 } => {
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
@@ -286,6 +289,7 @@ fn run() -> Result<(), String> {
                     es_phase_shift,
                     rear_minus_3db: rear_3db,
                     source_layout: Some(src.to_string()),
+                    core_x96: core_96_24,
                 };
                 let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).map_err(|e| match e {
                     sw_queue::run::Failure::Canceled => "canceled".to_string(),
@@ -338,6 +342,7 @@ fn run() -> Result<(), String> {
                         duration_secs: duration,
                         output: &output,
                         container: output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd")),
+                        x96: core_96_24,
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;

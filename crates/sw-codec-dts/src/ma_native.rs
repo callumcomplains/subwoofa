@@ -35,6 +35,8 @@ pub struct MaRequest<'a> {
     pub output: &'a Path,
     /// Write the `.dtshd` container (otherwise the raw stream).
     pub container: bool,
+    /// 96 kHz: give the core an X96 extension (a 96/24 core).
+    pub x96: bool,
 }
 
 pub struct MaStats {
@@ -71,7 +73,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         return Err(MaError::Unsupported("more than 8 channels".into()));
     }
     let mut enc = match req.core_bitrate_kbps {
-        Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm })?),
+        Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
         None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0 })),
     };
     let n = match &enc {

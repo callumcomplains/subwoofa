@@ -76,7 +76,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let n = core.frame_samples();
     let nch_total = 7 + usize::from(has_lfe);
     let spk = crate::ma::map_layout(req.layout).exss_mask;
-    let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: 0, frame_duration_code: 0 };
+    let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false };
     // speakers: core C L R LFE Lss Rss, extension Lsr Rsr
     let core_mask = 0x1 | 0x2 | 0x4 | (if has_lfe { 0x20 } else { 0 }) | (1 << 9) | (1 << 10);
     let params = XxchParams { core_mask, spk_mask: (1 << 7) | (1 << 8), mask_bits: 11, dmix: Some((55, vec![vec![(9, 119)], vec![(10, 119)]])) };
