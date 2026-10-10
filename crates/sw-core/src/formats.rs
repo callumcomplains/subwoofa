@@ -166,7 +166,11 @@ impl Destination {
 /// Maximum discrete channels the stream type can carry.
 fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usize {
     let base = match stream {
-        StreamType::DtsHdMa | StreamType::DtsHdHra => {
+        // NHK 22.2 (24 channels) fits a lossless stream at 44.1 and 48 kHz
+        StreamType::DtsHdMa => {
+            if sample_rate >= 192_000 { 6 } else if sample_rate >= 96_000 { 8 } else { 24 }
+        }
+        StreamType::DtsHdHra => {
             if sample_rate >= 192_000 { 6 } else { 8 }
         }
         StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround => 7,

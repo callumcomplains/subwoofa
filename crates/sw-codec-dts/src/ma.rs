@@ -21,12 +21,26 @@ fn xll_bit(c: Channel) -> u32 {
         Rsr => 8,
         Lss => 9,
         Rss => 10,
-        Lh | Lhs => 13,
+        Lh => 13,
         Ch => 14,
-        Rh | Rhs => 15,
+        Rh => 15,
+        Lhs => 20,
+        Rhs => 21,
         Lw => 17,
         Rw => 18,
-        Oh => 19,
+        Oh | Tc => 19,
+        Lfe2 => 16,
+        Tfl => 13,
+        Tfc => 14,
+        Tfr => 15,
+        Tsl => 20,
+        Tsr => 21,
+        Tbc => 22,
+        Tbl => 23,
+        Tbr => 24,
+        Bfc => 25,
+        Bfl => 26,
+        Bfr => 27,
         _ => 31,
     }
 }
@@ -46,8 +60,15 @@ fn exss_bit(c: Channel) -> u32 {
         Oh => 0x100,
         Lw | Rw => 0x400,
         Lss | Rss => 0x800,
+        Lfe2 => 0x1000,
         Lhs | Rhs => 0x2000,
-        _ => 0,
+        Tbc => 0x4000,
+        Tbl | Tbr => 0x8000,
+        Tfl | Tfr => 0x20,
+        Tfc => 0x80,
+        Tc => 0x100,
+        Tsl | Tsr => 0x2000,
+        _ => 0, // the bottom layer has no group in the 16-bit activity mask
     }
 }
 
@@ -66,6 +87,11 @@ pub struct Hier {
     /// Effective coefficient of every extra channel in every channel of set 0 (15-bit fixed point).
     pub coeff: Vec<Vec<i32>>,
     pub coeff_codes: Vec<Vec<u16>>,
+    /// Extra sets as column ranges of `coeff` (set 1 first). Set 1 carries the row scales and the coefficients
+    /// relative to them; later sets use unit scales and carry the effective coefficient directly.
+    pub sets: Vec<std::ops::Range<usize>>,
+    /// Code of the unit scale.
+    pub unity_code: u16,
 }
 
 #[inline]
@@ -120,8 +146,20 @@ impl MaMap {
                     None
                 } else {
                     let h = self.hier.as_ref().expect("hierarchy");
+                    let cols = h.sets[i - 1].clone();
+                    // one row for every channel of the sets below: the base channels carry the downmix, the
+                    // channels of earlier extra sets are not folded into
+                    let lower: usize = h.base + h.sets[..i - 1].iter().map(|r| r.len()).sum::<usize>();
                     Some(DmixHeader {
-                        rows: (0..h.base).map(|j| DmixRow { scale_code: h.scale_code[j], coeff_codes: h.coeff_codes[j].clone() }).collect(),
+                        rows: (0..lower)
+                            .map(|j| {
+                                if j < h.base {
+                                    DmixRow { scale_code: if i == 1 { h.scale_code[j] } else { h.unity_code }, coeff_codes: h.coeff_codes[j][cols.clone()].to_vec() }
+                                } else {
+                                    DmixRow { scale_code: h.unity_code, coeff_codes: vec![0x100; cols.len()] }
+                                }
+                            })
+                            .collect(),
                     })
                 },
             })
@@ -136,7 +174,7 @@ fn dmix_index(v: f64) -> usize {
 
 /// How a channel outside the 5.1 base folds into it: `(base channel, row scale, coefficient)` per target,
 /// scales and coefficients as fractions (the row scale gives headroom for what is added to the row).
-fn fold_targets(c: Channel, side: (Channel, Channel)) -> Option<Vec<(Channel, f64, f64)>> {
+fn fold_targets(c: Channel, side: (Channel, Channel), rear: Option<(Channel, Channel)>) -> Option<Vec<(Channel, f64, f64)>> {
     use Channel::*;
     let m3 = std::f64::consts::FRAC_1_SQRT_2;
     Some(match c {
@@ -145,8 +183,18 @@ fn fold_targets(c: Channel, side: (Channel, Channel)) -> Option<Vec<(Channel, f6
         Lh | Lhs | Lw => vec![(L, m3, m3)],
         Rh | Rhs | Rw => vec![(R, m3, m3)],
         // the centre surround joins both surrounds at -3 dB, as in DTS-ES
-        Cs => vec![(side.0, 1.0, m3), (side.1, 1.0, m3)],
+        Cs => vec![(rear.unwrap_or(side).0, 1.0, m3), (rear.unwrap_or(side).1, 1.0, m3)],
         Ch | Oh => vec![(C, 1.0, m3)],
+        // NHK 22.2 top and bottom layers
+        Lfe2 => vec![(Lfe, 1.0, 1.0)],
+        Tfc | Tc | Bfc => vec![(C, 1.0, m3)],
+        Tfl | Bfl => vec![(L, m3, m3)],
+        Tfr | Bfr => vec![(R, m3, m3)],
+        Tsl => vec![(side.0, m3, m3)],
+        Tsr => vec![(side.1, m3, m3)],
+        Tbl => vec![(rear.unwrap_or(side).0, m3, m3)],
+        Tbr => vec![(rear.unwrap_or(side).1, m3, m3)],
+        Tbc => vec![(rear.unwrap_or(side).0, 1.0, m3), (rear.unwrap_or(side).1, 1.0, m3)],
         _ => return None,
     })
 }
@@ -155,7 +203,7 @@ fn fold_targets(c: Channel, side: (Channel, Channel)) -> Option<Vec<(Channel, f6
 fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     use Channel::*;
     let n = layout.channels.len();
-    if !(6..=8).contains(&n) {
+    if n < 6 || (n > 8 && layout.id != "22.2") {
         return None;
     }
     let pos = |c: Channel| layout.channels.iter().position(|x| *x == c);
@@ -170,6 +218,13 @@ fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     if pos(Lfe).is_some() {
         base_ch.push(Lfe);
     }
+    // More than eight channels (NHK 22.2): the base set is a full 7.1 (the decoder this was checked with
+    // reads three sets of at most eight channels each)
+    let rear = if n > 8 && pos(Lsr).is_some() && pos(Rsr).is_some() { Some((Lsr, Rsr)) } else { None };
+    if let Some((a, b)) = rear {
+        base_ch.push(a);
+        base_ch.push(b);
+    }
     let mut base: Vec<usize> = base_ch.iter().map(|c| pos(*c)).collect::<Option<Vec<_>>>()?;
     base.sort_by_key(|&i| xll_bit(layout.channels[i]));
     let mut extra: Vec<usize> = (0..n).filter(|i| !base.contains(i)).collect();
@@ -182,19 +237,42 @@ fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     let mut scale_val = vec![1.0f64; rows];
     let mut coeff_val = vec![vec![0.0f64; extra.len()]; rows];
     for (k, &e) in extra.iter().enumerate() {
-        for (target, scale, coef) in fold_targets(layout.channels[e], side)? {
+        for (target, scale, coef) in fold_targets(layout.channels[e], side, rear)? {
             let row = base.iter().position(|&b| layout.channels[b] == target)?;
             scale_val[row] = scale_val[row].min(scale);
             coeff_val[row][k] = coef;
         }
     }
     let scale_idx: Vec<usize> = scale_val.iter().map(|&v| if v >= 1.0 { unity } else { dmix_index(v) }).collect();
-    let coeff_idx: Vec<Vec<usize>> = coeff_val.iter().map(|r| r.iter().map(|&v| if v == 0.0 { 0 } else { dmix_index(v) }).collect()).collect();
+    // columns of the first extra set (up to 8 channels) carry the scaled coefficients; later sets state the
+    // effective coefficient (coefficient over row scale) with unit scales
+    let first_cols = extra.len().min(8);
+    let coeff_idx: Vec<Vec<usize>> = (0..rows)
+        .map(|j| {
+            (0..extra.len())
+                .map(|k| {
+                    let v = coeff_val[j][k];
+                    if v == 0.0 {
+                        0
+                    } else if k < first_cols {
+                        dmix_index(v)
+                    } else {
+                        dmix_index(v / scale_val[j])
+                    }
+                })
+                .collect()
+        })
+        .collect();
     let scale: Vec<i32> = scale_idx.iter().map(|&i| DMIX[i] as i32).collect();
     let inv: Vec<i32> = scale_idx.iter().map(|&i| DMIX_INV[i - 41] as i32).collect();
     let coeff: Vec<Vec<i32>> = (0..rows)
-        .map(|j| (0..extra.len()).map(|k| ((inv[j] as i64 * DMIX[coeff_idx[j][k]] as i64 + (1 << 15)) >> 16) as i32).collect())
+        .map(|j| {
+            (0..extra.len())
+                .map(|k| if k < first_cols { ((inv[j] as i64 * DMIX[coeff_idx[j][k]] as i64 + (1 << 15)) >> 16) as i32 } else { DMIX[coeff_idx[j][k]] as i32 })
+                .collect()
+        })
         .collect();
+    let sets: Vec<std::ops::Range<usize>> = (0..extra.len()).step_by(8).map(|a| a..(a + 8).min(extra.len())).collect();
     let hier = Hier {
         base: rows,
         scale,
@@ -202,6 +280,8 @@ fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
         inv,
         coeff,
         coeff_codes: coeff_idx.iter().map(|r| r.iter().map(|&i| 0x100 | i as u16).collect()).collect(),
+        sets,
+        unity_code: 0x100 | unity as u16,
     };
     Some((base, extra, hier))
 }
@@ -211,9 +291,14 @@ pub fn map_layout(layout: &ChannelLayout) -> MaMap {
     let exss_mask = layout.channels.iter().fold(0u32, |m, c| m | exss_bit(*c));
     if let Some((base, extra, hier)) = hierarchy(layout) {
         let order: Vec<usize> = base.iter().chain(&extra).copied().collect();
-        let set_masks = vec![mask_of(&base), mask_of(&extra)];
-        let xll_mask = set_masks[0] | set_masks[1];
-        return MaMap { order, set_sizes: vec![base.len(), extra.len()], set_masks, xll_mask, exss_mask, hier: Some(hier) };
+        let mut set_masks = vec![mask_of(&base)];
+        let mut set_sizes = vec![base.len()];
+        for r in &hier.sets {
+            set_masks.push(mask_of(&extra[r.clone()]));
+            set_sizes.push(r.len());
+        }
+        let xll_mask = set_masks.iter().fold(0, |m, x| m | x);
+        return MaMap { order, set_sizes, set_masks, xll_mask, exss_mask, hier: Some(hier) };
     }
     let mut idx: Vec<usize> = (0..layout.channels.len()).collect();
     idx.sort_by_key(|&i| xll_bit(layout.channels[i]));

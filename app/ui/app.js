@@ -23,7 +23,7 @@ const VARIANT = {
   "5.1": "Standard", "5.0": "Standard", "4.1-lcrs": "L C R + surround", "4.1-quad": "Quad",
   "4.0-quad": "Quad", "4.0-lcrs": "L C R + surround", "3.1": "L C R", "3.1-lrs": "L R + surround",
   "3.0": "L C R", "3.0-lrs": "L R + surround", "2.1": "L R + sub", "2.0": "Stereo", "2.0-ltrt": "Lt/Rt matrix",
-  "1.1": "Mono + LFE (DVD only)", "1.0": "Mono",
+  "1.1": "Mono + LFE (DVD only)", "1.0": "Mono", "22.2": "NHK, lossless only",
 };
 
 // Angle in degrees clockwise from front-centre, plus ring (0 ear level, 1 height, 2 LFE, 3 overhead).
@@ -31,9 +31,12 @@ const POS = {
   L: [-30, 0], R: [30, 0], C: [0, 0], LFE: [0, 2], Ls: [-110, 0], Rs: [110, 0], Cs: [180, 0],
   Lss: [-90, 0], Rss: [90, 0], Lsr: [-140, 0], Rsr: [140, 0], Lw: [-60, 0], Rw: [60, 0],
   Lh: [-45, 1], Rh: [45, 1], Lhs: [-90, 1], Rhs: [90, 1], Ch: [0, 1], Oh: [0, 3], Lt: [-30, 0], Rt: [30, 0],
+  // NHK 22.2: second LFE, top layer, bottom layer (ring 4)
+  LFE2: [30, 2], Tfc: [0, 1], Tfl: [-45, 1], Tfr: [45, 1], Tsl: [-90, 1], Tsr: [90, 1], Tc: [0, 3], Tbl: [-135, 1], Tbr: [135, 1], Tbc: [180, 1],
+  Bfc: [0, 4], Bfl: [-30, 4], Bfr: [30, 4],
 };
 
-const family = (l) => `${l.channels.filter((c) => c !== "LFE").length}.${l.channels.includes("LFE") ? 1 : 0}`;
+const family = (l) => (l.id === "22.2" ? "22.2" : `${l.channels.filter((c) => c !== "LFE").length}.${l.channels.includes("LFE") ? 1 : 0}`);
 const layoutById = (id) => cat.layouts.find((l) => l.id === id);
 const curLayoutId = () => $("variants").dataset.value;
 const curLayout = () => layoutById(curLayoutId());
@@ -70,7 +73,7 @@ function log(msg, cls = "") {
 
 function renderLayoutPicker(validIds, chosen) {
   const valid = cat.layouts.filter((l) => validIds.includes(l.id));
-  const fams = [...new Set(cat.layouts.filter((l) => l.id !== "22.2").map(family))];       // table order is richest first
+  const fams = [...new Set(cat.layouts.map(family))];       // table order is richest first
   const have = new Set(valid.map(family));
   const sel = valid.find((l) => l.id === chosen) || valid.find((l) => l.id === "5.1") || valid[0];
   $("variants").dataset.value = sel ? sel.id : "";
@@ -112,7 +115,8 @@ function drawSpeakers() {
   for (const ch of l.channels) {
     const [deg, ring] = POS[ch] || [0, 0];
     let x, y;
-    if (ring === 2) { x = 0; y = -21; }                      // LFE: inside the inner ring, clear of the speakers
+    if (ring === 2) { x = deg ? 22 : 0; y = -21; }            // LFE (and LFE2 beside it): inside the inner ring, clear of the speakers
+    else if (ring === 4) { const a = (deg * Math.PI) / 180; x = 28 * Math.sin(a); y = -28 * Math.cos(a) - 4; }   // bottom layer
     else if (ring === 3) { x = 0; y = 0; }                   // overhead: above the listener
     else { const r = ring === 1 ? 44 : 82, a = (deg * Math.PI) / 180; x = r * Math.sin(a); y = -r * Math.cos(a); }
     const height = ring === 1 || ring === 3;

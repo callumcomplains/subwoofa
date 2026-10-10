@@ -68,14 +68,17 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
     let map = map_layout(req.layout);
     let nch = map.order.len();
-    if nch > 8 {
-        return Err(MaError::Unsupported("more than 8 channels".into()));
+    if nch > 8 && req.layout.id != "22.2" {
+        return Err(MaError::Unsupported("more than 8 channels (only NHK 22.2 has more)".into()));
+    }
+    if nch > 8 && rate > 48_000 {
+        return Err(MaError::Unsupported("NHK 22.2 is carried at 44.1 or 48 kHz (a frame of 24 channels at a higher rate does not fit the stream's 64 kB frame size)".into()));
     }
     if rate > 96_000 && nch > 6 {
         return Err(MaError::Unsupported("above 96 kHz: up to 5.1 channels".into()));
     }
     // a core at 176.4/192 kHz is not implemented (the lossless stream stands alone, as in a core-less MA stream)
-    let core_bitrate_kbps = if rate > 96_000 { None } else { req.core_bitrate_kbps };
+    let core_bitrate_kbps = if rate > 96_000 || nch > 8 { None } else { req.core_bitrate_kbps };
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
             Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
