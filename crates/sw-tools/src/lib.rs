@@ -544,7 +544,7 @@ impl Stream {
         let bytes: u64 = frames.iter().map(|f| f.len as u64).sum();
         let ticks: u64 = frames.iter().map(|f| f.ticks as u64).sum();
         if self.is_container() {
-            w.write_all(&patch_container(&self.header, frames.len() as u32, ticks, bytes))?;
+            w.write_all(&patch_container(&self.header, frames.len() as u32, ticks, self.tick_rate, bytes))?;
         }
         copy_frames(&mut src, &mut w, self.data_start, frames)?;
         if self.is_container() {
@@ -619,7 +619,7 @@ pub fn append(inputs: &[&Path], out: &Path) -> Result<()> {
     let bytes: u64 = streams.iter().flat_map(|s| s.frames.iter()).map(|f| f.len as u64).sum();
     let mut w = BufWriter::new(File::create(out)?);
     if first.is_container() {
-        w.write_all(&patch_container(&first.header, frames, ticks, bytes))?;
+        w.write_all(&patch_container(&first.header, frames, ticks, first.tick_rate, bytes))?;
     }
     for s in &streams {
         let mut src = BufReader::new(File::open(&s.path)?);
@@ -667,7 +667,7 @@ fn write_pieces(head: &Stream, pieces: &[(&Stream, usize, usize)], out: &Path) -
     let bytes: u64 = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.len as u64).sum();
     let mut w = BufWriter::new(File::create(out)?);
     if head.is_container() {
-        w.write_all(&patch_container(&head.header, frames, ticks, bytes))?;
+        w.write_all(&patch_container(&head.header, frames, ticks, head.tick_rate, bytes))?;
     }
     for (s, a, b) in pieces {
         let mut src = BufReader::new(File::open(&s.path)?);
@@ -793,7 +793,10 @@ fn copy_frames<R: Read + Seek, W: Write>(src: &mut R, w: &mut W, data_start: u64
 }
 
 /// Rewrite the counts in a `.dtshd` header: AUPR-HDR frame count and total samples, STRMDATA size.
-fn patch_container(header: &[u8], frames: u32, ticks: u64, bytes: u64) -> Vec<u8> {
+/// Rewrite the frame count, programme length and stream size in a container header. `ticks` count at
+/// `tick_rate` (the core's rate); the programme length is stored in samples at the presentation's rate, which is
+/// higher for 96 kHz streams with a 48 kHz core.
+fn patch_container(header: &[u8], frames: u32, ticks: u64, tick_rate: u32, bytes: u64) -> Vec<u8> {
     let mut h = header.to_vec();
     let mut pos = 0usize;
     while pos + 16 <= h.len() {
@@ -802,8 +805,10 @@ fn patch_container(header: &[u8], frames: u32, ticks: u64, bytes: u64) -> Vec<u8
         if name == b"AUPR-HDR" && size >= 19 {
             let p = pos + 16;
             h[p + 6..p + 10].copy_from_slice(&frames.to_be_bytes());
-            h[p + 12..p + 16].copy_from_slice(&((ticks >> 8) as u32).to_be_bytes());
-            h[p + 16] = ticks as u8;
+            let rate = ((h[p + 3] as u64) << 16) | ((h[p + 4] as u64) << 8) | h[p + 5] as u64;
+            let samples = if tick_rate > 0 && rate > 0 { ticks * rate / tick_rate as u64 } else { ticks };
+            h[p + 12..p + 16].copy_from_slice(&((samples >> 8) as u32).to_be_bytes());
+            h[p + 16] = samples as u8;
         } else if name == b"STRMDATA" {
             h[pos + 8..pos + 16].copy_from_slice(&bytes.to_be_bytes());
             break;
@@ -984,7 +989,7 @@ pub fn add_silence(input: &Path, out: &Path, head_secs: f64, tail_secs: f64) -> 
     let frames = (s.frames.len() + nh + nt) as u32;
     let bytes = s.data_len + (nh + nt) as u64 * silent.len() as u64;
     let mut w = BufWriter::new(File::create(out)?);
-    w.write_all(&patch_container(&s.header, frames, ticks, bytes))?;
+    w.write_all(&patch_container(&s.header, frames, ticks, s.tick_rate, bytes))?;
     for _ in 0..nh {
         w.write_all(&silent)?;
     }

@@ -17,5 +17,6 @@ sw-codec-truehd = { path = "../sw-codec-truehd" }
 sw-codec-dts = { path = "../sw-codec-dts" }
 sw-tools = { path = "../sw-tools" }
 sw-queue = { path = "../sw-queue" }
+sw-verify = { path = "../sw-verify" }
 clap.workspace = true
 serde_json.workspace = true

@@ -92,9 +92,11 @@ enum ToolsCmd {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Decode the whole stream and report decoder complaints and the PCM MD5.
+    /// Same as `subwoofa verify`.
     Verify {
         file: PathBuf,
+        #[arg(long)]
+        deep: bool,
         #[arg(long)]
         ffmpeg: Option<PathBuf>,
     },
@@ -102,6 +104,18 @@ enum ToolsCmd {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Check a stream file: structure, checksums and (with --deep) a full decode, statistics and header dumps.
+    Verify {
+        file: PathBuf,
+        /// Also decode the audio and dump every header
+        #[arg(long)]
+        deep: bool,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        ffmpeg: Option<PathBuf>,
+    },
     /// List channel layouts.
     Layouts,
     /// List destinations and the stream types each allows.
@@ -254,6 +268,7 @@ fn run() -> Result<(), String> {
             }
         }
         Cmd::Tools { op } => run_tools(op)?,
+        Cmd::Verify { file, deep, json, ffmpeg } => verify_cmd(&file, deep, json, ffmpeg)?,
         Cmd::StreamInfo { path, count, first } => {
             let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             print!("{}", sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary());
@@ -457,6 +472,21 @@ fn default_cap(stream: StreamType) -> u32 {
     }
 }
 
+fn verify_cmd(file: &std::path::Path, deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
+    let opt = sw_verify::Options { deep, ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg), reference_verifier: None };
+    let report = sw_verify::verify(file, &opt).map_err(|e| e.to_string())?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+    } else {
+        print!("{}", report.to_text());
+    }
+    if report.passed {
+        Ok(())
+    } else {
+        Err("verification failed".into())
+    }
+}
+
 fn run_tools(op: ToolsCmd) -> Result<(), String> {
     use sw_tools::Stream;
     let e = |e: sw_tools::Error| e.to_string();
@@ -508,18 +538,7 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
             let (h, t) = sw_tools::add_silence(&file, &output, head, tail).map_err(e)?;
             println!("wrote {} ({} silent frames at the head, {} at the tail)", output.display(), h, t);
         }
-        ToolsCmd::Verify { file, ffmpeg } => {
-            let ff = ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg).ok_or("ffmpeg not found")?;
-            let r = sw_tools::verify(&file, &ff).map_err(e)?;
-            println!("{} frames, {:.3} s, PCM md5 {}", r.frames, r.duration_secs, r.pcm_md5.as_deref().unwrap_or("?"));
-            for m in &r.messages {
-                println!("decoder: {m}");
-            }
-            println!("{}", if r.passed { "Stream passes verification with no errors." } else { "Stream FAILED verification." });
-            if !r.passed {
-                return Err("verification failed".into());
-            }
-        }
+        ToolsCmd::Verify { file, deep, ffmpeg } => return verify_cmd(&file, deep, false, ffmpeg),
     }
     Ok(())
 }

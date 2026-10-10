@@ -3111,6 +3111,7 @@ dependencies = [
  "sw-pcm",
  "sw-queue",
  "sw-tools",
+ "sw-verify",
 ]
 
 [[package]]
@@ -3178,6 +3179,17 @@ name = "sw-tools"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sw-verify"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sw-codec-ac3",
+ "sw-codec-truehd",
  "thiserror 2.0.21",
 ]
 
