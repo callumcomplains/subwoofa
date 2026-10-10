@@ -395,6 +395,77 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     Ok(x)
 }
 
+/// DEE reads a master's file name and folder as lists separated by white space, so a name or a folder with spaces
+/// is taken for several files and the encoder refuses to connect or cannot find the folder. Such a master is given
+/// an alias for the job in a folder whose path has no spaces: a hard link (no copy) beside the output or the master,
+/// else a copy in the work folder. A DAMF master keeps its companion files (`.metadata`, `.audio`) under the same
+/// alias.
+struct Alias {
+    input: PathBuf,
+    made: Vec<PathBuf>,
+}
+
+impl Alias {
+    fn remove(&self) {
+        for p in &self.made {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+fn has_space(path: &Path) -> bool {
+    path.to_string_lossy().chars().any(char::is_whitespace)
+}
+
+fn needs_alias(path: &Path) -> bool {
+    has_space(path)
+}
+
+fn make_alias(input: &Path, output: &Path, work: &Path) -> Result<Alias, Error> {
+    let name = input.file_name().and_then(|f| f.to_str()).unwrap_or("master");
+    let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("wav");
+    let stem = format!("subwoofa_in_{}", std::process::id());
+    let alias_name = format!("{stem}.{ext}");
+    // companions of a DAMF master: <name>.metadata and <name>.audio
+    let mut sources: Vec<(PathBuf, String)> = vec![(input.to_path_buf(), alias_name.clone())];
+    if ext.eq_ignore_ascii_case("atmos") {
+        for suffix in ["metadata", "audio"] {
+            let c = input.with_file_name(format!("{name}.{suffix}"));
+            if c.is_file() {
+                sources.push((c, format!("{alias_name}.{suffix}")));
+            }
+        }
+    }
+    // the output's folder first: it is writable, and usually on the master's drive
+    let dirs: Vec<PathBuf> = [output.parent(), input.parent()].into_iter().flatten().filter(|d| !has_space(d)).map(Path::to_path_buf).collect();
+    'dirs: for dir in &dirs {
+        let mut made: Vec<PathBuf> = Vec::new();
+        for (src, target) in &sources {
+            let dst = dir.join(target);
+            let _ = std::fs::remove_file(&dst);
+            if std::fs::hard_link(src, &dst).is_err() {
+                for m in &made {
+                    let _ = std::fs::remove_file(m);
+                }
+                continue 'dirs;
+            }
+            made.push(dst);
+        }
+        return Ok(Alias { input: dir.join(&alias_name), made });
+    }
+    // no hard link possible (another volume, or a file system without them): a copy in the work folder
+    if has_space(work) {
+        return Err(Error::Invalid(format!("DEE cannot read a master whose path has spaces ({}); move or rename it to a folder without spaces", input.display())));
+    }
+    let mut made = Vec::new();
+    for (src, target) in &sources {
+        let dst = work.join(target);
+        std::fs::copy(src, &dst)?;
+        made.push(dst);
+    }
+    Ok(Alias { input: work.join(&alias_name), made })
+}
+
 /// What a finished job leaves behind.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finished {
@@ -415,9 +486,26 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
     let mut job = job.clone();
     job.input = std::path::absolute(&job.input)?;
     job.output = std::path::absolute(&job.output)?;
-    let job = &job;
     let work_dir = &std::path::absolute(work_dir)?;
     std::fs::create_dir_all(work_dir)?;
+    let kind = match job.kind {
+        Some(k) => k,
+        None => InputKind::detect(&job.input)?,
+    };
+    let alias = if kind != InputKind::Wav && needs_alias(&job.input) { Some(make_alias(&job.input, &job.output, work_dir)?) } else { None };
+    if let Some(a) = &alias {
+        job.input = a.input.clone();
+        job.kind = Some(kind);
+    }
+    let job = &job;
+    let result = run_inner(dee, job, work_dir, progress, line, cancel);
+    if let Some(a) = &alias {
+        a.remove();
+    }
+    result
+}
+
+fn run_inner(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut(f32), line: &mut dyn FnMut(&str), cancel: &AtomicBool) -> Result<Finished, Error> {
     let temp = work_dir.join("temp");
     std::fs::create_dir_all(&temp)?;
     if let Some(d) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -620,6 +708,28 @@ mod tests {
         assert!(relevant("[x] INFO: Features enabled by the license:  something").is_none());
         assert!(relevant("[x] INTERNAL_INFO: Loading library").is_none());
         assert!(relevant("[x] ERROR: something broke").is_some());
+    }
+
+    #[test]
+    fn a_master_with_spaces_gets_a_space_free_alias() {
+        let dir = std::env::temp_dir().join(format!("sw_dee_alias_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        let master = dir.join("My Film - Master.atmos");
+        std::fs::write(&master, b"a").unwrap();
+        std::fs::write(dir.join("My Film - Master.atmos.metadata"), b"m").unwrap();
+        std::fs::write(dir.join("My Film - Master.atmos.audio"), b"x").unwrap();
+        assert!(needs_alias(&master));
+        let a = make_alias(&master, &dir.join("out").join("o.thd"), &dir).unwrap();
+        assert!(!has_space(&a.input), "the alias folder must have no spaces: {}", a.input.display());
+        let name = a.input.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(!name.contains(' ') && name.ends_with(".atmos"));
+        assert_eq!(std::fs::read(&a.input).unwrap(), b"a");
+        assert_eq!(std::fs::read(format!("{}.metadata", a.input.display())).unwrap(), b"m");
+        assert_eq!(std::fs::read(format!("{}.audio", a.input.display())).unwrap(), b"x");
+        a.remove();
+        assert!(!a.input.exists());
+        assert!(master.exists(), "the master itself is untouched");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

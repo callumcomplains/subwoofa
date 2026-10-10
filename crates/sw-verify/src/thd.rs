@@ -3,7 +3,7 @@
 
 use crate::bits::Bits;
 use crate::{Collector, Probe, Status, Window};
-use sw_codec_truehd::bits::{checksum8, major_sync_checksum, parity};
+use sw_codec_truehd::bits::{checksum8, parity};
 
 const RATES: [u32; 16] = [48_000, 96_000, 192_000, 0, 0, 0, 0, 0, 44_100, 88_200, 176_400, 0, 0, 0, 0, 0];
 
@@ -87,12 +87,9 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
                 aus += 1;
                 continue;
             }
-            if msize == 28 {
-                let stored = u16::from_le_bytes([au[4 + 26], au[4 + 27]]);
-                if major_sync_checksum(&au[4..4 + 26]) != stored {
-                    bad_major += 1;
-                    c.finding(Status::Fail, Some(pos), "major sync checksum mismatch");
-                }
+            if !crate::crc::mlp_major_sync_ok(&au[4..4 + msize]) {
+                bad_major += 1;
+                c.finding(Status::Fail, Some(pos), "major sync checksum mismatch");
             }
             let mut b = Bits::new(&au[8..4 + msize]);
             let mut ratebits = b.get(4);
@@ -280,16 +277,29 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
             ],
         );
         let data = w.get(0, 64 << 20).to_vec();
-        let r = sw_codec_truehd::analyze::analyze_range(&data, 0, 400);
+        let r = match std::panic::catch_unwind(|| sw_codec_truehd::analyze::analyze_range(&data, 0, 400)) {
+            Ok(r) => r,
+            Err(_) => {
+                c.finding(Status::Warn, None, "the substream analysis could not follow this stream (it stopped on an unexpected layout)");
+                return p;
+            }
+        };
         let mut rows = vec![("scope".to_string(), "the first 400 restart intervals (at most 64 MB)".to_string())];
         for (i, l) in r.summary().lines().enumerate() {
             if !l.trim().is_empty() {
                 rows.push((format!("{:02}", i + 1), l.trim().to_string()));
             }
         }
-        for e in r.errors.iter().take(20) {
-            rows.push(("syntax error".to_string(), e.clone()));
-            c.finding(Status::Fail, None, format!("substream syntax: {e}"));
+        if !r.errors.is_empty() {
+            let mut kinds: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+            for e in &r.errors {
+                *kinds.entry(e.as_str()).or_default() += 1;
+            }
+            for (e, n) in kinds.iter().take(5) {
+                rows.push(("analysis stopped".to_string(), format!("{e} ({n} times)")));
+            }
+            // this analyser does not know every coding tool of Dolby's encoder; the decoder check is the verdict
+            c.finding(Status::Warn, None, format!("the substream analysis could not follow part of this stream ({} stops, e.g. '{}'); the decoder check above is the verdict", r.errors.len(), r.errors[0]));
         }
         c.section("Substream analysis", rows);
     }

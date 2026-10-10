@@ -33,9 +33,35 @@ pub fn dts(data: &[u8]) -> u16 {
     run(&CCITT, 0xFFFF, data)
 }
 
+/// TrueHD / MLP major sync of any length: the checksum field is the last two bytes (little endian); the CRC-16
+/// (polynomial 0x002D) covers everything before the two bytes ahead of it, and those two are XORed in.
+pub fn mlp_major_sync_ok(hdr: &[u8]) -> bool {
+    let n = hdr.len();
+    if n < 8 {
+        return false;
+    }
+    let mut crc = 0u16;
+    for &b in &hdr[..n - 4] {
+        crc = (crc << 8) ^ MLP[((crc >> 8) as u8 ^ b) as usize];
+    }
+    crc.swap_bytes() ^ u16::from_le_bytes([hdr[n - 4], hdr[n - 3]]) == u16::from_le_bytes([hdr[n - 2], hdr[n - 1]])
+}
+
+static MLP: [u16; 256] = table(0x002D);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mlp_checksum_matches_a_real_28_byte_major_sync() {
+        // the 5.1 major sync written by an independent encoder (see the TrueHD crate's own test)
+        let real: Vec<u8> = (0..28).map(|i| u8::from_str_radix(&"f8726fba0007800fb752000000008c7f203c0000000000000000e4d1"[2 * i..2 * i + 2], 16).unwrap()).collect();
+        assert!(mlp_major_sync_ok(&real));
+        let mut bad = real.clone();
+        bad[9] ^= 1;
+        assert!(!mlp_major_sync_ok(&bad));
+    }
 
     #[test]
     fn appending_the_crc_gives_zero() {

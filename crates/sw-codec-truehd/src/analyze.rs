@@ -221,6 +221,10 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         // substream headers
         let mut ends = Vec::new();
         for _ in 0..nsub {
+            if off + 2 > au.len() {
+                r.errors.push(format!("substream directory runs past the access unit at byte {pos}"));
+                break;
+            }
             let h = u16::from_be_bytes([au[off], au[off + 1]]);
             off += 2;
             if h >> 15 == 1 {
@@ -228,13 +232,23 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
             }
             ends.push((h & 0x0FFF) as usize * 2);
         }
+        if ends.len() != nsub {
+            pos += len;
+            r.access_units += 1;
+            continue;
+        }
         r.header_bytes += off as u64;
         let mut start = 0usize;
+        // a fourth substream with the spatial-presentation flag carries Dolby Atmos object data, not channel audio
+        let atmos = nsub == 4 && r.substream_info >> 7 == 1;
         for si in 0..nsub {
             let end = ends[si];
-            let sub = &au[off + start..(off + end).min(au.len())];
+            let from = (off + start).min(au.len());
+            let sub = &au[from..(off + end).min(au.len()).max(from)];
             r.subs[si].bytes += sub.len() as u64;
-            analyze_substream(sub, &mut states[si], &mut r.subs[si], &mut r.blocksizes, &mut r.errors, si);
+            if !(atmos && si == 3) {
+                analyze_substream(sub, &mut states[si], &mut r.subs[si], &mut r.blocksizes, &mut r.errors, si);
+            }
             start = end;
         }
         pos += len;
