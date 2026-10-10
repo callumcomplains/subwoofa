@@ -276,3 +276,19 @@ The DTS encoder's Express streams carry steady notes as tonal components (a freq
 ## Bitstream tab review
 - Checked the original encoder's Bitstream tab (manual 7.3, sections 14 and 15) against Subwoofa: none of Express secondary-audio mixing metadata (primary attenuation, fade down/up, mono-to-5.1 output faders), Program Info, Wide 7.1 remapping, Express dialog mode, seamless branching or AAF automation is implemented yet.
 - Most of them write metadata whose bits are not public (and Program Info's 2000-character limit does not fit the one text field I know of in the extension header), so they need the original encoder's own output to copy from. `docs/REFERENCE-ENCODES.md` lists 13 small encodes that isolate one setting each. Seamless branching only makes the encoder switch an internal filter off at the branch points (no stream syntax per the manual), dialog mode is an encoder tuning, and AAF import needs a Pro Tools AAF reader plus dynamic-metadata syntax.
+
+## Deep Purple, Made in Japan (Blu-ray) as a reference
+- The disc carries one stereo 96 kHz / 24-bit programme as **LPCM, DTS-HD MA, Dolby TrueHD and AC-3 640 kbps**, all from commercial tools. Two minutes of music (t = 1500 s) demuxed with FFmpeg:
+  - **Both commercial lossless tracks decode bit-identical to the LPCM** (11.5 million samples compared, after aligning their different start points).
+  - Verify accepts all four streams. The MA is a 48 kHz core at 1536 kbps (no X96) under 96 kHz XLL, the same structure as ours; DTSHDVerify passes it.
+  - **My encoders on the same LPCM, all bit-exact against it** (and DTSHDVerify passes both MA files):
+
+    | | commercial | Subwoofa |
+    |---|---|---|
+    | DTS-HD MA 96 kHz stereo with core | 3274 kbps (core 1536) | 3189 kbps (core 1509), 2.6% smaller |
+    | DTS-HD MA lossless only | n/a | 2705 kbps |
+    | TrueHD stereo 96 kHz | 2733 kbps | 2764 kbps, 1.1% larger |
+
+- **Lead on the TrueHD gap** (analyser output side by side): Dolby codes the second channel through a stereo matrix with LSB bypass (about 3.5% of the stream is bypass bits) and sends parameters in only 12,061 of 51,600 blocks (0.35% of the stream); mine sends them in 40,023 blocks (0.79%) and uses no matrix with bypass. Updating parameters less often and trying that matrix is worth about 1%.
+- Verify: the core-against-lossless comparison is skipped when the core and the lossless audio have different sample rates (it gave a meaningless -3 dB on the commercial 96 kHz MA).
+- Housekeeping: the unowned `crates/sw-adm` stub (an empty ADM reader with only a test for an API that does not exist) was moved out of the repo to `E:\FormatProgram\_stash\sw-adm-stub`.
