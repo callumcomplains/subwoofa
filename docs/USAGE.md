@@ -73,7 +73,7 @@ subwoofa verify Film.ac3 --json         # the report as JSON (the exit code is 0
 
 | Format | Notes |
 |---|---|
-| DTS-HD MA | CBR core plus lossless extension; 1.0 to 7.1 at 44.1/48/88.2/96 kHz; the core can be switched off |
+| DTS-HD MA | CBR core plus lossless extension; 1.0 to 7.1 at 44.1/48/88.2/96 kHz, 1.0 to 5.1 at 176.4/192 kHz; the core can be switched off |
 | DTS-HD HRA | 48 kHz, 2046 to 5376 kbps total; up to 5.1 with XBR, 7.1 and 7.0 with XXCH |
 | DTS 96/24 | 96 kHz source, core plus X96 |
 | DTS-ES | 6.1 matrix (optional surround phase shift, rear -3 dB) or discrete (XCH) |

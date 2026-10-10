@@ -510,6 +510,11 @@ struct XllInfo {
     chset_headers: u32,
     chset_header_bad: u32,
     chset_bytes: Vec<usize>,
+    /// First channel set: channels, which of them carry a residual of the core (all ones: plain lossless), bit depths, rate.
+    first_set: Option<(u32, u32, u32, u32, u32)>,
+    /// Bytes of coded data per frequency band (from the navigation table).
+    band_bytes: Vec<usize>,
+    bands: Vec<BandHdr>,
 }
 
 fn parse_xll(d: &[u8]) -> Result<XllInfo, String> {
@@ -550,6 +555,16 @@ fn parse_xll(d: &[u8]) -> Result<XllInfo, String> {
             break;
         }
         let size = (((d[pos] as usize) << 2) | (d[pos + 1] as usize >> 6)) + 1;
+        if x.first_set.is_none() && pos + 8 <= d.len() {
+            let mut cb = Bits::new(&d[pos..]);
+            cb.skip(10);
+            let nch = cb.get(4) + 1;
+            let resid = cb.get(nch as usize);
+            let pcm = cb.get(5) + 1;
+            let storage = cb.get(5) + 1;
+            let freq = SAMPLE_RATES_EXSS[cb.get(4) as usize];
+            x.first_set = Some((nch, resid, pcm, storage, freq));
+        }
         x.chset_headers += 1;
         if pos + size > d.len() {
             // the rest of the frame (smoothing buffer) is in the next substream: nothing more to check here
@@ -562,6 +577,22 @@ fn parse_xll(d: &[u8]) -> Result<XllInfo, String> {
         x.chset_bytes.push(size);
         pos += size;
     }
+    // navigation table: for each band, segment and channel set, the size of its data
+    let nbands = if x.first_set.map_or(0, |f| f.4) > 96_000 { 2 } else { 1 };
+    let mut nb = Bits::new(&d[pos.min(d.len())..]);
+    x.band_bytes = vec![0; nbands];
+    for band in 0..nbands {
+        for _ in 0..x.nsegs {
+            for _ in 0..x.nchsets {
+                x.band_bytes[band] += nb.get(x.seg_size_nbits as usize) as usize + 1;
+            }
+        }
+    }
+    if nb.over {
+        x.band_bytes.clear();
+    }
+    let bands = parse_band_headers(d, &x);
+    x.bands = bands;
     Ok(x)
 }
 
@@ -576,7 +607,12 @@ fn xll_rows(x: &XllInfo) -> Vec<(String, String)> {
         ("common header".to_string(), format!("{} bytes, checksum {}", x.header_size, if x.common_crc_ok { "ok" } else { "BAD" })),
         ("frame size".to_string(), format!("{} bytes", x.frame_size)),
         ("channel sets".to_string(), x.nchsets.to_string()),
+        ("first channel set".to_string(), match x.first_set {
+            Some((n, r, pcm, st, f)) => format!("{n} channels at {f} Hz, {pcm}-bit in {st}-bit words, {}", if r == (1 << n) - 1 { "full lossless data (not a residual of the core)".to_string() } else { format!("residual of the core on channels 0x{r:X}") }),
+            None => "unknown".to_string(),
+        }),
         ("channel set headers".to_string(), format!("{} bytes in all, {} of {} checksums ok", x.chset_bytes.iter().sum::<usize>(), x.chset_headers - x.chset_header_bad, x.chset_headers)),
+        ("coded data per band".to_string(), if x.band_bytes.is_empty() { "unknown".to_string() } else { x.band_bytes.iter().enumerate().map(|(i, b)| format!("band {i}: {b} bytes")).collect::<Vec<_>>().join(", ") }),
         ("segments per frame".to_string(), x.nsegs.to_string()),
         ("samples per segment (per band)".to_string(), x.seg_samples.to_string()),
         ("samples per frame (per band)".to_string(), (x.nsegs * x.seg_samples).to_string()),
@@ -585,6 +621,91 @@ fn xll_rows(x: &XllInfo) -> Vec<(String, String)> {
         ("scalable LSBs".to_string(), if x.scalable_lsbs { format!("yes, fixed LSB width {}", x.fixed_lsb) } else { "no".to_string() }),
         ("channel mask field".to_string(), format!("{} bits", x.ch_mask_nbits)),
     ]
+}
+
+#[derive(Debug, Default, Clone)]
+struct BandHdr {
+    decor: bool,
+    pairs_used: usize,
+    adapt: Vec<u32>,
+    fixed: Vec<u32>,
+}
+
+/// The per-band predictor settings of the first channel set (assumes a primary set without embedded downmix, as
+/// every stream made by the encoders handled here is); empty when the header is outside that shape.
+fn parse_band_headers(d: &[u8], x: &XllInfo) -> Vec<BandHdr> {
+    let Some((nch, _, pcm, storage, freq)) = x.first_set else { return Vec::new() };
+    let _ = pcm;
+    let pos = x.header_size;
+    if pos + 4 > d.len() {
+        return Vec::new();
+    }
+    let mut b = Bits::new(&d[pos..]);
+    b.skip(10 + 4);
+    b.skip(nch as usize); // residual_encode
+    b.skip(5 + 5 + 4 + 2 + 2);
+    let primary = b.flag();
+    let dmix_present = b.flag();
+    if dmix_present {
+        return Vec::new();
+    }
+    let _ = primary;
+    b.skip(1); // hier_chset
+    if !b.flag() {
+        return Vec::new(); // channel mask disabled
+    }
+    b.skip(x.ch_mask_nbits as usize);
+    let nbands = if freq > 96_000 { 2 } else { 1 };
+    if freq > 96_000 && b.flag() {
+        return Vec::new();
+    }
+    let _ = storage;
+    let linear = |b: &mut Bits, n: usize| -> i32 {
+        let v = b.get(n) as i32;
+        (v >> 1) ^ -(v & 1)
+    };
+    let ch_nbits = 32 - (nch.max(2) - 1).leading_zeros() as usize;
+    let mut out = Vec::new();
+    for band in 0..nbands {
+        let mut h = BandHdr::default();
+        h.decor = b.flag();
+        if h.decor && nch > 1 {
+            b.skip(ch_nbits * nch as usize);
+            for _ in 0..nch / 2 {
+                if b.flag() {
+                    let c = linear(&mut b, 7);
+                    if c != 0 {
+                        h.pairs_used += 1;
+                    }
+                }
+            }
+        }
+        for _ in 0..nch {
+            h.adapt.push(b.get(4));
+        }
+        for i in 0..nch as usize {
+            h.fixed.push(if h.adapt[i] == 0 { b.get(2) } else { 0 });
+        }
+        for i in 0..nch as usize {
+            for _ in 0..h.adapt[i] {
+                linear(&mut b, 8);
+            }
+        }
+        // MSB/LSB split (a size field and a width per channel), then the bit width adjustment (a width per channel)
+        let split = if band == 0 { x.scalable_lsbs } else { b.flag() };
+        if split {
+            b.skip(x.seg_size_nbits as usize + 4 * nch as usize);
+        }
+        let adjust = if band == 0 { x.scalable_lsbs } else { b.flag() };
+        if adjust {
+            b.skip(4 * nch as usize);
+        }
+        if b.over {
+            return Vec::new();
+        }
+        out.push(h);
+    }
+    out
 }
 
 /// Which DTS:X marker, if any, sits on a 32-bit boundary of this lossless frame (counted from its first byte). The
@@ -633,6 +754,12 @@ struct Walk {
     xll_first: Option<XllInfo>,
     xll_bad: u64,
     xll_checked: u64,
+    band_total: Vec<u64>,
+    /// per band: adaptive predictor order histogram (0..=15), fixed order histogram (0..=3), frames with decorrelation
+    pred_adapt: Vec<[u64; 16]>,
+    pred_fixed: Vec<[u64; 4]>,
+    pred_decor: Vec<u64>,
+    pred_frames: u64,
     x_frames: u64,
     imax_frames: u64,
     xll_chset_bad: u64,
@@ -841,6 +968,29 @@ fn walk(w: &mut Window, from: u64, to: u64, c: &mut Collector, record: bool) -> 
                         if e.xll_pbr == 0 && x.frame_size > e.xll_size {
                             s.xll_bad += 1;
                             c.finding(Status::Fail, Some(pos + xoff as u64), format!("XLL frame ({} bytes) is larger than its component ({} bytes)", x.frame_size, e.xll_size));
+                        }
+                        if s.band_total.len() < x.band_bytes.len() {
+                            s.band_total.resize(x.band_bytes.len(), 0);
+                        }
+                        if !x.bands.is_empty() {
+                            s.pred_frames += 1;
+                            if s.pred_adapt.len() < x.bands.len() {
+                                s.pred_adapt.resize(x.bands.len(), [0; 16]);
+                                s.pred_fixed.resize(x.bands.len(), [0; 4]);
+                                s.pred_decor.resize(x.bands.len(), 0);
+                            }
+                            for (i, bh) in x.bands.iter().enumerate() {
+                                for a in &bh.adapt {
+                                    s.pred_adapt[i][(*a as usize).min(15)] += 1;
+                                }
+                                for f in &bh.fixed {
+                                    s.pred_fixed[i][(*f as usize).min(3)] += 1;
+                                }
+                                s.pred_decor[i] += u64::from(bh.decor);
+                            }
+                        }
+                        for (t, b) in s.band_total.iter_mut().zip(&x.band_bytes) {
+                            *t += *b as u64;
                         }
                         if let Some(frame) = body.get(xoff..xoff + x.frame_size.min(body.len() - xoff)) {
                             match find_x_marker(frame) {
@@ -1093,6 +1243,10 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     let name = if s.saw_xll { "DTS-HD Master Audio" } else if s.saw_lbr { "DTS Express" } else if s.exss > 0 && s.ext_kinds.contains("XBR") || s.ext_kinds.contains("XXCH") && s.exss > 0 { "DTS-HD High Resolution Audio" } else if s.ext_kinds.contains("X96") { "DTS 96/24" } else if s.ext_kinds.contains("XCH") { "DTS-ES" } else { "DTS Digital Surround" };
     c.kv("Format", format!("{name} ({})", parts.join(" + ")));
     c.kv("Sample rate", format!("{rate} Hz"));
+    if s.band_total.len() > 1 {
+        let all: u64 = s.band_total.iter().sum();
+        c.kv("Lossless data per frequency band", s.band_total.iter().enumerate().map(|(i, b)| format!("band {i}: {:.1} MB ({:.0}%)", *b as f64 / 1e6, 100.0 * *b as f64 / all.max(1) as f64)).collect::<Vec<_>>().join(", "));
+    }
     if s.saw_xll {
         // a chance match in audio data is possible in a long file, so the marker must be there in most frames
         let (hits, kind) = if s.imax_frames > s.x_frames { (s.imax_frames, "IMAX Enhanced") } else { (s.x_frames, "DTS:X") };
@@ -1226,6 +1380,19 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
         }
         if let Some(x) = &s.xll_first {
             c.section("Lossless (XLL) frame header (first frame)", xll_rows(x));
+        }
+        if s.pred_frames > 0 {
+            let mut rows = vec![("frames analysed".to_string(), s.pred_frames.to_string())];
+            for (i, hist) in s.pred_adapt.iter().enumerate() {
+                let tot: u64 = hist.iter().sum::<u64>().max(1);
+                let mean = hist.iter().enumerate().map(|(o, n)| o as u64 * n).sum::<u64>() as f64 / tot as f64;
+                let top: Vec<String> = hist.iter().enumerate().filter(|(_, n)| **n * 50 >= tot).map(|(o, n)| format!("{o}:{:.0}%", 100.0 * *n as f64 / tot as f64)).collect();
+                rows.push((format!("band {i} adaptive predictor order"), format!("mean {mean:.1} ({})", top.join(" "))));
+                let ft: u64 = s.pred_fixed[i].iter().sum::<u64>().max(1);
+                rows.push((format!("band {i} fixed order (when no adaptive)"), s.pred_fixed[i].iter().enumerate().map(|(o, n)| format!("{o}:{:.0}%", 100.0 * *n as f64 / ft as f64)).collect::<Vec<_>>().join(" ")));
+                rows.push((format!("band {i} channel decorrelation"), format!("on in {:.0}% of frames", 100.0 * s.pred_decor[i] as f64 / s.pred_frames as f64)));
+            }
+            c.section("Lossless coding tools (all frames)", rows);
         }
     }
     p

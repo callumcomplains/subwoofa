@@ -184,3 +184,9 @@ fn core_plus_xll_six_one_and_six_zero_48k() {
     core_roundtrip("c60", "6.0-discrete", 48_000, 24, 24);
     core_roundtrip("c70", "7.0-side-rear", 48_000, 24, 24);
 }
+
+/// At 192 kHz the core is synthesised from band 0 of the lossless split; the decode must stay bit-exact.
+#[test]
+fn core_plus_xll_five_one_192k() {
+    core_roundtrip_x("c51_192", "5.1", 192_000, 8, 24, false);
+}

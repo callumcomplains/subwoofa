@@ -77,8 +77,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     if rate > 96_000 && nch > 6 {
         return Err(MaError::Unsupported("above 96 kHz: up to 5.1 channels".into()));
     }
-    // a core at 176.4/192 kHz is not implemented (the lossless stream stands alone, as in a core-less MA stream)
-    let core_bitrate_kbps = if rate > 96_000 || nch > 8 { None } else { req.core_bitrate_kbps };
+    // a core under 176.4 / 192 kHz lossless data sits under band 0 (up to 5.1); wider streams stand alone
+    let core_bitrate_kbps = if nch > 8 || (rate > 96_000 && nch > 6) { None } else { req.core_bitrate_kbps };
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
             Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),

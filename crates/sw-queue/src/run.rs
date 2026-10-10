@@ -239,8 +239,8 @@ fn execute_inner(
             other => Failure::Error(other.to_string()),
         })?;
     } else if native && stream == StreamType::DtsHdMa {
-        if spec.sample_rate > 96_000 && spec.bitrate != Some(0) {
-            log.push_str("Note: above 96 kHz the stream is lossless only (no DTS core is written).
+        if spec.sample_rate > 96_000 && layout.channels.len() > 6 && spec.bitrate != Some(0) {
+            log.push_str("Note: above 96 kHz with more than 6 channels the stream is lossless only (no DTS core is written).
 ");
         }
         let req = sw_codec_dts::ma_native::MaRequest {

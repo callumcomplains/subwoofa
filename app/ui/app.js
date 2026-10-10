@@ -232,15 +232,16 @@ function renderBitrate(from) {
   syncDtsOpts();
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
-  // above 96 kHz the stream is the lossless extension alone (no core is written)
-  const nhk = ma && curLayout() && curLayout().channels.length > 8;
-  const hi = ma && (curRate() > 96000 || nhk);
+  // no core above 8 channels, or above 6 channels over 96 kHz: the stream is the lossless extension alone
+  const nch = curLayout() ? curLayout().channels.length : 0;
+  const nhk = ma && nch > 8;
+  const hi = ma && (nhk || (curRate() > 96000 && nch > 6));
   const coreBox = $("coreOn");
   if (hi && !coreBox.disabled) coreBox.dataset.was = coreBox.checked ? "1" : "0";
   if (!hi && coreBox.disabled) coreBox.checked = coreBox.dataset.was !== "0";
   coreBox.disabled = hi;
   if (hi) coreBox.checked = false;
-  $("coreWrap").querySelector("span").textContent = hi ? (nhk ? "No DTS core above 8 channels: the stream is the lossless data alone" : "No DTS core above 96 kHz: the stream is the lossless data alone") : "Backward-compatible core (turn off for lossless data only)";
+  $("coreWrap").querySelector("span").textContent = hi ? (nhk ? "No DTS core above 8 channels: the stream is the lossless data alone" : "No DTS core above 96 kHz with more than 6 channels: the stream is the lossless data alone") : "Backward-compatible core (turn off for lossless data only)";
   syncX96();
   if (!ma) coreBox.checked = true;
   br.disabled = (lossless && !unlocked) || coreOff();

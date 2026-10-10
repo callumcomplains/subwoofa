@@ -272,6 +272,9 @@ fn linear_bits(u: &[u32]) -> (u32, u64) {
 enum Code {
     Rice(u32),
     Linear(u32),
+    /// Rice code with parameter `k` for most samples; the `c` largest (isolated) samples are sent as `l`-bit
+    /// values at listed positions instead of long unary runs.
+    Hybrid { k: u32, l: u32, c: u32 },
 }
 
 fn choose_code(u: &[u32]) -> (Code, u64) {
@@ -279,6 +282,70 @@ fn choose_code(u: &[u32]) -> (Code, u64) {
     let (w, lb) = linear_bits(u);
     // linear data need no unary part; compare including the larger cost of an all-zero block
     if lb <= rb { (Code::Linear(w), lb) } else { (Code::Rice(k), rb) }
+}
+
+/// Indices of the `c` largest values (ties: lowest index first), in ascending index order.
+fn isolated_positions(u: &[u32], c: usize) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..u.len()).collect();
+    idx.sort_by(|&a, &b| u[b].cmp(&u[a]).then(a.cmp(&b)));
+    idx.truncate(c);
+    idx.sort_unstable();
+    idx
+}
+
+/// Hybrid Rice coding of part B of a segment: the best (k, l, count) and its length in bits, including what it adds
+/// to the segment header (the hybrid flag, the length field of `nabits` bits, the count of `posbits` bits).
+fn hybrid_code(u: &[u32], posbits: u32, nabits: u32) -> Option<(Code, u64)> {
+    let n = u.len();
+    if n < 16 {
+        return None;
+    }
+    let max_c = ((1usize << posbits.min(20)) - 1).min(n - 1).min(32);
+    // sums of u >> k over everything, then per candidate set only the isolated samples are taken out
+    let mut sums = [0u64; 25];
+    for v in u {
+        for (k, s) in sums.iter_mut().enumerate() {
+            *s += (*v >> k) as u64;
+        }
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    let top = max_c.min(n);
+    order.select_nth_unstable_by(top.saturating_sub(1).min(n - 1), |&a, &b| u[b].cmp(&u[a]).then(a.cmp(&b)));
+    let mut top_idx: Vec<usize> = order[..top].to_vec();
+    top_idx.sort_by(|&a, &b| u[b].cmp(&u[a]).then(a.cmp(&b)));
+    let mut best: Option<(Code, u64)> = None;
+    for &c in &[1usize, 2, 3, 4, 6, 8, 12, 16, 24, 32] {
+        if c > top_idx.len() {
+            break;
+        }
+        let iso = &top_idx[..c];
+        let big = u[iso[0]];
+        if big == 0 {
+            break;
+        }
+        let l = 32 - big.leading_zeros();
+        if l > (1 << nabits) {
+            continue;
+        }
+        let fixed = 1 + nabits as u64 + posbits as u64 + c as u64 * (posbits as u64 + l as u64);
+        for k in 0..=24u32 {
+            let taken: u64 = iso.iter().map(|&i| (u[i] >> k) as u64).sum();
+            let bits = (n - c) as u64 * (k as u64 + 1) + (sums[k as usize] - taken) + fixed;
+            if best.map_or(true, |b| bits < b.1) {
+                best = Some((Code::Hybrid { k, l, c: c as u32 }, bits));
+            }
+        }
+    }
+    best
+}
+
+/// Choice of coding for part B of a segment (Rice, linear or hybrid Rice).
+fn choose_code_b(u: &[u32], posbits: u32, nabits: u32) -> (Code, u64) {
+    let plain = choose_code(u);
+    match hybrid_code(u, posbits, nabits) {
+        Some(h) if h.1 < plain.1 => h,
+        _ => plain,
+    }
 }
 
 struct BandPlan {
@@ -411,7 +478,7 @@ impl XllEncoder {
         }
         if max_order > 0 && x.iter().any(|v| *v != 0) {
             let ks = reflection_coefficients(&x, max_order);
-            for (cov, order) in [2usize, 3, 4, 5, 6, 8, 10, 12, 15].iter().flat_map(|o| [(false, *o), (true, *o)]) {
+            for (cov, order) in (1usize..=15).flat_map(|o| [(false, o), (true, o)]) {
                 if order > max_order {
                     continue;
                 }
@@ -448,15 +515,21 @@ impl XllEncoder {
         BandPlan { plans, orig_order, coeffs, decor }
     }
 
-    fn plan_set(&self, pcm: &[Vec<i32>]) -> SetPlan {
+    fn plan_set(&self, pcm: &[Vec<i32>], core0: Option<&[Vec<i32>]>) -> SetPlan {
         if self.nbands() == 1 {
             return SetPlan { bands: vec![self.plan_band(pcm)], history: Vec::new() };
         }
         let mut lo = Vec::new();
         let mut hi = Vec::new();
         let mut history = Vec::new();
-        for ch in pcm {
-            let (b0, b1, h) = crate::xll_bands::split(ch);
+        for (k, ch) in pcm.iter().enumerate() {
+            let (mut b0, b1, h) = crate::xll_bands::split(ch);
+            // a core under the lossless data covers band 0 only: what band 0 carries is the difference
+            if let Some(core) = core0 {
+                for (v, c) in b0.iter_mut().zip(&core[k]) {
+                    *v -= *c;
+                }
+            }
             lo.push(b0);
             hi.push(b1);
             history.push(h);
@@ -468,6 +541,13 @@ impl XllEncoder {
     /// Encode one frame of samples (`bit_res`-bit signed integers, one vector per channel: the channels of
     /// the first set in speaker order, then those of the next set, ...).
     pub fn encode_frame(&mut self, pcm: &[Vec<i32>]) -> Vec<u8> {
+        self.encode_frame_core(pcm, None)
+    }
+
+    /// Like `encode_frame`, for a stream with a core under the lossless data at 176.4 / 192 kHz: `core0[ch]` is the
+    /// core's decoded output at the band rate (half the sample rate) for each channel of the first set, which the
+    /// decoder adds to band 0; the band-0 samples are coded as the difference.
+    pub fn encode_frame_core(&mut self, pcm: &[Vec<i32>], core0: Option<&[Vec<i32>]>) -> Vec<u8> {
         let cfg = self.cfg.clone();
         let len = cfg.frame_samples;
         assert!(self.nbands() == 1 || cfg.sets.len() == 1, "frequency bands: a single channel set only");
@@ -475,8 +555,8 @@ impl XllEncoder {
         assert!(pcm.iter().all(|c| c.len() == len));
         let mut set_plans = Vec::new();
         let mut at = 0;
-        for set in &cfg.sets {
-            set_plans.push(self.plan_set(&pcm[at..at + set.channels]));
+        for (si, set) in cfg.sets.iter().enumerate() {
+            set_plans.push(self.plan_set(&pcm[at..at + set.channels], if si == 0 { core0 } else { None }));
             at += set.channels;
         }
         // band data: one block per segment; try several segment counts and keep the smallest frame
@@ -500,6 +580,7 @@ impl XllEncoder {
         let plans = &set.bands[band].plans;
         let seg_len = self.band_len() / nseg;
         let nabits = self.nabits();
+        let posbits = seg_len.trailing_zeros();
         let mut segs: Vec<Vec<u8>> = Vec::new();
         for seg in 0..nseg {
             let mut w = BitWriter::new();
@@ -510,7 +591,7 @@ impl XllEncoder {
                 let a_len = if seg == 0 { p.adapt_order } else { 0 };
                 let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
                 let ub: Vec<u32> = slice[a_len..].iter().map(|v| zigzag(*v)).collect();
-                choice_b.push(choose_code(&ub).0);
+                choice_b.push(choose_code_b(&ub, posbits, nabits).0);
                 part_a_len.push(a_len);
             }
             let reuse = false; // a reused parameter set would keep segment 0's part A length in some decoders
@@ -521,14 +602,20 @@ impl XllEncoder {
                 w.put(0, 1); // distinct parameters per channel
                 for c in &choice_b {
                     // flags are written from choice B (rice vs linear applies to both parts)
-                    let rice = matches!(c, Code::Rice(_));
+                    let rice = matches!(c, Code::Rice(_) | Code::Hybrid { .. });
                     w.put(u32::from(rice), 1);
                     if rice {
-                        w.put(0, 1); // no hybrid Rice coding
+                        match c {
+                            Code::Hybrid { l, .. } => {
+                                w.put(1, 1); // hybrid Rice coding
+                                w.put(l - 1, nabits);
+                            }
+                            _ => w.put(0, 1),
+                        }
                     }
                 }
                 for (i, _) in plans.iter().enumerate() {
-                    let rice = matches!(choice_b[i], Code::Rice(_));
+                    let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
                     if seg == 0 {
                         // part A shares the Rice/linear flag with part B
                         let code = recode(&plans[i].residual[..part_a_len[i]], rice);
@@ -539,12 +626,33 @@ impl XllEncoder {
             }
             // residual data
             for (i, p) in plans.iter().enumerate() {
-                let rice = matches!(choice_b[i], Code::Rice(_));
+                let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
                 let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
                 let a_len = part_a_len[i];
-                let code_a = if seg == 0 { recode(&slice[..a_len], rice) } else { choice_b[i] };
-                put_values(&mut w, &slice[..a_len], code_a);
-                put_values(&mut w, &slice[a_len..], choice_b[i]);
+                let code_a = if seg == 0 { recode(&slice[..a_len], rice) } else { Code::Rice(0) };
+                if seg == 0 {
+                    put_values(&mut w, &slice[..a_len], code_a);
+                }
+                if let Code::Hybrid { k, l, c } = choice_b[i] {
+                    // isolated samples: how many, where, then every sample in order (isolated ones as l-bit values)
+                    let b: Vec<u32> = slice[a_len..].iter().map(|v| zigzag(*v)).collect();
+                    let iso = isolated_positions(&b, c as usize);
+                    w.put(iso.len() as u32, posbits);
+                    for &pos in &iso {
+                        w.put(pos as u32, posbits);
+                    }
+                    let mut next = 0usize;
+                    for (j, v) in b.iter().enumerate() {
+                        if next < iso.len() && iso[next] == j {
+                            w.put(*v, l);
+                            next += 1;
+                        } else {
+                            put_rice(&mut w, *v, k);
+                        }
+                    }
+                } else {
+                    put_values(&mut w, &slice[a_len..], choice_b[i]);
+                }
             }
             if band == 1 && seg == 0 {
                 // decimator history: the band-0 samples in front of this frame, as signed values of a common width
@@ -749,6 +857,7 @@ fn signed_to_raw(v: i32, bits: u32) -> u32 {
 fn stored_param(code: Code, _nabits: u32, rice: bool) -> u32 {
     match (code, rice) {
         (Code::Rice(k), true) => k,
+        (Code::Hybrid { k, .. }, _) => k,
         (Code::Linear(w), false) => w.saturating_sub(1).max(if w == 0 { 0 } else { 1 }),
         (Code::Linear(w), true) => w, // not reachable: coerced by `recode`
         (Code::Rice(k), false) => k,
@@ -773,22 +882,26 @@ fn put_values(w: &mut BitWriter, vals: &[i32], code: Code) {
         }
         Code::Rice(k) => {
             for v in vals {
-                let u = zigzag(*v);
-                let mut q = u >> k;
-                while q >= 32 {
-                    w.put(0, 32);
-                    q -= 32;
-                }
-                // q zeros then a one
-                if q > 0 {
-                    w.put(0, q);
-                }
-                w.put(1, 1);
-                if k > 0 {
-                    w.put(u & ((1u32 << k) - 1), k);
-                }
+                put_rice(w, zigzag(*v), k);
             }
         }
+        Code::Hybrid { .. } => unreachable!("hybrid segments are written by the segment writer"),
+    }
+}
+
+/// One Rice-coded zigzag value: the quotient in unary (zeros, then a one) and `k` raw bits.
+fn put_rice(w: &mut BitWriter, u: u32, k: u32) {
+    let mut q = u >> k;
+    while q >= 32 {
+        w.put(0, 32);
+        q -= 32;
+    }
+    if q > 0 {
+        w.put(0, q);
+    }
+    w.put(1, 1);
+    if k > 0 {
+        w.put(u & ((1u32 << k) - 1), k);
     }
 }
 
@@ -816,7 +929,7 @@ fn segment_cost(u: &[u32], order: usize, n: usize) -> u64 {
     for s in 0..NSEG {
         let sl = &u[s * seg..(s + 1) * seg];
         let a = if s == 0 { order } else { 0 };
-        bits += choose_code(&sl[..a]).1 + choose_code(&sl[a..]).1;
+        bits += choose_code(&sl[..a]).1 + choose_code_b(&sl[a..], seg.trailing_zeros(), 5).1;
         bits += 16; // parameters
     }
     bits

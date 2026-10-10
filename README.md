@@ -38,7 +38,7 @@ Early foundation. What works today:
 | NHK 22.2 input (24 mono files, auto-import) mixed down to any supported layout by panning | working |
 | StreamTools replace / insert (CLI and GUI) | working |
 | DTS Music Disc (DTS-in-PCM WAV at the CD rate), folder batch encode | working |
-| 7.1 HRA at 96 kHz, a DTS core under MA at 192 kHz (both need a reference stream from the original encoder) | planned - see `docs/ROADMAP.md` |
+| 7.1 HRA at 96 kHz (needs a reference stream from the original encoder) | planned - see `docs/ROADMAP.md` |
 | Dolby Atmos | deferred |
 
 ## Build

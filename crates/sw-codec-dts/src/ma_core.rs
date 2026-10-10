@@ -25,8 +25,10 @@ pub struct MaCoreConfig {
     pub x96: bool,
 }
 
-/// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
-const HALF: usize = 191;
+/// Half-length of the decimator (linear phase, Kaiser window, `2 * half + 1` taps) for a rate ratio of 2 or 4.
+fn half_len(ratio: usize) -> usize {
+    if ratio >= 4 { 383 } else { 191 }
+}
 
 fn bessel_i0(x: f64) -> f64 {
     let mut sum = 1.0;
@@ -42,20 +44,25 @@ fn bessel_i0(x: f64) -> f64 {
     sum
 }
 
-fn decimator_taps(frac: f64) -> Vec<f64> {
-    let fc = 22_300.0 / 96_000.0; // cycles per sample
+fn decimator_taps(frac: f64, ratio: usize) -> Vec<f64> {
+    let half = half_len(ratio);
+    let fc = 22_300.0 / (48_000.0 * ratio as f64); // cycles per sample
     let beta = 9.0;
-    let mut h = Vec::with_capacity(2 * HALF + 1);
-    for i in 0..=2 * HALF {
-        let m = i as f64 - HALF as f64 - frac;
+    let mut h = Vec::with_capacity(2 * half + 1);
+    for i in 0..=2 * half {
+        let m = i as f64 - half as f64 - frac;
         let sinc = if m == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m) };
-        let r = m / HALF as f64;
+        let r = m / half as f64;
         let w = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
         h.push(sinc * w);
     }
     let sum: f64 = h.iter().sum();
     h.iter().map(|v| v / sum).collect()
 }
+
+/// One frame ready for the lossless stage: the core frame, the samples to code (a residual of the core, or the
+/// plain frame when `core0` is given) and, at 176.4 / 192 kHz, the core's output for band 0.
+type Job = (Vec<u8>, Vec<Vec<i32>>, Option<Vec<Vec<i32>>>);
 
 /// Core (CBR, lossy) plus lossless residual, emitted frame by frame.
 pub struct MaCoreEncoder {
@@ -71,8 +78,15 @@ pub struct MaCoreEncoder {
     n: usize,
     /// Source samples the core input runs ahead of the output.
     lookahead: usize,
-    /// 2 when the source is 96 kHz and the core runs at 48 kHz.
+    /// 2 when the source is 96 kHz and the core runs at 48 kHz, 4 at 192 kHz (the core then sits under band 0).
     ratio: usize,
+    half: usize,
+    /// 192 kHz: feed the core from band 0 of the lifting split instead of from the raw source.
+    from_band0: bool,
+    /// Taps (ratio 2) that decimate band 0 (96 kHz) to the core's 48 kHz.
+    taps_b0: Vec<f64>,
+    /// Gain of the core's input relative to the source (band 0 of a 192 kHz stream is not at unity).
+    cgain: f64,
     taps: Vec<f64>,
     /// Core-rate samples of advance and decimation phase.
     l48: usize,
@@ -115,6 +129,7 @@ impl MaCoreEncoder {
         let ratio = match cfg.sample_rate {
             44_100 | 48_000 => 1,
             88_200 | 96_000 => 2,
+            176_400 | 192_000 => 4,
             r => return Err(crate::Error::Unsupported(format!("{r} Hz is not supported by DTS-HD MA yet"))),
         };
         let mut core = CoreEncoder::new(CoreConfig {
@@ -140,7 +155,7 @@ impl MaCoreEncoder {
         } else {
             None
         };
-        core.enable_exact_decode(ratio == 2);
+        core.enable_exact_decode(ratio >= 2);
         let n = core.frame_samples() * ratio;
         let nch = xmap.order.len();
         let xll_to_core: Vec<Option<usize>> = (0..nch)
@@ -159,11 +174,12 @@ impl MaCoreEncoder {
             (core.delay(), 0)
         } else {
             let l48 = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(if ratio == 4 && std::env::var_os("SW_NOB0").is_some() { 14.5 } else if ratio == 4 { 0.0 } else { 0.5 });
             frac = phase - phase.floor();
             (l48, phase.floor() as usize)
         };
-        let mut lookahead = if ratio == 1 { l48 } else { 2 * (l48 + 1) + phase + HALF + 2 };
+        let half = half_len(ratio);
+        let mut lookahead = if ratio == 1 { l48 } else { ratio * (l48 + 1) + phase + half + 2 };
         if let Some(x) = &x96 {
             lookahead = lookahead.max(x.delay + 64 * 16 + 64);
         }
@@ -176,7 +192,11 @@ impl MaCoreEncoder {
             n,
             lookahead,
             ratio,
-            taps: if ratio == 2 { decimator_taps(frac) } else { Vec::new() },
+            half,
+            from_band0: ratio == 4 && std::env::var_os("SW_NOB0").is_none(),
+            taps_b0: if ratio == 4 { decimator_taps(frac, 2) } else { Vec::new() },
+            cgain: std::env::var("SW_CGAIN").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
+            taps: if ratio >= 2 { decimator_taps(frac, ratio) } else { Vec::new() },
             l48,
             phase,
             emitted: 0,
@@ -231,7 +251,7 @@ impl MaCoreEncoder {
 
     /// Hand the lossless stage of a batch of frames to the worker pool and return the frames of the previous
     /// batch (which ran meanwhile); `finish` collects the last batch.
-    fn finish_jobs(&mut self, jobs: Vec<(Vec<u8>, Vec<Vec<i32>>)>) -> Vec<Vec<u8>> {
+    fn finish_jobs(&mut self, jobs: Vec<Job>) -> Vec<Vec<u8>> {
         if jobs.is_empty() {
             return Vec::new();
         }
@@ -309,24 +329,51 @@ impl MaCoreEncoder {
             let start = frame * self.n + self.l48 - self.dropped;
             return src[start..start + n48].iter().map(|v| *v as f64 * gain).collect();
         }
+        if self.from_band0 {
+            // split the stretch of source this frame's core samples draw on into the two bands (as the lossless
+            // stage will), and decimate band 0 by two with the 96 kHz filter
+            let half2 = half_len(2);
+            let first_m = frame * n48 + self.l48;
+            let lo_b0 = (2 * first_m) as isize - half2 as isize - 8;
+            let hi_b0 = (2 * (first_m + n48)) as isize + half2 as isize + 8 + self.phase as isize / 2;
+            let src_lo = (2 * lo_b0 - self.dropped as isize).max(0) as usize & !1;
+            let src_hi = ((2 * hi_b0 - self.dropped as isize) as usize).min(src.len()) & !1;
+            let mut out = vec![0f64; n48];
+            if src_hi > src_lo + 64 {
+                let (b0, _, _) = crate::xll_bands::split(&src[src_lo..src_hi]);
+                let b0_origin = ((src_lo + self.dropped) / 2) as isize; // band-0 index of b0[0]
+                for (i, o) in out.iter_mut().enumerate() {
+                    let centre = (2 * (first_m + i) + self.phase) as isize - b0_origin;
+                    let mut acc = 0.0;
+                    for (j, h) in self.taps_b0.iter().enumerate() {
+                        let idx = centre + j as isize - half2 as isize;
+                        if idx >= 0 && (idx as usize) < b0.len() {
+                            acc += h * b0[idx as usize] as f64;
+                        }
+                    }
+                    *o = acc * gain * self.cgain;
+                }
+            }
+            return out;
+        }
         let mut out = Vec::with_capacity(n48);
         for i in 0..n48 {
             let m = frame * n48 + i + self.l48;
-            let centre = (2 * m + self.phase) as isize - self.dropped as isize;
+            let centre = (self.ratio * m + self.phase) as isize - self.dropped as isize;
             let mut acc = 0.0;
             for (j, h) in self.taps.iter().enumerate() {
-                let idx = centre + j as isize - HALF as isize;
+                let idx = centre + j as isize - self.half as isize;
                 if idx >= 0 && (idx as usize) < src.len() {
                     acc += h * src[idx as usize] as f64;
                 }
             }
-            out.push(acc * gain);
+            out.push(acc * gain * self.cgain);
         }
         out
     }
 
     /// Core encoding of the next frame and its residual (sequential: the decoder state carries over).
-    fn core_stage(&mut self) -> (Vec<u8>, Vec<Vec<i32>>) {
+    fn core_stage(&mut self) -> Job {
         let n = self.n;
         let start = self.emitted * n - self.dropped;
         let nch = self.buf.len();
@@ -352,6 +399,36 @@ impl MaCoreEncoder {
             self.add_x96(&mut core_bytes);
         }
         let round = if self.shift > 0 { 1i32 << (self.shift - 1) } else { 0 };
+        if self.ratio == 4 {
+            // 176.4 / 192 kHz: the core (48 kHz, synthesised to 96 kHz by the decoder) sits under band 0; the
+            // lossless stage splits the plain frame into its two bands and codes band 0 minus the core
+            let half = n / 2;
+            let core0: Vec<Vec<i32>> = self
+                .xll_to_core
+                .iter()
+                .enumerate()
+                .map(|(x, slot)| match *slot {
+                    None => vec![0; half],
+                    Some(slot) => {
+                        let c = &self.core.last_core_pcm[slot];
+                        debug_assert_eq!(c.len(), half);
+                        (0..half).map(|i| (((c[i] as i64 + round as i64) >> self.shift) as i32).clamp(-(1 << 23), (1 << 23) - 1)).collect::<Vec<i32>>()
+                    }
+                })
+                .collect();
+            let frame: Vec<Vec<i32>> = (0..nch).map(|x| self.buf[x][start..start + n].to_vec()).collect();
+            core_bytes.resize(core_bytes.len() + self.core_pad, 0);
+            self.emitted += 1;
+            let keep_from = (self.emitted * n).saturating_sub(self.half + 4);
+            if keep_from > self.dropped + (1 << 16) {
+                let cut = keep_from - self.dropped;
+                for b in self.buf.iter_mut() {
+                    b.drain(..cut);
+                }
+                self.dropped = keep_from;
+            }
+            return (core_bytes, frame, Some(core0));
+        }
         let mut resid: Vec<Vec<i32>> = Vec::with_capacity(nch);
         for (x, slot) in self.xll_to_core.iter().enumerate() {
             let Some(slot) = *slot else {
@@ -390,7 +467,7 @@ impl MaCoreEncoder {
         core_bytes.resize(core_bytes.len() + self.core_pad, 0);
         self.emitted += 1;
         // drop samples no later frame needs (keep the decimator's look-back)
-        let keep_from = (self.emitted * n).saturating_sub(HALF + 4);
+        let keep_from = (self.emitted * n).saturating_sub(self.half + 4);
         if keep_from > self.dropped + (1 << 16) {
             let cut = keep_from - self.dropped;
             for b in self.buf.iter_mut() {
@@ -398,13 +475,13 @@ impl MaCoreEncoder {
             }
             self.dropped = keep_from;
         }
-        (core_bytes, resid)
+        (core_bytes, resid, None)
     }
 }
 
 
 /// Lossless coding of a batch of independent frames on the rayon pool; returns the finished stream frames.
-fn xll_stage(jobs: Vec<(Vec<u8>, Vec<Vec<i32>>)>, cfg: XllConfig, exss: ExssParams) -> Vec<Vec<u8>> {
+fn xll_stage(jobs: Vec<Job>, cfg: XllConfig, exss: ExssParams) -> Vec<Vec<u8>> {
     use rayon::prelude::*;
     let threads = rayon::current_num_threads().max(1);
     let per = jobs.len().div_ceil(threads).max(1);
@@ -413,8 +490,8 @@ fn xll_stage(jobs: Vec<(Vec<u8>, Vec<Vec<i32>>)>, cfg: XllConfig, exss: ExssPara
             let mut xll = XllEncoder::new(cfg.clone());
             chunk
                 .iter()
-                .map(|(core_bytes, resid)| {
-                    let data = xll.encode_frame(resid);
+                .map(|(core_bytes, resid, core0)| {
+                    let data = xll.encode_frame_core(resid, core0.as_deref());
                     let mut frame = core_bytes.clone();
                     frame.extend_from_slice(&exss_frame(&exss, &data));
                     frame
