@@ -325,6 +325,10 @@ fn core_comparison(path: &Path, ffmpeg: &Path, p: &Probe, channels: usize, c: &m
     if !p.dts || !p.has_core || !p.lossless || channels == 0 {
         return;
     }
+    if p.core_rate != 0 && p.core_rate != p.sample_rate {
+        c.check("Core against lossless extension", Status::Info, format!("the core runs at {} Hz and the lossless audio at {} Hz, so the two decodes cannot be compared sample for sample", p.core_rate, p.sample_rate));
+        return;
+    }
     let (Some(full), Some(core)) = (read_pcm(path, ffmpeg, false, 30), read_pcm(path, ffmpeg, true, 30)) else {
         return;
     };

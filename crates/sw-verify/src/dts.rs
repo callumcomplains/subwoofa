@@ -1056,6 +1056,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     }
     p.sample_rate = rate;
     p.has_core = s.saw_core;
+    p.core_rate = core_rate;
     p.lossless = s.saw_xll;
     let ratio = if s.saw_core && core_rate > 0 { (rate / core_rate).max(1) } else { 1 };
     let unit_samples: Vec<u32> = if !s.saw_core && aupr.map_or(false, |a| a.2 > 0) {

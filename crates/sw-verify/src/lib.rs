@@ -196,6 +196,8 @@ pub(crate) struct Probe {
     pub lossless: bool,
     /// The stream has a DTS core under its extension (so a core-only decode is possible).
     pub has_core: bool,
+    /// Sample rate of the core (differs from `sample_rate` when the lossless data runs at twice the core's rate).
+    pub core_rate: u32,
     pub dts: bool,
 }
 
