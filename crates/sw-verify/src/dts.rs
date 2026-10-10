@@ -551,13 +551,23 @@ fn parse_xll(d: &[u8]) -> Result<XllInfo, String> {
         }
         let size = (((d[pos] as usize) << 2) | (d[pos + 1] as usize >> 6)) + 1;
         x.chset_headers += 1;
-        if pos + size > d.len() || crc::dts(&d[pos..pos + size]) != 0 {
+        if pos + size > d.len() {
+            // the rest of the frame (smoothing buffer) is in the next substream: nothing more to check here
+            x.chset_bytes.push(size);
+            break;
+        }
+        if crc::dts(&d[pos..pos + size]) != 0 {
             x.chset_header_bad += 1;
         }
         x.chset_bytes.push(size);
         pos += size;
     }
     Ok(x)
+}
+
+/// The sync word is there but the common header (its size is in the first bytes) reaches beyond the data given.
+fn parse_xll_runs_past(d: &[u8]) -> bool {
+    d.len() >= 6 && (((d[4] as usize) & 0x0F) << 4 | (d[5] as usize) >> 4) + 1 > d.len()
 }
 
 fn xll_rows(x: &XllInfo) -> Vec<(String, String)> {
@@ -802,6 +812,20 @@ fn walk(w: &mut Window, from: u64, to: u64, c: &mut Collector, record: bool) -> 
             }
             if e.ext_mask & 0x200 != 0 {
                 s.saw_xll = true;
+                // with the peak-rate smoothing buffer a lossless frame is spread over several substreams: only a
+                // component that says it holds the start of a frame (sync present) has a header to check, and the
+                // frame may run past the end of the component
+                if !e.xll_sync_present {
+                    if s.exss_first.is_none() {
+                        s.exss_first = Some(e.clone());
+                    }
+                    if !prev_was_core {
+                        unit_samples = exss_frame_samples.unwrap_or(0);
+                    }
+                    pos += e.size as u64;
+                    prev_was_core = false;
+                    continue;
+                }
                 let xoff = e.xll_offset + e.xll_sync_offset;
                 s.xll_checked += 1;
                 match body.get(xoff..).map(parse_xll) {
@@ -814,7 +838,7 @@ fn walk(w: &mut Window, from: u64, to: u64, c: &mut Collector, record: bool) -> 
                             s.xll_chset_bad += 1;
                             c.finding(Status::Fail, Some(pos + xoff as u64), format!("{} XLL channel set header checksum(s) mismatch", x.chset_header_bad));
                         }
-                        if x.frame_size > e.xll_size {
+                        if e.xll_pbr == 0 && x.frame_size > e.xll_size {
                             s.xll_bad += 1;
                             c.finding(Status::Fail, Some(pos + xoff as u64), format!("XLL frame ({} bytes) is larger than its component ({} bytes)", x.frame_size, e.xll_size));
                         }
@@ -833,9 +857,14 @@ fn walk(w: &mut Window, from: u64, to: u64, c: &mut Collector, record: bool) -> 
                             s.xll_first = Some(x);
                         }
                     }
+                    Some(Err(_)) if body.len().saturating_sub(xoff) >= 4 && be32(&body[xoff..]) == SYNC_XLL && (body.len() - xoff < 16 || parse_xll_runs_past(&body[xoff..])) => {
+                        // the frame starts here with its sync word, but its header continues in the next substream
+                    }
                     Some(Err(msg)) => {
                         s.xll_bad += 1;
-                        c.finding(Status::Fail, Some(pos + xoff as u64), format!("XLL frame: {msg}"));
+                        let avail = body.len().saturating_sub(xoff);
+                        let first = body.get(xoff..xoff + 4.min(avail)).map(|b| b.iter().map(|x| format!("{x:02X}")).collect::<String>()).unwrap_or_default();
+                        c.finding(Status::Fail, Some(pos + xoff as u64), format!("XLL frame: {msg} ({avail} bytes left in the substream, first word {first}, sync offset {}, component {} bytes at {})", e.xll_sync_offset, e.xll_size, e.xll_offset));
                     }
                     None => {
                         s.xll_bad += 1;
