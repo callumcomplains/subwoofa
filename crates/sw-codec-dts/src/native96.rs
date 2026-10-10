@@ -63,7 +63,24 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         frames += 1;
         bytes += f.len() as u64;
     }
-    out.finish(None)?;
+    // the silent frame StreamTools' Add silence inserts: a fresh encoder fed zeros until the filter bank has settled
+    let blackout = if container {
+        Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes }).ok().and_then(|mut e| {
+            if let Some(kbps) = req.hra_kbps {
+                let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, secondary: false };
+                e.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
+            }
+            let zeros = vec![vec![0.0f64; n]; slots.len()];
+            let mut out = e.push(&zeros);
+            out.extend(e.push(&zeros));
+            out.extend(e.push(&zeros));
+            out.extend(e.push(&zeros));
+            out.pop()
+        })
+    } else {
+        None
+    };
+    out.finish(blackout.as_deref())?;
     on_progress(1.0);
     Ok(Stats { frames, bytes })
 }

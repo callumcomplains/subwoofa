@@ -232,3 +232,8 @@ The DTS encoder's Express streams carry steady notes as tonal components (a freq
 - **Low bandwidth:** the coupling start now follows the bandwidth of the stream, so it also engages at low rates (it used to switch itself off when the bandwidth was small). On the Tokyo 22.2 stems mixed to 5.1, native AC-3 and E-AC-3 at 160 and 224 kbps gain 1 to 4 dB SNR at the same size.
 - E-AC-3 specifics: the frame header says coupling is on in all blocks, the first block carries the strategy, the first coordinates and the leak values without their usual flag bits, and the coupling channel's exponent strategy comes before the channels'. Decoded with FFmpeg with CRC checking: all E-AC-3 round-trip tests pass.
 - **Not done: E-AC-3 enhanced coupling.** FFmpeg doesn't decode it, so it can't be verified here. Parked until a reference decoder is available.
+
+## Add silence on HRA files
+- HRA `.dtshd` files (48 kHz 5.1, 7.1/7.0 with XXCH, and 96 kHz) now carry the **BLACKOUT** chunk: one silent frame, made by running a fresh encoder on zeros until its filter bank has settled. That is the frame Add silence repeats, so the tool (ours, and by the same chunk the DTS StreamTools) can now pad HRA files like MA ones.
+- Checked on 5.1 at 48 kHz, 7.1 at 48 kHz and 5.1 at 96 kHz: adding one second at the head and tail gives files that decode in FFmpeg with exact silence at both ends and pass DTSHDVerify (all frames verified).
+- **HRA 7.1 at 96 kHz is not done and I'm not sure the original tool does it.** It needs XXCH alongside X96, and without a reference stream there's nothing to compare the layout against. It stays on the list until a reference exists.

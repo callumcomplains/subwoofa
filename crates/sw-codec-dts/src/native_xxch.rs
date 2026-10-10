@@ -63,7 +63,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     };
     let mut core = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
     core.keep_residual = true;
-    let xbr = XbrEncoder::new(blocks);
+    let mut xbr = XbrEncoder::new(blocks);
     let mut ext = Encoder::new(mk(2, 2, false, 1_536_000))?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -113,6 +113,34 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let mut core_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 5 + usize::from(has_lfe)];
     let mut ext_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 2];
     let to24 = |v: f32| v as f64 * 8_388_608.0;
+    // one frame: the core, then XBR for the core channels and XXCH for the extra pair in the extension substream
+    let assemble = |core: &mut Encoder, ext: &mut Encoder, xbr: &mut XbrEncoder, core_pcm: &[Vec<f64>], ext_pcm: &[Vec<f64>], f: u64| -> Vec<u8> {
+        let mut data = core.encode_frame(core_pcm);
+        let pad = (4 - data.len() % 4) % 4;
+        data.resize(data.len() + pad, 0);
+        let total = (upto(f + 1) - upto(f)) as usize;
+        // the rate beyond what the extra pair needs at the core's per-channel rate goes to XBR for the core
+        // channels and XXCH in the ratio of their channel counts (a commercial 5376 kbps stream splits it that way)
+        let rest = total.saturating_sub(data.len());
+        let per_channel = (data.len() / (5 + usize::from(has_lfe))).max(64);
+        let want_xxch = 2 * per_channel;
+        let (xbr_bytes, xxch_bytes) = if rest > overhead + want_xxch + 600 {
+            let extra = rest - overhead_both - want_xxch;
+            let xxch = want_xxch + extra * 2 / 7;
+            (rest - overhead_both - xxch, xxch)
+        } else {
+            (0, rest.saturating_sub(overhead).clamp(64, 16_000))
+        };
+        let x = ext.encode_xxch(ext_pcm, xxch_bytes.min(16_000), &params);
+        if xbr_bytes > 0 {
+            let mut b = xbr.encode(&core.last_residual, xbr_bytes);
+            b.resize(xbr_bytes, 0);
+            data.extend_from_slice(&exss_frame_xbr_xxch(&exss, &b, &x));
+        } else {
+            data.extend_from_slice(&exss_frame_xxch(&exss, &x));
+        }
+        data
+    };
     for f in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
@@ -143,36 +171,27 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
             }
         }
         remaining -= got as u64;
-        let mut data = core.encode_frame(&core_pcm);
-        let pad = (4 - data.len() % 4) % 4;
-        data.resize(data.len() + pad, 0);
-        let total = (upto(f + 1) - upto(f)) as usize;
-        // the rate beyond what the extra pair needs at the core's per-channel rate goes to XBR for the core
-        // channels and XXCH in the ratio of their channel counts (a commercial 5376 kbps stream splits it that way)
-        let rest = total.saturating_sub(data.len());
-        let per_channel = (data.len() / (5 + usize::from(has_lfe))).max(64);
-        let want_xxch = 2 * per_channel;
-        let (xbr_bytes, xxch_bytes) = if rest > overhead + want_xxch + 600 {
-            let extra = rest - overhead_both - want_xxch;
-            let xxch = want_xxch + extra * 2 / 7;
-            (rest - overhead_both - xxch, xxch)
-        } else {
-            (0, rest.saturating_sub(overhead).clamp(64, 16_000))
-        };
-        let x = ext.encode_xxch(&ext_pcm, xxch_bytes.min(16_000), &params);
-        if xbr_bytes > 0 {
-            let mut b = xbr.encode(&core.last_residual, xbr_bytes);
-            b.resize(xbr_bytes, 0);
-            data.extend_from_slice(&exss_frame_xbr_xxch(&exss, &b, &x));
-        } else {
-            data.extend_from_slice(&exss_frame_xxch(&exss, &x));
-        }
+        let data = assemble(&mut core, &mut ext, &mut xbr, &core_pcm, &ext_pcm, f);
         out.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
         frames += 1;
         bytes += data.len() as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
-    out.finish(None)?;
+    // the silent frame StreamTools' Add silence inserts: fresh encoders fed zeros until the filter bank has settled
+    let blackout = {
+        let mut c = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
+        c.keep_residual = true;
+        let mut e = Encoder::new(mk(2, 2, false, 1_536_000))?;
+        let mut x = XbrEncoder::new(blocks);
+        let zc = vec![vec![0.0; n]; 5 + usize::from(has_lfe)];
+        let ze = vec![vec![0.0; n]; 2];
+        let mut last = Vec::new();
+        for f in 0..4 {
+            last = assemble(&mut c, &mut e, &mut x, &zc, &ze, f);
+        }
+        last
+    };
+    out.finish(container.then_some(blackout.as_slice()))?;
     on_progress(1.0);
     Ok(Stats { frames, bytes })
 }
