@@ -1,0 +1,12 @@
+[package]
+name = "sw-backend-dee"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+sw-verify = { path = "../sw-verify" }
