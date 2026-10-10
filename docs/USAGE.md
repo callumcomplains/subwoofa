@@ -139,3 +139,12 @@ subwoofa atmos convert master.atmos --format adm -o master.wav
 
 The result is checked straight away with Verify, which recognises Atmos in both formats (Digital Plus: the Joint Object
 Coding flag and its complexity index; TrueHD: the fourth substream with the spatial-presentation flag).
+
+
+### DTS:X
+
+Verify recognises DTS:X (and IMAX Enhanced) in DTS-HD Master Audio files: the object data trails the lossless audio of
+each frame behind a marker word, and the file is called DTS:X when the marker is in most frames. Subwoofa cannot
+*encode* DTS:X: the object coding is not public and needs DTS's own licensed tool, which Subwoofa could drive as an
+optional backend once one is available. The marker check has been tested on synthetic frames only so far (no real DTS:X
+file was at hand).

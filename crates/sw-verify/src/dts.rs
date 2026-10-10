@@ -12,6 +12,9 @@ const SYNC_XBR: u32 = 0x655E_315E;
 const SYNC_LBR: u32 = 0x0A80_1921;
 const SYNC_XLL: u32 = 0x41A2_9547;
 const SYNC_EXSS_CORE: u32 = 0x02B0_9261;
+/// DTS:X object data trails the lossless audio of an XLL frame, announced by one of these words.
+const SYNC_XLL_X: u32 = 0x0200_0850;
+const SYNC_XLL_X_IMAX: u32 = 0xF140_00D0;
 
 const SAMPLE_RATES: [u32; 16] = [0, 8000, 16000, 32000, 0, 0, 11025, 22050, 44100, 0, 0, 12000, 24000, 48000, 0, 0];
 const BIT_RATES: [u32; 32] = [32, 56, 64, 96, 112, 128, 192, 224, 256, 320, 384, 448, 512, 576, 640, 768, 896, 1024, 1152, 1280, 1344, 1408, 1411, 1472, 1536, 1920, 2048, 3072, 3840, 0, 0, 0];
@@ -574,6 +577,30 @@ fn xll_rows(x: &XllInfo) -> Vec<(String, String)> {
     ]
 }
 
+/// Which DTS:X marker, if any, sits on a 32-bit boundary of this lossless frame (counted from its first byte). The
+/// lossless audio ends first and the marker follows it, so it is looked for from the first quarter of the frame on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XMark {
+    X,
+    Imax,
+}
+
+fn find_x_marker(frame: &[u8]) -> Option<XMark> {
+    let from = (frame.len() / 4) & !3;
+    let mut i = from;
+    while i + 4 <= frame.len() {
+        let w = be32(&frame[i..]);
+        if w == SYNC_XLL_X {
+            return Some(XMark::X);
+        }
+        if w >> 1 == SYNC_XLL_X_IMAX >> 1 {
+            return Some(XMark::Imax);
+        }
+        i += 4;
+    }
+    None
+}
+
 // ------------------------------------------------------------------------------------------------
 // walking a run of frames
 
@@ -596,6 +623,8 @@ struct Walk {
     xll_first: Option<XllInfo>,
     xll_bad: u64,
     xll_checked: u64,
+    x_frames: u64,
+    imax_frames: u64,
     xll_chset_bad: u64,
     junk: u64,
     junk_events: u64,
@@ -788,6 +817,13 @@ fn walk(w: &mut Window, from: u64, to: u64, c: &mut Collector, record: bool) -> 
                         if x.frame_size > e.xll_size {
                             s.xll_bad += 1;
                             c.finding(Status::Fail, Some(pos + xoff as u64), format!("XLL frame ({} bytes) is larger than its component ({} bytes)", x.frame_size, e.xll_size));
+                        }
+                        if let Some(frame) = body.get(xoff..xoff + x.frame_size.min(body.len() - xoff)) {
+                            match find_x_marker(frame) {
+                                Some(XMark::X) => s.x_frames += 1,
+                                Some(XMark::Imax) => s.imax_frames += 1,
+                                None => {}
+                            }
                         }
                         // lossless-only frames set the access unit length
                         if exss_frame_samples.is_none() {
@@ -1027,6 +1063,19 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     let name = if s.saw_xll { "DTS-HD Master Audio" } else if s.saw_lbr { "DTS Express" } else if s.exss > 0 && s.ext_kinds.contains("XBR") || s.ext_kinds.contains("XXCH") && s.exss > 0 { "DTS-HD High Resolution Audio" } else if s.ext_kinds.contains("X96") { "DTS 96/24" } else if s.ext_kinds.contains("XCH") { "DTS-ES" } else { "DTS Digital Surround" };
     c.kv("Format", format!("{name} ({})", parts.join(" + ")));
     c.kv("Sample rate", format!("{rate} Hz"));
+    if s.saw_xll {
+        // a chance match in audio data is possible in a long file, so the marker must be there in most frames
+        let (hits, kind) = if s.imax_frames > s.x_frames { (s.imax_frames, "IMAX Enhanced") } else { (s.x_frames, "DTS:X") };
+        if hits * 2 >= s.xll_checked && hits > 0 {
+            c.kv("DTS:X", format!("yes: {kind} object data follows the lossless audio (marker in {hits} of {} lossless frames)", s.xll_checked));
+            c.check("DTS:X signalling", Status::Info, format!("{kind} marker found in {hits} of {} lossless frames; the object data is not decoded by FFmpeg, so the audio check covers the channel bed", s.xll_checked));
+        } else {
+            c.kv("DTS:X", "no");
+            if hits > 0 {
+                c.check("DTS:X signalling", Status::Info, format!("a DTS:X-like marker appeared in {hits} of {} lossless frames, too few to call it DTS:X (most likely a chance match in audio data)", s.xll_checked));
+            }
+        }
+    }
     if let Some(k) = &core {
         c.kv("Core channels", format!("{} {}", AMODE_NAME[k.amode as usize], if k.lff != 0 { "+ LFE" } else { "" }));
     }
@@ -1150,4 +1199,30 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
         }
     }
     p
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame_with(word: Option<u32>, at: usize, len: usize) -> Vec<u8> {
+        let mut f: Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+        if let Some(w) = word {
+            f[at..at + 4].copy_from_slice(&w.to_be_bytes());
+        }
+        f
+    }
+
+    #[test]
+    fn the_dtsx_marker_is_found_on_a_dword_boundary_after_the_audio() {
+        assert_eq!(find_x_marker(&frame_with(Some(SYNC_XLL_X), 4000, 4096)), Some(XMark::X));
+        assert_eq!(find_x_marker(&frame_with(Some(SYNC_XLL_X_IMAX), 3000, 4096)), Some(XMark::Imax));
+        // the low bit of the IMAX word is free, as in the decoder's own test
+        assert_eq!(find_x_marker(&frame_with(Some(SYNC_XLL_X_IMAX | 1), 3000, 4096)), Some(XMark::Imax));
+        // not on a dword boundary, or in the first quarter (the lossless headers): ignored
+        assert_eq!(find_x_marker(&frame_with(Some(SYNC_XLL_X), 4001, 4096)), None);
+        assert_eq!(find_x_marker(&frame_with(Some(SYNC_XLL_X), 400, 4096)), None);
+        assert_eq!(find_x_marker(&frame_with(None, 0, 4096)), None);
+    }
 }
