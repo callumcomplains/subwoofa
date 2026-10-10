@@ -1,5 +1,45 @@
 # Roadmap
 
+## Upcoming work, in order of importance
+
+Estimates are focused working time for the work itself (writing, testing, documenting), not calendar time. "Needs" means the item cannot be finished or verified without it.
+
+### Now (no outside input needed)
+| # | Item | Estimate |
+|---|---|---|
+| 1 | Quality of life: speed pass on HRA 96 kHz and MA 192 kHz; a one-command regression sweep over every native DTS path (encode, verify, FFmpeg decode); clearer format notes and an HRA bit split readout in the GUI | 3 h |
+| 2 | PCM outputs: WAV/BWF (extensible, 16/24/32-bit integer, 32/64-bit float), RF64 for files over 4 GB, AIFF, CAF, multichannel FLAC | 4 h |
+| 3 | Probe the Dolby Encoding Engine for AC-4 job types (decides how AC-4 is done) | 0.5 h |
+| 4 | Lossless size work: MA band 1 (reuse of previous segment parameters, common parameters); TrueHD stereo matrix with LSB bypass | 5 h |
+| 5 | Reference checklist: exactly which encodes unlock each blocked item, with the settings to use | 0.5 h |
+
+### Next (public specs, verifiable here)
+| # | Item | Estimate |
+|---|---|---|
+| 6 | DCP audio: 24-bit PCM at 48/96 kHz, up to 16 channels, MXF track files (SMPTE and Interop); checked with FFmpeg and asdcplib, not with a cinema server | 8 h |
+| 7 | SACD as files: PCM to DSD (sigma-delta modulator), `.dsf` / `.dff` output; checked with FFmpeg and by listening. Disc image authoring and DST compression are out (proprietary) | 7 h |
+| 8 | AC-4 through DEE, if item 3 finds job types (as Atmos is done) | 4 h |
+
+### Blocked on reference files or tools
+| # | Item | Needs | Estimate once unblocked |
+|---|---|---|---|
+| 9 | Bitstream tab features | the reference encodes listed in `docs/REFERENCE-ENCODES.md` | 1-2 days |
+| 10 | HRA 6.1; HRA 5.1 at 96 kHz in the commercial layout | a DTSHDMASE encode of each | 3 h each |
+| 11 | DVD-Audio disc structure (AOB packs; the MLP inside is done) | one real DVD-Audio disc or its `.AOB` files | 1-2 days |
+| 12 | Dolby Atmos Theatrical (IAB in MXF, SMPTE ST 2098-2), after item 6 | one real Atmos cinema track file | 2-3 days |
+| 13 | DTS:X encoding | DTS's licensed encoder (detection in Verify is done) | 1-2 days |
+| 14 | AAF import (deferred by request) | AAF files from your DAW | 1-2 days |
+| 15 | E-AC-3 enhanced coupling | a reference decoder | open |
+
+### Deferred (no realistic route yet)
+- **Native AC-4 encoder:** a free ETSI standard but months of work, and no open decoder to verify against. Only worthwhile if item 3 finds nothing.
+- **MPEG-H 3D Audio:** the standard is paid; the encoder is commercial.
+- **Auro-3D:** the Auro-Codec is proprietary. The discrete 9.1/10.1/11.1 layouts can be carried in MA, which is not an Auro stream.
+- **Datasat (formerly DTS Theatrical):** status and documentation unknown; to be looked into when there is a concrete output file to target.
+- **DVD-Audio, SACD and DCP disc/server testing:** needs real players and servers.
+
+---
+
 1. **Foundation** — workspace, layout/format matrix, CLI, FFmpeg backend, GUI, PCM reader, queue, downmix. *(done)*
    - Remaining: settings save/recall (`.swsettings`), folder-based batch encoding, BWF timecode fields in the GUI.
 2. **Dolby non-Atmos native** — AC-3 *(done: block switching, 2/0 rematrixing; coupling done; next: exponent-strategy optimisation)*, then E-AC-3, MLP/TrueHD lossless 2.0–7.1.
