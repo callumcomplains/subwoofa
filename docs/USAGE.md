@@ -115,3 +115,27 @@ is wrong with it. It does not need another program for the simple check.
 Limits worth knowing: the DTS core format has no checksum over its audio data, so a flipped bit inside the audio of a
 plain DTS file is only found by decoding (deep). The structure check proves the file is well-formed, not that the audio
 is what you meant to encode; for lossless streams the encoder's own auto-verify compares the decode with the source.
+
+
+## Dolby Atmos
+
+Subwoofa has no Atmos encoder of its own (the object coding is not public). Atmos goes through the **Dolby Encoding
+Engine (DEE)**, which you supply and must be licensed to use; Subwoofa never ships or copies it. It is found in
+`C:\Program Files\Dolby Encoding Engine`, in the folder named by the `SUBWOOFA_DEE` variable, or where you point the
+Atmos mode ("Locate dee.exe...").
+
+- **TrueHD Atmos** and **Dolby Digital Plus Atmos** from an Atmos master written by Dolby's tools: a DAMF set (`.atmos`
+  with its `.metadata` and `.audio` files beside it) or an ADM BWF `.wav`. DEE checks that masters were authored with
+  Dolby tools and refuses others; Subwoofa does not try to get around that.
+- **Dolby Digital Plus Atmos from a channel bed**: a multichannel WAV (up to 7.1.4) needs no master.
+- **Convert** a master between ADM BWF, DAMF and IAB.
+
+```
+subwoofa atmos info master.atmos
+subwoofa atmos encode master.atmos --format truehd --clusters 12 --presentation-8ch -o film.thd
+subwoofa atmos encode bed_714.wav  --format ddp --bitrate 768 -o film.ec3
+subwoofa atmos convert master.atmos --format adm -o master.wav
+```
+
+The result is checked straight away with Verify, which recognises Atmos in both formats (Digital Plus: the Joint Object
+Coding flag and its complexity index; TrueHD: the fourth substream with the spatial-presentation flag).

@@ -25,6 +25,7 @@ Early foundation. What works today:
 | Native DTS-HD Master Audio (CBR core + lossless extension, 1.0 to 7.1 at 44.1 to 96 kHz, embedded 5.1 downmix for 6.x/7.x, optional core or 96/24 core): bit-exact through FFmpeg, passes DTS's own verifier, `.dtshd` container; a full feature film encodes about 5% smaller than the legacy encoder | working |
 | Native MLP (DVD-Audio, mono to 5.1) | working |
 | StreamTools: info, bit-rate chart, trim, split, append, replace, re-stripe, add silence for DTS / DTS-HD / TrueHD / MLP (GUI mode and `subwoofa tools`) | working |
+| **Dolby Atmos** through the Dolby Encoding Engine you supply and are licensed to use (nothing of it is shipped): TrueHD Atmos and Dolby Digital Plus Atmos from Dolby-authored masters (DAMF `.atmos`, ADM BWF), Dolby Digital Plus Atmos from a channel bed up to 7.1.4, master conversion; progress, cancel and an automatic check of the result (GUI "Atmos" mode and `subwoofa atmos`) | working for Digital Plus (tested); TrueHD Atmos built but not yet run on a real master |
 | **Verify** (own implementation, no other program needed): AC-3, E-AC-3, DTS, DTS-HD (.dtshd container, core, XBR, XXCH, X96, XLL, LBR), TrueHD, MLP. Simple mode checks sync, sizes, checksums, headers and the container; deep mode adds a full decode, audio measurements and a dump of every header (GUI "Verify" mode and `subwoofa verify [--deep]`) | working |
 | Native WAV / BWF / RF64 / AIFF reader, stem-set channel mapping | done |
 | Encode queue: progress, cancel, concurrency, auto-verify (lossless MD5), per-job logs | done |

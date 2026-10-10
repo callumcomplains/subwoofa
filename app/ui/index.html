@@ -16,6 +16,7 @@
     <button id="modeEncode" aria-pressed="true">Encode</button>
     <button id="modeTools" aria-pressed="false">StreamTools</button>
     <button id="modeVerify" aria-pressed="false">Verify</button>
+    <button id="modeAtmos" aria-pressed="false">Atmos</button>
   </nav>
   <div class="bar-right">
     <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
@@ -220,6 +221,55 @@
     <div id="vSections"></div>
   </div>
   <pre id="vLog" class="selectable">Choose a file to verify.</pre>
+</section>
+
+<section id="atmos" class="tools atmos" aria-label="Atmos" hidden>
+  <div class="atmos-engine">
+    <span id="aEngine" class="status"><i class="lamp"></i><span>Dolby Encoding Engine: checking…</span></span>
+    <button id="aLocate" class="plain">Locate dee.exe…</button>
+  </div>
+  <p class="hint">Atmos is encoded by the Dolby Encoding Engine, a copy you are licensed to use; Subwoofa only drives it and checks what comes out. Masters must have been written by Dolby's tools (DAMF .atmos, or an ADM BWF .wav): the engine refuses anything else. A plain channel bed (.wav, up to 7.1.4) makes Dolby Digital Plus Atmos.</p>
+  <div class="tools-open">
+    <button id="aOpen">Open master…</button>
+    <input id="aPath" readonly placeholder="An Atmos master (.atmos, ADM BWF .wav) or a channel bed .wav">
+  </div>
+  <pre id="aInfo" class="selectable" hidden></pre>
+  <div class="atmos-grid">
+    <div class="f"><span>Output format</span>
+      <div class="seg" role="radiogroup" aria-label="Output format">
+        <button id="aFmtThd" aria-pressed="true">TrueHD Atmos</button>
+        <button id="aFmtDdp" aria-pressed="false">Dolby Digital Plus Atmos</button>
+      </div>
+    </div>
+    <label class="f small"><span>Dynamic range preset</span>
+      <select id="aDrc"><option value="film_light" selected>Film light</option><option value="film_standard">Film standard</option><option value="music_light">Music light</option><option value="music_standard">Music standard</option><option value="speech">Speech</option></select></label>
+    <label class="f small" id="aBrWrap" hidden><span>Data rate (kbps)</span>
+      <select id="aBr"><option>384</option><option>448</option><option>576</option><option>640</option><option selected>768</option><option>1024</option></select></label>
+    <label class="f small" id="aClWrap"><span>Spatial clusters</span>
+      <select id="aClusters"><option selected>12</option><option>14</option><option>16</option></select></label>
+    <label class="f small"><span>Dialogue level (-31..-1, 0 = measured)</span><input id="aDialnorm" type="number" min="-31" max="0" step="1" value="0"></label>
+    <label class="f small"><span>Loudness metering</span>
+      <select id="aMeter"><option value="">none</option><option>1770-4</option><option>1770-3</option><option>1770-2</option><option>1770-1</option><option>LeqA</option></select></label>
+    <label class="f small"><span>Timecode frame rate</span>
+      <select id="aFps"><option value="">not given</option><option>23.976</option><option>24</option><option>25</option><option>29.97</option><option>30</option><option>48</option><option>50</option><option>59.94</option><option>60</option></select></label>
+    <label class="f"><span>Start (HH:MM:SS:FF)</span><input id="aStart" type="text" placeholder="first frame of action" spellcheck="false"></label>
+    <label class="f"><span>End (HH:MM:SS:FF)</span><input id="aEnd" type="text" placeholder="end of file" spellcheck="false"></label>
+  </div>
+  <div id="aThdOpts" class="atmos-checks">
+    <label class="chk"><input type="checkbox" id="aP8"><span>Also write the 8-channel presentation</span></label>
+    <label class="chk"><input type="checkbox" id="aP6"><span>Also write the 6-channel presentation</span></label>
+    <label class="chk"><input type="checkbox" id="aP2"><span>Also write the stereo presentation</span></label>
+    <label class="chk"><input type="checkbox" id="aLegacy" checked><span>Compatible with older Blu-ray authoring tools</span></label>
+    <label class="chk"><input type="checkbox" id="aOpt"><span>Optimize data rate for high bit depth sources</span></label>
+  </div>
+  <div class="op-row">
+    <button id="aRun" class="go small">Encode…</button>
+    <button id="aCancel" class="plain" hidden>Cancel</button>
+    <button id="aToVerify" class="plain" hidden>Open result in Verify</button>
+  </div>
+  <div id="aBarWrap" class="abar" hidden><div id="aBar"></div></div>
+  <div id="aVerdict" class="verdict" hidden></div>
+  <pre id="aLog" class="selectable">Open a master to begin.</pre>
 </section>
 
 <footer class="out">

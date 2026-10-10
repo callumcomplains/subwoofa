@@ -18,6 +18,7 @@ sw-pcm = { path = "../../crates/sw-pcm" }
 sw-queue = { path = "../../crates/sw-queue" }
 sw-tools = { path = "../../crates/sw-tools" }
 sw-verify = { path = "../../crates/sw-verify" }
+sw-backend-dee = { path = "../../crates/sw-backend-dee" }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

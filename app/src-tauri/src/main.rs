@@ -8,6 +8,7 @@ use sw_backend_ffmpeg as ff;
 use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
 use sw_core::downmix::{Matrix, OFF};
 use sw_queue::{EncodeSpec, Queue};
+mod atmos;
 use tauri::{Emitter, Manager};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
@@ -211,7 +212,7 @@ fn probe(path: String) -> Result<Probe, String> {
 
 /* ---- StreamTools ---- */
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
 
@@ -302,10 +303,10 @@ async fn tools_add_silence(path: String, output: String, head: f64, tail: f64) -
     .await
 }
 
-#[derive(serde::Serialize)]
-struct VerifyOut {
-    report: sw_verify::Report,
-    text: String,
+#[derive(serde::Serialize, Clone)]
+pub(crate) struct VerifyOut {
+    pub(crate) report: sw_verify::Report,
+    pub(crate) text: String,
 }
 
 /// Native verification of a stream file; `deep` adds the decode, statistics and header dumps.
@@ -462,12 +463,14 @@ fn main() {
                 let _ = handle.emit("queue", snap);
             }));
             app.manage(queue);
+            app.manage(atmos::State::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, multichannel_pick, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file
+            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file,
+            atmos::atmos_locate, atmos::atmos_inspect, atmos::atmos_status, atmos::atmos_cancel, atmos::atmos_start
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");
