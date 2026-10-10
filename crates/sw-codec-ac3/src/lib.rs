@@ -301,6 +301,8 @@ struct CplInfo {
     end: usize,
     /// `[set][channel] = (master, [(exp, mant)] per band)`
     coords: Vec<Vec<(u32, Vec<(u32, u32)>)>>,
+    /// 2/0 only: `[set][band]`, the right channel is the inverse of the left in that band.
+    phase: Vec<Vec<bool>>,
 }
 
 fn lowcomp1(a: i32, b0: i32, b1: i32, c: i32) -> i32 {
@@ -543,7 +545,7 @@ impl Encoder {
             cur_blksw: vec![[false; BLOCKS]; nfch],
             cur_remat: vec![[false; 4]; BLOCKS],
             rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
-            coupling: !cfg.eac3 && cfg.acmod >= 3 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
+            coupling: !cfg.eac3 && cfg.acmod >= 2 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
             cur_cpl: None,
             dependent: None,
             cfg,
@@ -581,7 +583,7 @@ impl Encoder {
     /// 2/0 mode: allow sum/difference coding per band (on by default).
     /// Channel coupling above about 7 to 10 kHz for 3/0 and richer modes at low rates (on by default there).
     pub fn set_coupling(&mut self, on: bool) {
-        self.coupling = on && !self.cfg.eac3 && self.cfg.acmod >= 3;
+        self.coupling = on && !self.cfg.eac3 && self.cfg.acmod >= 2;
     }
 
     pub fn set_rematrixing(&mut self, on: bool) {
@@ -681,13 +683,13 @@ impl Encoder {
 
     /// 2/0 mode: per block and band, send sum and difference instead of left and right where that leaves
     /// less energy to code (clause 7.5.3).
-    fn rematrix(&mut self, coefs: &mut [Vec<[f32; M]>]) {
+    fn rematrix(&mut self, coefs: &mut [Vec<[f32; M]>], below: usize) {
         self.cur_remat = vec![[false; 4]; BLOCKS];
         if self.cfg.acmod != 2 || self.cfg.eac3 || !self.rematrixing {
             return;
         }
         const EDGES: [(usize, usize); 4] = [(13, 25), (25, 37), (37, 61), (61, 253)];
-        let end = self.end[0].min(self.end[1]);
+        let end = self.end[0].min(self.end[1]).min(below);
         let (a, b) = coefs.split_at_mut(1);
         let (left, right) = (&mut a[0], &mut b[0]);
         for blk in 0..BLOCKS {
@@ -726,16 +728,18 @@ impl Encoder {
             return None;
         }
         let per_ch = self.cfg.bitrate_kbps as f64 / (self.nfch as f64 + 0.1);
-        let begf = if per_ch < 40.0 { 2 } else if per_ch < 56.0 { 4 } else if per_ch < 72.0 { 6 } else { 8 };
+        let begf = if self.cfg.acmod == 2 { if per_ch < 56.0 { 4 } else { 6 } } else if per_ch < 40.0 { 2 } else if per_ch < 56.0 { 4 } else if per_ch < 72.0 { 6 } else { 8 };
         let end_bin = self.end[0];
         let endf = (((end_bin.saturating_sub(37)) / 12).saturating_sub(3)).min(15);
         if std::env::var_os("SW_AC3_DEBUG").is_some() {
             eprintln!("coupling: end_bin {end_bin} begf {begf} endf {endf}");
         }
+        // low bandwidth: start coupling as low as the format allows (stereo needs four rematrix bands, begf > 2)
+        let begf = if self.cfg.acmod == 2 { begf.min(endf.saturating_sub(2)).max(3) } else { begf };
         if endf < begf + 1 {
             return None;
         }
-        Some(CplInfo { begf, endf, strt: 37 + 12 * begf, end: 37 + 12 * (endf + 3), coords: Vec::new() })
+        Some(CplInfo { begf, endf, strt: 37 + 12 * begf, end: 37 + 12 * (endf + 3), coords: Vec::new(), phase: Vec::new() })
     }
 
     /// Coupling coordinates per set of blocks, from the energy of each channel against the coupling channel.
@@ -765,11 +769,11 @@ impl Encoder {
 
     /// Encode a frame from already-transformed coefficients (`[channel][block][bin]`).
     fn encode_coefficients(&mut self, mut coefs: Vec<Vec<[f32; M]>>, frmsizecod: u32, words: usize) -> Vec<u8> {
-        self.rematrix(&mut coefs);
+        let mut cpl = self.plan_coupling(&mut coefs);
+        self.rematrix(&mut coefs, cpl.as_ref().map_or(M, |c| c.strt));
         let frame_bits = words * 16;
         let mut chans: Vec<ChannelPlan> = Vec::with_capacity(self.nch + 1);
         let orig: Vec<Vec<[f32; M]>> = coefs.iter().take(self.nfch).cloned().collect();
-        let mut cpl = self.plan_coupling(&mut coefs);
         for (ch, coef) in coefs.into_iter().enumerate() {
             let is_lfe = self.cfg.lfe && ch == self.nfch;
             let end = match &cpl {
@@ -778,12 +782,38 @@ impl Encoder {
             };
             chans.push(ChannelPlan { start: 0, is_cpl: false, end, strat: if is_lfe { Strat::D15 } else { self.strat }, is_lfe, coef, sets: Vec::new() });
         }
-        if let Some(c) = &cpl {
+        if let Some(c) = &mut cpl {
             // the coupling channel: the mean of the coupled channels above the coupling start
             let mut coef = vec![[0f32; M]; BLOCKS];
             for blk in 0..BLOCKS {
                 for bin in c.strt..c.end {
                     coef[blk][bin] = (0..self.nfch).map(|ch| chans[ch].coef[blk][bin]).sum::<f32>() / self.nfch as f32;
+                }
+            }
+            if self.cfg.acmod == 2 {
+                // bands where the right channel mostly opposes the left would cancel in the mean: flag
+                // them (the decoder flips the right channel's coordinate) and couple the difference
+                let nbands = 3 + c.endf - c.begf;
+                for &(first, count) in &self.cur_sets {
+                    let mut flags = vec![false; nbands];
+                    for (band, flag) in flags.iter_mut().enumerate() {
+                        let (lo, hi) = (c.strt + 12 * band, c.strt + 12 * band + 12);
+                        let mut dot = 0f64;
+                        for blk in first..first + count {
+                            for bin in lo..hi {
+                                dot += chans[0].coef[blk][bin] as f64 * chans[1].coef[blk][bin] as f64;
+                            }
+                        }
+                        *flag = dot < 0.0 && std::env::var_os("SW_AC3_NOPHS").is_none();
+                        if *flag {
+                            for blk in first..first + count {
+                                for bin in lo..hi {
+                                    coef[blk][bin] = 0.5 * (chans[0].coef[blk][bin] - chans[1].coef[blk][bin]);
+                                }
+                            }
+                        }
+                    }
+                    c.phase.push(flags);
                 }
             }
             // what the channels carry above the start is now the coupling channel's business
@@ -1061,6 +1091,9 @@ impl Encoder {
                         for _ in 0..self.nfch {
                             w.put(1, 1); // chincpl
                         }
+                        if cfg.acmod == 2 {
+                            w.put(1, 1); // phsflginu
+                        }
                         w.put(c.begf as u32, 4);
                         w.put(c.endf as u32, 4);
                         for _ in 1..3 + c.endf - c.begf {
@@ -1082,6 +1115,11 @@ impl Encoder {
                             w.put(*e, 4);
                             w.put(*m, 4);
                         }
+                    }
+                }
+                if cfg.acmod == 2 && new_exps {
+                    for &flag in &c.phase[set] {
+                        w.put(u32::from(flag), 1); // phsflg
                     }
                 }
             }

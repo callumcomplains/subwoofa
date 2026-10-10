@@ -220,14 +220,19 @@ fn block_switching_reduces_pre_echo() {
 /// Joint-stereo material (a shared signal plus a little independent content) coded at a low rate:
 /// rematrixing must not lose to plain left/right and should win clearly.
 fn joint_stereo_snr(remat: bool) -> f64 {
+    joint_stereo_run(remat, 1.0, false)
+}
+
+fn joint_stereo_run(remat: bool, right_sign: f32, coupling: bool) -> f64 {
     let n: usize = 48_000 * 3;
     let common = signal(0, n, 0.5);
     let a = signal(1, n, 0.03);
     let b = signal(2, n, 0.03);
     let left: Vec<f32> = (0..n).map(|i| common[i] + a[i]).collect();
-    let right: Vec<f32> = (0..n).map(|i| common[i] + b[i]).collect();
+    let right: Vec<f32> = (0..n).map(|i| right_sign * common[i] + b[i]).collect();
     let mut enc = Encoder::new(Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 96, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false }).unwrap();
     enc.set_rematrixing(remat);
+    enc.set_coupling(coupling);
     let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
     let mut bytes = Vec::new();
     for f in 0..frames {
@@ -235,7 +240,7 @@ fn joint_stereo_snr(remat: bool) -> f64 {
         let r: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| right.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
         bytes.extend(enc.encode_frame(&[l.as_slice(), r.as_slice()]));
     }
-    let dir = std::env::temp_dir().join(format!("sw_ac3_js_{}_{}", std::process::id(), remat));
+    let dir = std::env::temp_dir().join(format!("sw_ac3_js_{}_{}_{}_{}", std::process::id(), remat, right_sign, coupling));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.ac3");
     std::fs::write(&path, &bytes).unwrap();
@@ -262,6 +267,19 @@ fn rematrixing_helps_joint_stereo() {
     let on = joint_stereo_snr(true);
     println!("joint stereo at 96 kbps: L/R {off:.1} dB, rematrixed {on:.1} dB");
     assert!(on > off + 1.0, "{on} vs {off}");
+}
+
+/// Stereo coupling (2/0 with phase flags): an inverted right channel must survive it, which it only does
+/// when the opposing bands are flagged; without flags the shared signal would cancel in the coupling channel.
+#[test]
+fn stereo_coupling_keeps_opposed_channels() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let plain = joint_stereo_run(true, -1.0, false);
+    let coupled = joint_stereo_run(true, -1.0, true);
+    println!("opposed stereo at 96 kbps: plain {plain:.1} dB, coupled {coupled:.1} dB");
+    assert!(coupled > plain - 1.5, "{coupled} vs {plain}");
 }
 
 /// 7.1 in E-AC-3: a 5.1 downmix substream plus a dependent substream with the true side and rear pairs.
