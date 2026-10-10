@@ -211,7 +211,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
             if pt.wrapping_add(au_samples as u16) != timing {
                 timing_jumps += 1;
                 if timing_jumps <= 3 {
-                    c.finding(Status::Warn, Some(pos), format!("input timing jumps from {pt} to {timing}"));
+                    c.finding(Status::Info, Some(pos), format!("input timing jumps from {pt} to {timing}"));
                 }
             }
         }
@@ -239,6 +239,13 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
         p.channels = n;
     }
     c.kv("Substreams", f.nsub.to_string());
+    if !mlp {
+        let atmos = f.nsub == 4 && f.info >> 7 == 1;
+        c.kv("Dolby Atmos", if atmos { "yes: 16-channel spatial presentation (the 4th substream carries the object data)".to_string() } else { "no".to_string() });
+        if atmos {
+            c.check("Dolby Atmos signalling", Status::Info, "4 substreams with the spatial-presentation flag set; the object substream is not decoded by FFmpeg, so the audio check covers the 7.1 bed");
+        }
+    }
     c.kv("Access units", aus.to_string());
     c.kv("Duration", format!("{:.3} s", p.duration_secs));
     if p.duration_secs > 0.0 {
@@ -252,7 +259,8 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
     c.check("Access unit parity", ok(bad_nibble), if bad_nibble == 0 { format!("{aus} of {aus} headers") } else { format!("{bad_nibble} of {aus} headers fail") });
     c.check("Substream directory", ok(bad_dir), if bad_dir == 0 { "sizes add up in every access unit".to_string() } else { format!("{bad_dir} access unit(s) with an inconsistent directory") });
     c.check("Substream parity and checksum", ok(bad_par + bad_sum), if bad_par + bad_sum == 0 { format!("{checked_subs} substreams checked") } else { format!("{bad_par} parity and {bad_sum} checksum errors in {checked_subs} substreams") });
-    c.check("Input timing", if timing_jumps == 0 { Status::Pass } else { Status::Warn }, if timing_jumps == 0 { "advances by one access unit each time".to_string() } else { format!("{timing_jumps} jump(s)") });
+    // Dolby's own encoder lets this timestamp jump (it follows the variable data rate), so it is reported, not judged
+    c.check("Input timing", if timing_jumps == 0 { Status::Pass } else { Status::Info }, if timing_jumps == 0 { "advances by one access unit each time".to_string() } else { format!("{timing_jumps} jump(s) (normal for streams from Dolby's encoder)") });
     let regular = intervals.windows(2).all(|w| w[0] == w[1]) || intervals.len() < 2;
     c.check("Restart points", Status::Info, if intervals.is_empty() { "a single major sync".to_string() } else { format!("{majors} major syncs, every {} access units{}", intervals[0], if regular { "" } else { " (varies)" }) });
     c.check("Stable parameters", if changes == 0 { Status::Pass } else { Status::Warn }, if changes == 0 { "rate and channels never change".to_string() } else { format!("{changes} change(s)") });

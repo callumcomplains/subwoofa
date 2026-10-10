@@ -41,6 +41,8 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
     let mut dependent = 0u64;
     let mut dump: Vec<(String, String)> = Vec::new();
     let mut extra_bytes = 0u64;
+    let mut joc: Option<u32> = None;
+    let mut joc_frames = 0u64;
     let mut sample_total = 0u64;
     while pos + 8 <= len {
         let head = w.get(pos, 16).to_vec();
@@ -113,6 +115,12 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
             dump = f;
             first = Some(h.clone());
         }
+        if eac3 {
+            if let Some(j) = joc_complexity(&frame) {
+                joc_frames += 1;
+                joc.get_or_insert(j);
+            }
+        }
         if eac3 && h.strmtyp == 1 {
             dependent += 1;
         } else {
@@ -150,6 +158,15 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
         c.kv("Average bit rate", format!("{:.1} kbps", (len - extra_bytes) as f64 * 8.0 / p.duration_secs / 1000.0));
     }
     c.kv("Dialogue level", format!("-{} dBFS", h0.dialnorm));
+    if eac3 {
+        match joc {
+            Some(j) => {
+                c.kv("Dolby Atmos", format!("yes: Joint Object Coding, complexity index {j} (in {joc_frames} of {aus} access units)"));
+                c.check("Dolby Atmos signalling", if joc_frames == aus { Status::Pass } else { Status::Warn }, if joc_frames == aus { format!("every access unit carries the JOC flag (complexity index {j})") } else { format!("only {joc_frames} of {aus} access units carry the JOC flag") });
+            }
+            None => c.kv("Dolby Atmos", "no"),
+        }
+    }
 
     c.check("Sync words", if resync == 0 { Status::Pass } else { Status::Fail }, if resync == 0 { "every frame starts where the previous one ends".to_string() } else { format!("sync was lost {resync} time(s), {extra_bytes} bytes skipped") });
     c.check("Frame headers", if bad_hdr == 0 { Status::Pass } else { Status::Fail }, if bad_hdr == 0 { "all headers hold legal values".to_string() } else { format!("{bad_hdr} invalid header(s)") });
@@ -225,6 +242,127 @@ fn parse_e(h: &[u8]) -> (Header, usize, bool) {
     let size = (frmsiz + 1) * 2;
     let kbps = ((size as u64 * 8 * rate as u64) / (blocks as u64 * 256) / 1000) as u32;
     (Header { rate, acmod, lfe, bsid, dialnorm, kbps, blocks, strmtyp, substream }, size, strmtyp != 3 && (11..=16).contains(&bsid) && size >= 8)
+}
+
+/// Walk the E-AC-3 bit stream information to its additional data and read the Dolby Atmos (JOC) flag:
+/// `Some(complexity index)` when `flag_ec3_extension_type_a` is set.
+fn joc_complexity(f: &[u8]) -> Option<u32> {
+    let mut b = Bits::new(&f[2..]);
+    let strmtyp = b.get(2);
+    b.skip(3 + 11);
+    let fscod = b.get(2);
+    let numblkscod = if fscod == 3 {
+        b.skip(2);
+        3
+    } else {
+        b.get(2)
+    };
+    let acmod = b.get(3);
+    let lfeon = b.flag();
+    b.skip(5 + 5); // bsid, dialnorm
+    if b.flag() {
+        b.skip(8);
+    }
+    if acmod == 0 {
+        b.skip(5);
+        if b.flag() {
+            b.skip(8);
+        }
+    }
+    if strmtyp == 1 && b.flag() {
+        b.skip(16);
+    }
+    if b.flag() {
+        // mixing metadata
+        if acmod > 2 {
+            b.skip(2);
+        }
+        if acmod & 1 != 0 && acmod > 2 {
+            b.skip(6);
+        }
+        if acmod & 4 != 0 {
+            b.skip(6);
+        }
+        if lfeon && b.flag() {
+            b.skip(5);
+        }
+        if strmtyp == 0 {
+            if b.flag() {
+                b.skip(6);
+            }
+            if acmod == 0 && b.flag() {
+                b.skip(6);
+            }
+            if b.flag() {
+                b.skip(6);
+            }
+            match b.get(2) {
+                1 => b.skip(5),
+                2 => b.skip(12),
+                3 => {
+                    let n = b.get(5) as usize;
+                    b.skip(8 * (n + 2));
+                }
+                _ => {}
+            }
+            if acmod < 2 {
+                if b.flag() {
+                    b.skip(14);
+                }
+                if acmod == 0 && b.flag() {
+                    b.skip(14);
+                }
+            }
+            if b.flag() {
+                if numblkscod == 0 {
+                    b.skip(5);
+                } else {
+                    for _ in 0..[1, 2, 3, 6][numblkscod as usize] {
+                        if b.flag() {
+                            b.skip(5);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if b.flag() {
+        // informational metadata
+        b.skip(3 + 1 + 1);
+        if acmod == 2 {
+            b.skip(4);
+        }
+        if acmod >= 6 {
+            b.skip(2);
+        }
+        if b.flag() {
+            b.skip(5 + 2 + 1);
+        }
+        if acmod == 0 && b.flag() {
+            b.skip(5 + 2 + 1);
+        }
+        if fscod < 3 {
+            b.skip(1);
+        }
+    }
+    if strmtyp == 0 && numblkscod != 3 {
+        b.skip(1);
+    }
+    if strmtyp == 2 {
+        let blkid = if numblkscod == 3 { true } else { b.flag() };
+        if blkid {
+            b.skip(6);
+        }
+    }
+    if b.flag() {
+        let len = b.get(6) as usize + 1;
+        // the flag is the lowest bit of the first byte, the complexity index the second byte
+        b.skip(7);
+        if b.flag() && len >= 2 && !b.over {
+            return Some(b.get(8));
+        }
+    }
+    None
 }
 
 fn dump_a(f: &[u8]) -> Vec<(String, String)> {

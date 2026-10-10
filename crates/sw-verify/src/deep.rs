@@ -166,7 +166,7 @@ fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) 
     let messages = errs.join().unwrap_or_default();
     let digest = md5.finish();
     let lines: Vec<&str> = messages.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    let bad: Vec<&&str> = lines.iter().filter(|l| !l.starts_with("Last message repeated")).collect();
+    let bad: Vec<&&str> = lines.iter().filter(|l| !l.starts_with("Last message repeated") && !l.contains("Estimating duration from bitrate")).collect();
     for l in bad.iter().take(60) {
         let low = l.to_lowercase();
         let fatal = low.contains("error") || low.contains("invalid") || low.contains("corrupt") || low.contains("crc") || low.contains("missing") || low.contains("overread") || low.contains("failed") || low.contains("checksum");
