@@ -844,23 +844,27 @@ fn analyze_channel(x: &[i32], au: usize, quant: u8) -> ChannelAnalysis {
         }
     }
 
-    // exact coding choice for the real block layout (first AU = 8 priming samples + the rest)
+    // exact coding choice for the real block layout (first AU = 8 priming samples + the rest): the first AU's two
+    // blocks as the cheapest each, then the other access units by shortest path so that switching codings is paid for
     let n_au = n / au;
-    let mut codings = Vec::with_capacity(n_au);
-    for a in 0..n_au {
-        let ranges: &[(usize, usize)] = if a == 0 { &[(0, 8), (8, 0)] } else { &[(0, 0)] };
-        let mut per_block = Vec::new();
-        if a == 0 {
-            for (start, len) in [(0usize, 8usize), (8, au - 8)] {
-                let v: Vec<i32> = best_res[start..start + len].iter().map(|r| r >> quant).collect();
-                per_block.push(best_coding(&v, quant));
-            }
-        } else {
-            let v: Vec<i32> = best_res[a * au..(a + 1) * au].iter().map(|r| r >> quant).collect();
-            per_block.push(best_coding(&v, quant));
+    let mut codings: Vec<Vec<Coding>> = Vec::with_capacity(n_au);
+    if n_au > 0 {
+        let mut first = Vec::new();
+        for (start, len) in [(0usize, 8usize), (8, au - 8)] {
+            let v: Vec<i32> = best_res[start..start + len].iter().map(|r| r >> quant).collect();
+            first.push(best_coding(&v, quant));
         }
-        let _ = ranges;
-        codings.push(per_block);
+        let hold = first[1];
+        codings.push(first);
+        let cands: Vec<Vec<Coding>> = (1..n_au)
+            .map(|a| {
+                let v: Vec<i32> = best_res[a * au..(a + 1) * au].iter().map(|r| r >> quant).collect();
+                coding_candidates(&v, quant)
+            })
+            .collect();
+        for c in choose_codings(&cands, hold) {
+            codings.push(vec![c]);
+        }
     }
     ChannelAnalysis { decor: None, quant, fir: best_fir, iir: best_iir, residual: best_res, codings }
 }
@@ -1290,6 +1294,90 @@ fn best_coding(v: &[i32], quant: u8) -> Coding {
         }
     }
     best.unwrap_or(Coding { codebook: 0, lsb_bits: (need + 1).min(31), bits: v.len() * (need as usize + 1) })
+}
+
+/// Bits a parameter update costs for one channel whose codebook or raw-bit count changes (change flag, three
+/// sub-flags, codebook, raw bits); the block-level flags are shared and not counted.
+const CODING_SWITCH_BITS: usize = 10;
+
+/// Every feasible (codebook, raw bits) near the best choice for a block, with its exact bit count.
+fn coding_candidates(v: &[i32], quant: u8) -> Vec<Coding> {
+    let peak = v.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+    if peak == 0 {
+        return vec![Coding { codebook: 0, lsb_bits: 0, bits: 0 }];
+    }
+    let max_l = 24u32.saturating_sub(quant as u32).min(24);
+    let mut out: Vec<Coding> = Vec::new();
+    let need = 32 - peak.leading_zeros();
+    for l in need..=(need + 1).min(31) {
+        if let Some(b) = cost_of(v, 0, l) {
+            out.push(Coding { codebook: 0, lsb_bits: l, bits: b });
+            break;
+        }
+    }
+    let mean = v.iter().map(|s| s.unsigned_abs() as u64).sum::<u64>() / v.len().max(1) as u64;
+    let l0 = (64 - mean.leading_zeros()) as i32;
+    for l in (l0 - 3).max(0)..=(l0 + 2) {
+        let l = l as u32;
+        if l > max_l {
+            continue;
+        }
+        for cb in 1..=3u8 {
+            if let Some(b) = cost_of(v, cb, l) {
+                out.push(Coding { codebook: cb, lsb_bits: l, bits: b });
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(best_coding(v, quant));
+    }
+    // keep the useful ones: within a few switch costs of the best
+    let best = out.iter().map(|c| c.bits).min().unwrap_or(0);
+    out.retain(|c| c.bits <= best + 4 * CODING_SWITCH_BITS);
+    out
+}
+
+/// Choose one coding per block so that bits plus parameter updates are smallest: a shortest path through the
+/// candidates of the blocks, where changing the codebook or raw-bit count from one block to the next costs an update.
+/// `start` is the coding the decoder holds before the first block.
+fn choose_codings(cands: &[Vec<Coding>], start: Coding) -> Vec<Coding> {
+    let same = |a: &Coding, b: &Coding| a.codebook == b.codebook && a.lsb_bits == b.lsb_bits;
+    let n = cands.len();
+    let mut cost: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut from: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for (i, cs) in cands.iter().enumerate() {
+        let mut ci = Vec::with_capacity(cs.len());
+        let mut fi = Vec::with_capacity(cs.len());
+        for c in cs {
+            if i == 0 {
+                ci.push(c.bits + if same(c, &start) { 0 } else { CODING_SWITCH_BITS });
+                fi.push(0);
+            } else {
+                let (mut best, mut arg) = (usize::MAX, 0);
+                for (j, p) in cands[i - 1].iter().enumerate() {
+                    let t = cost[i - 1][j] + if same(p, c) { 0 } else { CODING_SWITCH_BITS };
+                    if t < best {
+                        best = t;
+                        arg = j;
+                    }
+                }
+                ci.push(best + c.bits);
+                fi.push(arg);
+            }
+        }
+        cost.push(ci);
+        from.push(fi);
+    }
+    let mut out = vec![start; n];
+    if n == 0 {
+        return out;
+    }
+    let mut k = (0..cands[n - 1].len()).min_by_key(|&j| cost[n - 1][j]).unwrap_or(0);
+    for i in (0..n).rev() {
+        out[i] = cands[i][k];
+        k = from[i][k];
+    }
+    out
 }
 
 /* ------------------------------------------------------------------------------------------ */
