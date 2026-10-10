@@ -145,6 +145,10 @@ impl Channel {
     }
 
     /// True for speakers in a different vertical plane (drawn differently in the GUI).
+    /// Top and bottom layer speakers of the immersive layouts (7.1.4, 9.1.6, NHK 22.2...).
+    pub const fn is_top_layer(self) -> bool {
+        matches!(self, Channel::Tfc | Channel::Tfl | Channel::Tfr | Channel::Tsl | Channel::Tsr | Channel::Tc | Channel::Tbl | Channel::Tbr | Channel::Tbc | Channel::Bfc | Channel::Bfl | Channel::Bfr)
+    }
     pub const fn is_height(self) -> bool {
         matches!(
             self,

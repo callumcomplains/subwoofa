@@ -121,3 +121,58 @@ fn six_one_and_seven_zero_lossless_only() {
     roundtrip("60", "6.0-discrete", 48_000, 8);
     roundtrip("70", "7.0-side-rear", 48_000, 8);
 }
+
+/// Immersive layouts (up to NHK 22.2's 24 channels): hierarchical XLL channel sets of at most eight channels. FFmpeg
+/// lists the channels in speaker-bit order with `-channel_order coded`; whatever the order, every source channel
+/// must come back sample for sample in exactly one output channel.
+fn immersive(layout_id: &str, rate: u32) {
+    if !have_ffmpeg() {
+        return;
+    }
+    let layout = ChannelLayout::find(layout_id).unwrap();
+    let map = map_layout(layout);
+    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0 });
+    let n = enc.frame_samples();
+    let nch = map.order.len();
+    assert_eq!(nch, layout.channels.len());
+    let frames = 6;
+    let mut seed = 7u32;
+    let sigs: Vec<Vec<i32>> = (0..nch).map(|c| signal(c, n * frames, &mut seed)).collect();
+    let mut stream = Vec::new();
+    for f in 0..frames {
+        let part: Vec<Vec<i32>> = sigs.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
+        stream.extend(enc.encode_frame(&part));
+    }
+    let mut file = dtshd_header(&DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: (n * frames) as u64, ch_mask: 0xF, initial_padding: 0 }, stream.len() as u64);
+    file.extend_from_slice(&stream);
+    let dir = std::env::temp_dir().join(format!("sw_dts_ma_{}_{}_{}", std::process::id(), layout_id, rate));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.dtshd");
+    std::fs::write(&path, &file).unwrap();
+    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-channel_order", "coded", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // the one message FFmpeg prints is its guess at the layout, not a complaint
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.lines().all(|l| l.contains("Guessed Channel Layout")), "{layout_id}: ffmpeg complained: {err}");
+    let dec: Vec<i32> = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    assert_eq!(dec.len(), n * frames * nch, "{layout_id}: decoded length");
+    let mut used = vec![false; nch];
+    for (j, sig) in sigs.iter().enumerate() {
+        let hit = (0..nch).find(|&k| !used[k] && (0..n * frames).all(|i| dec[i * nch + k] == sig[i]));
+        let k = hit.unwrap_or_else(|| panic!("{layout_id}: source channel {j} did not come back intact"));
+        used[k] = true;
+    }
+}
+
+#[test]
+fn twenty_two_point_two_is_lossless() {
+    immersive("22.2", 48_000);
+}
+
+#[test]
+fn height_layouts_are_lossless() {
+    for id in ["5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"] {
+        immersive(id, 48_000);
+    }
+    immersive("7.1.4", 96_000);
+}

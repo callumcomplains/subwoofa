@@ -166,9 +166,9 @@ impl Destination {
 /// Maximum discrete channels the stream type can carry.
 fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usize {
     let base = match stream {
-        // NHK 22.2 (24 channels) fits a lossless stream at 44.1 and 48 kHz
+        // immersive layouts (up to NHK 22.2) fit a lossless stream at 44.1 and 48 kHz, up to 12 channels at 96 kHz
         StreamType::DtsHdMa => {
-            if sample_rate >= 192_000 { 6 } else if sample_rate >= 96_000 { 8 } else { 24 }
+            if sample_rate >= 192_000 { 6 } else if sample_rate >= 96_000 { 12 } else { 24 }
         }
         StreamType::DtsHdHra => {
             if sample_rate >= 192_000 { 6 } else { 8 }
@@ -295,6 +295,10 @@ pub fn validate(
     }
     // E-AC-3 adds 7.1 / 7.0 with the rear pair in a dependent substream
     if stream == StreamType::Eac3 && !AC3_LAYOUTS.contains(&layout.id) && !EAC3_EXTENDED_LAYOUTS.contains(&layout.id) {
+        return Err(Invalid::LayoutNotSupported);
+    }
+    // top-layer speakers (7.1.4, 9.1.6, 22.2...) are carried by the lossless DTS-HD stream only for now
+    if layout.channels.iter().any(|c| c.is_top_layer()) && stream != StreamType::DtsHdMa {
         return Err(Invalid::LayoutNotSupported);
     }
     if stream == StreamType::DtsExpress && !EXPRESS_LAYOUTS.contains(&layout.id) {

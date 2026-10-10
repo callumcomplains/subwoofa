@@ -24,6 +24,8 @@ const VARIANT = {
   "4.0-quad": "Quad", "4.0-lcrs": "L C R + surround", "3.1": "L C R", "3.1-lrs": "L R + surround",
   "3.0": "L C R", "3.0-lrs": "L R + surround", "2.1": "L R + sub", "2.0": "Stereo", "2.0-ltrt": "Lt/Rt matrix",
   "1.1": "Mono + LFE (DVD only)", "1.0": "Mono", "22.2": "NHK, lossless only",
+  "9.1.6": "Immersive, lossless only", "7.1.4": "Immersive, lossless only", "7.1.2": "Immersive, lossless only",
+  "5.1.4": "Immersive, lossless only", "5.1.2": "Immersive, lossless only",
 };
 
 // Angle in degrees clockwise from front-centre, plus ring (0 ear level, 1 height, 2 LFE, 3 overhead).
@@ -36,7 +38,7 @@ const POS = {
   Bfc: [0, 4], Bfl: [-30, 4], Bfr: [30, 4],
 };
 
-const family = (l) => (l.id === "22.2" ? "22.2" : `${l.channels.filter((c) => c !== "LFE").length}.${l.channels.includes("LFE") ? 1 : 0}`);
+const family = (l) => (l.id === "22.2" || /^\d+\.\d\.\d$/.test(l.id) ? l.id : `${l.channels.filter((c) => c !== "LFE").length}.${l.channels.includes("LFE") ? 1 : 0}`);
 const layoutById = (id) => cat.layouts.find((l) => l.id === id);
 const curLayoutId = () => $("variants").dataset.value;
 const curLayout = () => layoutById(curLayoutId());
@@ -116,12 +118,12 @@ function drawSpeakers() {
     const [deg, ring] = POS[ch] || [0, 0];
     let x, y;
     if (ring === 2) { x = deg ? 22 : 0; y = -21; }            // LFE (and LFE2 beside it): inside the inner ring, clear of the speakers
-    else if (ring === 4) { const a = (deg * Math.PI) / 180; x = 28 * Math.sin(a); y = -28 * Math.cos(a) - 4; }   // bottom layer
+    else if (ring === 4) { const a = (deg * Math.PI) / 180; x = 62 * Math.sin(a); y = -62 * Math.cos(a); }   // bottom layer: small dots between the two rings, in front
     else if (ring === 3) { x = 0; y = 0; }                   // overhead: above the listener
     else { const r = ring === 1 ? 44 : 82, a = (deg * Math.PI) / 180; x = r * Math.sin(a); y = -r * Math.cos(a); }
     const height = ring === 1 || ring === 3;
-    h += `<circle class="spk${height ? " height" : ""}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9.5"/>`;
-    h += `<text class="lbl${height ? " height" : ""}" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${ch}</text>`;
+    h += `<circle class="spk${height ? " height" : ""}${ring === 4 ? " low" : ""}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${ring === 4 ? 8 : 9.5}"/>`;
+    h += `<text class="lbl${height ? " height" : ""}${ring === 4 ? " low" : ""}" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${ch}</text>`;
   }
   $("speakers").innerHTML = h;
 }
@@ -231,13 +233,14 @@ function renderBitrate(from) {
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
   // above 96 kHz the stream is the lossless extension alone (no core is written)
-  const hi = ma && curRate() > 96000;
+  const nhk = ma && curLayout() && curLayout().channels.length > 8;
+  const hi = ma && (curRate() > 96000 || nhk);
   const coreBox = $("coreOn");
   if (hi && !coreBox.disabled) coreBox.dataset.was = coreBox.checked ? "1" : "0";
   if (!hi && coreBox.disabled) coreBox.checked = coreBox.dataset.was !== "0";
   coreBox.disabled = hi;
   if (hi) coreBox.checked = false;
-  $("coreWrap").querySelector("span").textContent = hi ? "No DTS core above 96 kHz: the stream is the lossless data alone" : "Backward-compatible core (turn off for lossless data only)";
+  $("coreWrap").querySelector("span").textContent = hi ? (nhk ? "No DTS core above 8 channels: the stream is the lossless data alone" : "No DTS core above 96 kHz: the stream is the lossless data alone") : "Backward-compatible core (turn off for lossless data only)";
   syncX96();
   if (!ma) coreBox.checked = true;
   br.disabled = (lossless && !unlocked) || coreOff();

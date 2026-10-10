@@ -68,11 +68,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
     let map = map_layout(req.layout);
     let nch = map.order.len();
-    if nch > 8 && req.layout.id != "22.2" {
-        return Err(MaError::Unsupported("more than 8 channels (only NHK 22.2 has more)".into()));
+    if nch > 24 {
+        return Err(MaError::Unsupported("more than 24 channels".into()));
     }
-    if nch > 8 && rate > 48_000 {
-        return Err(MaError::Unsupported("NHK 22.2 is carried at 44.1 or 48 kHz (a frame of 24 channels at a higher rate does not fit the stream's 64 kB frame size)".into()));
+    if nch > 8 && nch as u64 * rate as u64 > 12 * 96_000 {
+        return Err(MaError::Unsupported(format!("{nch} channels at {rate} Hz do not fit the stream's 64 kB frame size (up to 12 channels at 96 kHz, 24 at 48 kHz)")));
     }
     if rate > 96_000 && nch > 6 {
         return Err(MaError::Unsupported("above 96 kHz: up to 5.1 channels".into()));

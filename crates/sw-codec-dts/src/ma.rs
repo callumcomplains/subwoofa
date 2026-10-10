@@ -203,7 +203,7 @@ fn fold_targets(c: Channel, side: (Channel, Channel), rear: Option<(Channel, Cha
 fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     use Channel::*;
     let n = layout.channels.len();
-    if n < 6 || (n > 8 && layout.id != "22.2") {
+    if n < 6 || n > 24 {
         return None;
     }
     let pos = |c: Channel| layout.channels.iter().position(|x| *x == c);
@@ -218,8 +218,8 @@ fn hierarchy(layout: &ChannelLayout) -> Option<(Vec<usize>, Vec<usize>, Hier)> {
     if pos(Lfe).is_some() {
         base_ch.push(Lfe);
     }
-    // More than eight channels (NHK 22.2): the base set is a full 7.1 (the decoder this was checked with
-    // reads three sets of at most eight channels each)
+    // More than eight channels (immersive layouts, NHK 22.2): the base set is a full 7.1 (the decoder this was
+    // checked with reads three sets of at most eight channels each)
     let rear = if n > 8 && pos(Lsr).is_some() && pos(Rsr).is_some() { Some((Lsr, Rsr)) } else { None };
     if let Some((a, b)) = rear {
         base_ch.push(a);

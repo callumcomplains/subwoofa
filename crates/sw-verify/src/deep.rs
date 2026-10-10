@@ -95,10 +95,7 @@ fn channels_of(layout: &str) -> Option<usize> {
     }
     // 5.1(side), 7.1, 22.2, 3.0, 4.0 ...
     let base = l.split('(').next().unwrap_or(l);
-    let mut it = base.split('.');
-    let a: usize = it.next()?.parse().ok()?;
-    let b: usize = it.next().map(|x| x.parse().ok()).unwrap_or(Some(0))?;
-    Some(a + b)
+    base.split('.').map(|p| p.parse::<usize>().ok()).sum::<Option<usize>>()
 }
 
 fn probe_channels(path: &Path, ffmpeg: &Path) -> Option<(usize, u32)> {
@@ -498,6 +495,8 @@ mod tests {
         assert_eq!(channels_of("5.1(side)"), Some(6));
         assert_eq!(channels_of("stereo"), Some(2));
         assert_eq!(channels_of("22.2"), Some(24));
+        assert_eq!(channels_of("7.1.4"), Some(12));
+        assert_eq!(channels_of("9.1.6"), Some(16));
         assert_eq!(channels_of("7 channels"), Some(7));
     }
 }
