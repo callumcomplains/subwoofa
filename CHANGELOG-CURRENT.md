@@ -226,3 +226,9 @@ The DTS encoder's Express streams carry steady notes as tonal components (a freq
 - Checked with the Tokyo 2020 22.2 stems: FFmpeg (`-channel_order coded`) decodes all 24 channels bit-exact, and DTSHDVerify passes 1875/1875 frames. The commercial verifier only lists 21 channels because the bottom layer doesn't fit the 16-bit extension-stream speaker mask.
 - GUI: 22.2 appears as an output family in the layout picker, with its three-ring speaker drawing.
 - Not yet covered by an automated test (the check above was run by hand against the real stems).
+
+## AC-3 stereo coupling with phase flags, E-AC-3 coupling
+- **Coupling** (sharing one signal across channels at high frequencies, plus a small level per channel) now also works for **stereo AC-3** and for **E-AC-3** (stereo and 5.1; not the 7.1 extension substream). Stereo uses **phase flags**: in a band where the right channel mostly opposes the left, the encoder couples their difference and flags the band, so out-of-phase content no longer cancels. Check: an out-of-phase stereo test signal decodes as well coupled as uncoupled (new test `stereo_coupling_keeps_opposed_channels`).
+- **Low bandwidth:** the coupling start now follows the bandwidth of the stream, so it also engages at low rates (it used to switch itself off when the bandwidth was small). On the Tokyo 22.2 stems mixed to 5.1, native AC-3 and E-AC-3 at 160 and 224 kbps gain 1 to 4 dB SNR at the same size.
+- E-AC-3 specifics: the frame header says coupling is on in all blocks, the first block carries the strategy, the first coordinates and the leak values without their usual flag bits, and the coupling channel's exponent strategy comes before the channels'. Decoded with FFmpeg with CRC checking: all E-AC-3 round-trip tests pass.
+- **Not done: E-AC-3 enhanced coupling.** FFmpeg doesn't decode it, so it can't be verified here. Parked until a reference decoder is available.

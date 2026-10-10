@@ -545,7 +545,7 @@ impl Encoder {
             cur_blksw: vec![[false; BLOCKS]; nfch],
             cur_remat: vec![[false; 4]; BLOCKS],
             rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
-            coupling: !cfg.eac3 && cfg.acmod >= 2 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
+            coupling: cfg.acmod >= 2 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
             cur_cpl: None,
             dependent: None,
             cfg,
@@ -583,7 +583,7 @@ impl Encoder {
     /// 2/0 mode: allow sum/difference coding per band (on by default).
     /// Channel coupling above about 7 to 10 kHz for 3/0 and richer modes at low rates (on by default there).
     pub fn set_coupling(&mut self, on: bool) {
-        self.coupling = on && !self.cfg.eac3 && self.cfg.acmod >= 2;
+        self.coupling = on && self.cfg.acmod >= 2;
     }
 
     pub fn set_rematrixing(&mut self, on: bool) {
@@ -724,7 +724,7 @@ impl Encoder {
     /// Decide on coupling for this frame (not with block switching in it) and describe it.
     fn plan_coupling(&self, coefs: &mut [Vec<[f32; M]>]) -> Option<CplInfo> {
         let _ = coefs;
-        if !self.coupling || self.cur_blksw.iter().any(|c| c.iter().any(|b| *b)) {
+        if !self.coupling || self.dependent.is_some() || self.cur_blksw.iter().any(|c| c.iter().any(|b| *b)) {
             return None;
         }
         let per_ch = self.cfg.bitrate_kbps as f64 / (self.nfch as f64 + 0.1);
@@ -735,7 +735,7 @@ impl Encoder {
             eprintln!("coupling: end_bin {end_bin} begf {begf} endf {endf}");
         }
         // low bandwidth: start coupling as low as the format allows (stereo needs four rematrix bands, begf > 2)
-        let begf = if self.cfg.acmod == 2 { begf.min(endf.saturating_sub(2)).max(3) } else { begf };
+        let begf = if self.cfg.acmod == 2 { begf.min(endf.saturating_sub(2)).max(3) } else { begf.min(endf.saturating_sub(1)) };
         if endf < begf + 1 {
             return None;
         }
@@ -955,10 +955,12 @@ impl Encoder {
             }
             p
         };
+        // E-AC-3 lists the coupling channel's strategy before the channels'
+        let cpl_off = usize::from(cfg.eac3 && self.cur_cpl.is_some());
+        let exp_chans: Vec<&ChannelPlan> = chans.iter().filter(|c| c.is_cpl).chain(chans.iter().filter(|c| !c.is_cpl).take(self.nfch)).collect();
         let frame_expstr: Option<Vec<u32>> = if cfg.eac3 {
-            chans
+            exp_chans
                 .iter()
-                .take(self.nfch)
                 .map(|cp| EAC3_FRM_EXPSTR.iter().position(|r| *r == pattern(cp)).map(|i| i as u32))
                 .collect()
         } else {
@@ -997,9 +999,9 @@ impl Encoder {
             w.put(0, 1); // skipflde
             w.put(0, 1); // spxattene
             if cfg.acmod > 1 {
-                w.put(0, 1); // cplinu, block 0
+                w.put(u32::from(self.cur_cpl.is_some()), 1); // cplinu, block 0
                 for _ in 1..BLOCKS {
-                    w.put(0, 1); // cplstre
+                    w.put(0, 1); // cplstre: later blocks keep the first block's choice
                 }
             }
             match &frame_expstr {
@@ -1011,7 +1013,7 @@ impl Encoder {
                 None => {
                     for blk in 0..BLOCKS {
                         let new_exps = self.cur_sets.iter().any(|&(f, _)| f == blk);
-                        for cp in chans.iter().take(self.nfch) {
+                        for cp in &exp_chans {
                             w.put(if new_exps { cp.strat.code() } else { 0 }, 2);
                         }
                     }
@@ -1024,7 +1026,7 @@ impl Encoder {
             }
             if self.dependent.is_none() {
                 for ch in 0..self.nfch {
-                    w.put(frame_expstr.as_ref().map_or(0, |i| i[ch]), 5); // convexpstr (independent substreams only)
+                    w.put(frame_expstr.as_ref().map_or(0, |i| i[ch + cpl_off]), 5); // convexpstr (independent substreams only)
                 }
             }
             w.put(csnr, 6);
@@ -1083,6 +1085,23 @@ impl Encoder {
             w.put(0, 1); // dynrnge
             if cfg.eac3 {
                 w.put(0, 1); // spxinu
+                if let (0, Some(c)) = (blk, &self.cur_cpl) {
+                    w.put(0, 1); // ecplinu: plain coupling
+                    if cfg.acmod > 2 {
+                        for _ in 0..self.nfch {
+                            w.put(1, 1); // chincpl (2/0 couples both channels without saying so)
+                        }
+                    }
+                    if cfg.acmod == 2 {
+                        w.put(1, 1); // phsflginu
+                    }
+                    w.put(c.begf as u32, 4);
+                    w.put(c.endf as u32, 4);
+                    w.put(1, 1); // cplbndstrce: send the band structure rather than take the default
+                    for _ in 1..3 + c.endf - c.begf {
+                        w.put(0, 1); // every 12-bin sub-band is a band of its own
+                    }
+                }
             } else if blk == 0 {
                 w.put(1, 1); // cplstre
                 match &self.cur_cpl {
@@ -1105,9 +1124,12 @@ impl Encoder {
             } else {
                 w.put(0, 1);
             }
-            if let (false, Some(c)) = (cfg.eac3, &self.cur_cpl) {
+            if let Some(c) = &self.cur_cpl {
                 for ch in 0..self.nfch {
-                    w.put(u32::from(new_exps), 1); // cplcoe
+                    // E-AC-3 takes the first coordinates of a frame as sent without a flag
+                    if !(cfg.eac3 && blk == 0) {
+                        w.put(u32::from(new_exps), 1); // cplcoe
+                    }
                     if new_exps {
                         let (mstr, bands) = &c.coords[set][ch];
                         w.put(*mstr, 2);
@@ -1168,6 +1190,14 @@ impl Encoder {
             if cfg.eac3 {
                 if self.dependent.is_none() {
                     w.put(0, 1); // convsnroffste (independent substreams only)
+                }
+                if self.cur_cpl.is_some() {
+                    if blk == 0 {
+                        w.put(0, 3); // cplfleak (cplleake is implied in a frame's first coupling block)
+                        w.put(0, 3); // cplsleak
+                    } else {
+                        w.put(0, 1); // cplleake
+                    }
                 }
             } else {
                 if blk == 0 {
