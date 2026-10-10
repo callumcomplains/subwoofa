@@ -497,12 +497,50 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
         job.input = a.input.clone();
         job.kind = Some(kind);
     }
+    // the output's folder is split on spaces as well: write into a staging folder and move the result afterwards
+    let final_output = job.output.clone();
+    let staged = has_space(&job.output);
+    if staged {
+        if has_space(work_dir) {
+            return Err(Error::Invalid(format!("DEE cannot write to a path with spaces ({}), and the work folder has spaces too", final_output.display())));
+        }
+        let name: String = final_output.file_name().and_then(|f| f.to_str()).unwrap_or("out").chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect();
+        let dir = work_dir.join("staging");
+        std::fs::create_dir_all(&dir)?;
+        job.output = dir.join(name);
+    }
     let job = &job;
     let result = run_inner(dee, job, work_dir, progress, line, cancel);
     if let Some(a) = &alias {
         a.remove();
     }
-    result
+    let mut done = result?;
+    if staged {
+        // the output and DEE's reports beside it (<name>.log, <name>.mll...) go to the real folder under the real name
+        let staged_name = job.output.file_name().and_then(|f| f.to_str()).unwrap_or_default().to_string();
+        let final_name = final_output.file_name().and_then(|f| f.to_str()).unwrap_or_default().to_string();
+        let final_dir = final_output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        std::fs::create_dir_all(final_dir)?;
+        for entry in std::fs::read_dir(job.output.parent().unwrap())? {
+            let entry = entry?;
+            let n = entry.file_name().to_string_lossy().to_string();
+            if let Some(rest) = n.strip_prefix(&staged_name) {
+                let dst = final_dir.join(format!("{final_name}{rest}"));
+                if std::fs::rename(entry.path(), &dst).is_err() {
+                    std::fs::copy(entry.path(), &dst)?;
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        done.report = {
+            let mut name = final_output.as_os_str().to_os_string();
+            name.push(".log");
+            let p = PathBuf::from(name);
+            p.is_file().then_some(p)
+        };
+        done.output = final_output;
+    }
+    Ok(done)
 }
 
 fn run_inner(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut(f32), line: &mut dyn FnMut(&str), cancel: &AtomicBool) -> Result<Finished, Error> {
