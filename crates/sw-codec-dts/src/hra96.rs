@@ -56,6 +56,7 @@ pub struct Hra96Encoder {
     bits_num: u64,
     bits_den: u64,
     overhead: usize,
+    timing: [std::time::Duration; 5],
 }
 
 fn mk(amode: u8, channels: usize, lfe: bool, bitrate: u32, dialnorm: i32, pcm_bits: u32) -> CoreConfig {
@@ -107,6 +108,7 @@ impl Hra96Encoder {
             bits_num: cfg.total_kbps as u64 * 1000 * n as u64,
             bits_den: 96_000,
             overhead,
+            timing: [std::time::Duration::ZERO; 5],
         })
     }
 
@@ -144,6 +146,9 @@ impl Hra96Encoder {
         while self.emitted < frames {
             out.push(self.next_frame());
         }
+        if std::env::var_os("SW_TIMING").is_some() {
+            eprintln!("hra96 timing: decimate {:?}, core+xxch {:?}, 64-band analysis {:?}, x96 coding {:?}", self.timing[0], self.timing[1], self.timing[2], self.timing[3]);
+        }
         out
     }
 
@@ -170,22 +175,15 @@ impl Hra96Encoder {
     /// 48 kHz coding's reconstruction in the lower 32 bands.
     fn analyse(ana: &mut Analysis64, src: &[f64], f_off: usize, dropped: usize, start_adj: isize, delay: usize, deq: &[Vec<i32>]) -> Vec<Vec<f64>> {
         let blocks = 16;
-        let mut bands = vec![vec![0f64; blocks]; BANDS64];
-        for b in 0..blocks {
-            let start = (f_off + b * 64) as isize + delay as isize + start_adj;
-            let mut input = [0f64; 64];
-            for (i, v) in input.iter_mut().enumerate() {
-                let idx = start + i as isize - dropped as isize;
-                if idx >= 0 && (idx as usize) < src.len() {
-                    *v = src[idx as usize];
-                }
-            }
-            let mut o = [0f64; BANDS64];
-            ana.step(&input, &mut o);
-            for band in 0..BANDS64 {
-                bands[band][b] = o[band];
-            }
-        }
+        let start = f_off as isize + delay as isize + start_adj - dropped as isize;
+        let input: Vec<f64> = (0..blocks * 64)
+            .map(|i| {
+                let idx = start + i as isize;
+                if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] } else { 0.0 }
+            })
+            .collect();
+        let mut bands = ana.analyse_blocks(&input);
+        debug_assert_eq!(bands.len(), BANDS64);
         for band in 0..32 {
             for b in 0..blocks {
                 bands[band][b] -= deq[band][b] as f64;
@@ -197,11 +195,14 @@ impl Hra96Encoder {
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.emitted;
         let (ncore, nprim) = (self.ncore, self.nprim);
+        let t0 = std::time::Instant::now();
         let dec: Vec<Vec<f64>> = {
             let me: &Hra96Encoder = &*self;
             use rayon::prelude::*;
             (0..ncore + 2).into_par_iter().map(|c| me.decimated(c, f)).collect()
         };
+        self.timing[0] += t0.elapsed();
+        let t0 = std::time::Instant::now();
         let mut data = self.core.encode_frame(&dec[..ncore]);
         data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
         // sizes: the rest of the frame after the core and the extension substream header, split between XXCH and X96
@@ -211,6 +212,8 @@ impl Hra96Encoder {
         let x96_bytes = ((rest as f64 * (1.0 - XXCH_SHARE)) as usize & !3).clamp(64, 4092);
         let xxch_bytes = (rest.saturating_sub(x96_bytes) & !3).clamp(64, 16_000);
         let xxch = self.ext.encode_xxch(&dec[ncore..], xxch_bytes, &self.params);
+        self.timing[1] += t0.elapsed();
+        let t0 = std::time::Instant::now();
         // X96: the five core channels, then the rears
         let (f_off, dropped, delay, adj) = (f * self.n, self.dropped, self.ana_delay, 64 * self.ana_shift + self.ana_adj);
         let bufs = &self.buf;
@@ -223,7 +226,10 @@ impl Hra96Encoder {
             (a, b)
         };
         let _ = nprim;
+        self.timing[2] += t0.elapsed();
+        let t0 = std::time::Instant::now();
         let x96 = self.x96.encode_exss(&[&r_core, &r_ext], x96_bytes);
+        self.timing[3] += t0.elapsed();
         data.extend_from_slice(&exss_frame_xxch_x96(&self.exss, &xxch, &x96));
         self.emitted += 1;
         // drop samples no later frame needs

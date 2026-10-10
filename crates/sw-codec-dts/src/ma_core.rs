@@ -291,22 +291,15 @@ impl MaCoreEncoder {
         jobs.into_par_iter().for_each(|(x, slot, ana, out)| {
             let g = gain0 * hier.as_ref().map_or(1.0, |h| h.core_gain(x));
             let src = &bufs[x];
-            let mut bands = vec![vec![0f64; blocks]; BANDS64];
-            for b in 0..blocks {
-                let start = (f_off + b * 64) as isize + delay as isize - dropped as isize;
-                let mut input = [0f64; 64];
-                for (i, v) in input.iter_mut().enumerate() {
+            let start = f_off as isize + delay as isize - dropped as isize;
+            let input: Vec<f64> = (0..blocks * 64)
+                .map(|i| {
                     let idx = start + i as isize;
-                    if idx >= 0 && (idx as usize) < src.len() {
-                        *v = src[idx as usize] as f64 * g;
-                    }
-                }
-                let mut o = [0f64; BANDS64];
-                ana.step(&input, &mut o);
-                for band in 0..BANDS64 {
-                    bands[band][b] = o[band];
-                }
-            }
+                    if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] as f64 * g } else { 0.0 }
+                })
+                .collect();
+            let mut bands = ana.analyse_blocks(&input);
+            debug_assert_eq!(bands.len(), BANDS64);
             for band in 0..32 {
                 for b in 0..blocks {
                     bands[band][b] -= deq[slot][band][b] as f64;

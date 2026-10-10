@@ -59,6 +59,40 @@ impl Analysis64 {
     }
 }
 
+/// Dot product with independent accumulators, so the compiler can use vector instructions.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    let mut s = [0f64; 8];
+    for (ca, cb) in a.chunks_exact(8).zip(b.chunks_exact(8)) {
+        for k in 0..8 {
+            s[k] += ca[k] * cb[k];
+        }
+    }
+    s.iter().sum()
+}
+
+impl Analysis64 {
+    /// Feed `input.len() / 64` blocks of 64 samples (oldest first) and return `[band][block]`. The same as calling
+    /// `step` for every block, but a band's coefficients are used for all the blocks in a row, so they stay in the
+    /// processor's cache.
+    pub fn analyse_blocks(&mut self, input: &[f64]) -> Vec<Vec<f64>> {
+        debug_assert_eq!(input.len() % BANDS, 0);
+        let nb = input.len() / BANDS;
+        let n = self.len;
+        let mut buf = Vec::with_capacity(n + input.len());
+        buf.extend_from_slice(&self.hist);
+        buf.extend_from_slice(input);
+        let mut out = vec![vec![0f64; nb]; BANDS];
+        for (band, o) in out.iter_mut().enumerate() {
+            let row = &self.resp[band];
+            for (b, v) in o.iter_mut().enumerate() {
+                *v = dot(row, &buf[(b + 1) * BANDS..(b + 1) * BANDS + n]);
+            }
+        }
+        self.hist.copy_from_slice(&buf[nb * BANDS..nb * BANDS + n]);
+        out
+    }
+}
+
 impl Default for Analysis64 {
     fn default() -> Self {
         Self::new()

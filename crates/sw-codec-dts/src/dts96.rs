@@ -202,22 +202,15 @@ impl Dts96Encoder {
             let bufs = &self.buf;
             self.ext.par_iter_mut().zip(resid.par_iter_mut()).enumerate().for_each(|(ch, (ana, out))| {
                 let src = &bufs[ch];
-                let mut bands = vec![vec![0f64; blocks]; BANDS64];
-                for b in 0..blocks {
-                    let start = (f_off + b * 64) as isize + delay as isize + 64 * shift + adj;
-                    let mut input = [0f64; 64];
-                    for (i, v) in input.iter_mut().enumerate() {
-                        let idx = start + i as isize - dropped as isize;
-                        if idx >= 0 && (idx as usize) < src.len() {
-                            *v = src[idx as usize];
-                        }
-                    }
-                    let mut o = [0f64; BANDS64];
-                    ana.step(&input, &mut o);
-                    for band in 0..BANDS64 {
-                        bands[band][b] = o[band];
-                    }
-                }
+                let start = f_off as isize + delay as isize + 64 * shift + adj - dropped as isize;
+                let input: Vec<f64> = (0..blocks * 64)
+                    .map(|i| {
+                        let idx = start + i as isize;
+                        if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] } else { 0.0 }
+                    })
+                    .collect();
+                let mut bands = ana.analyse_blocks(&input);
+                debug_assert_eq!(bands.len(), BANDS64);
                 // lower half: what the core did not capture
                 for band in 0..32 {
                     for b in 0..blocks {
