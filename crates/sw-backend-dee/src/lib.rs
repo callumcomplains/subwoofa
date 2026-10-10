@@ -145,6 +145,21 @@ impl Drc {
     }
 }
 
+impl std::str::FromStr for Drc {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Drc, String> {
+        Ok(match s {
+            "film_standard" => Drc::FilmStandard,
+            "film_light" => Drc::FilmLight,
+            "music_standard" => Drc::MusicStandard,
+            "music_light" => Drc::MusicLight,
+            "speech" => Drc::Speech,
+            "none" => Drc::None,
+            _ => return Err(format!("'{s}': use film_standard, film_light, music_standard, music_light, speech or none")),
+        })
+    }
+}
+
 /// One of TrueHD's lower presentations (8, 6 or 2 channels), derived from the Atmos mix.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Presentation {
@@ -387,6 +402,12 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
     if !job.input.is_file() {
         return Err(Error::Invalid(format!("{} does not exist", job.input.display())));
     }
+    // DEE runs from its own folder, so every path it is given must be absolute
+    let mut job = job.clone();
+    job.input = std::path::absolute(&job.input)?;
+    job.output = std::path::absolute(&job.output)?;
+    let job = &job;
+    let work_dir = &std::path::absolute(work_dir)?;
     std::fs::create_dir_all(work_dir)?;
     let temp = work_dir.join("temp");
     std::fs::create_dir_all(&temp)?;
@@ -492,6 +513,26 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
         p.is_file().then_some(p)
     };
     Ok(Finished { output: job.output.clone(), report, seconds: started.elapsed().as_secs_f64(), messages })
+}
+
+/// What DEE's `atmos_info` tool says about an Atmos master (beds, objects, length, whether it passes validation).
+pub fn master_info(dee: &Path, file: &Path) -> Result<String, Error> {
+    let tool = dee.with_file_name(if cfg!(windows) { "atmos_info.exe" } else { "atmos_info" });
+    if !tool.is_file() {
+        return Err(Error::Invalid("atmos_info was not found next to dee".into()));
+    }
+    let mut cmd = Command::new(&tool);
+    cmd.current_dir(dee.parent().unwrap_or(Path::new("."))).arg("--input").arg(std::path::absolute(file)?);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output()?;
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok(text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with("AtmosInfo Tool")).collect::<Vec<_>>().join("
+"))
 }
 
 /// "Overall progress: 37.5." in a framework line.

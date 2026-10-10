@@ -103,7 +103,64 @@ enum ToolsCmd {
 }
 
 #[derive(Subcommand)]
+enum AtmosCmd {
+    /// What the Dolby Encoding Engine's validator says about an Atmos master (beds, objects, length).
+    Info {
+        file: PathBuf,
+        /// Path of dee.exe (found automatically in the usual place)
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
+    /// Encode an Atmos master to TrueHD Atmos or Dolby Digital Plus Atmos with the Dolby Encoding Engine.
+    /// A multichannel WAV channel bed (up to 7.1.4) also works for Dolby Digital Plus Atmos.
+    Encode {
+        /// The master: .atmos (DAMF), an ADM BWF .wav, or a channel-bed .wav
+        input: PathBuf,
+        /// truehd or ddp
+        #[arg(long, default_value = "truehd")]
+        format: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Dolby Digital Plus data rate in kbps (384, 448, 576, 640, 768, 1024)
+        #[arg(long, default_value_t = 768)]
+        bitrate: u32,
+        /// TrueHD spatial clusters (12, 14, 16)
+        #[arg(long, default_value_t = 12)]
+        clusters: u8,
+        /// Dynamic range preset: film_standard, film_light, music_standard, music_light, speech, none
+        #[arg(long, default_value = "film_light")]
+        drc: String,
+        /// Dialogue level override, -31 to 0
+        #[arg(long)]
+        dialnorm: Option<i32>,
+        /// Timecode frame rate of the master (23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60)
+        #[arg(long)]
+        frame_rate: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        end: Option<String>,
+        /// Also write the 8-channel presentation (TrueHD)
+        #[arg(long)]
+        presentation_8ch: bool,
+        /// Also write the 6-channel presentation (TrueHD)
+        #[arg(long)]
+        presentation_6ch: bool,
+        /// Measure loudness (1770-4, 1770-3, 1770-2, 1770-1, LeqA)
+        #[arg(long)]
+        metering: Option<String>,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
+    /// Dolby Atmos through the Dolby Encoding Engine (a copy you are licensed to use).
+    Atmos {
+        #[command(subcommand)]
+        op: AtmosCmd,
+    },
     /// Check a stream file: structure, checksums and (with --deep) a full decode, statistics and header dumps.
     Verify {
         file: PathBuf,
@@ -269,6 +326,7 @@ fn run() -> Result<(), String> {
         }
         Cmd::Tools { op } => run_tools(op)?,
         Cmd::Verify { file, deep, json, ffmpeg } => verify_cmd(&file, deep, json, ffmpeg)?,
+        Cmd::Atmos { op } => run_atmos(op)?,
         Cmd::StreamInfo { path, count, first } => {
             let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             print!("{}", sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary());
@@ -470,6 +528,60 @@ fn default_cap(stream: StreamType) -> u32 {
         StreamType::DtsDigitalSurround => 1509,
         _ => u32::MAX,
     }
+}
+
+fn run_atmos(op: AtmosCmd) -> Result<(), String> {
+    use sw_backend_dee as dee;
+    let find = |p: Option<PathBuf>| dee::find_dee(p.as_deref()).ok_or_else(|| dee::Error::NotFound.to_string());
+    match op {
+        AtmosCmd::Info { file, dee: path } => {
+            let d = find(path)?;
+            println!("{}", dee::master_info(&d, &file).map_err(|e| e.to_string())?);
+        }
+        AtmosCmd::Encode { input, format, output, bitrate, clusters, drc, dialnorm, frame_rate, start, end, presentation_8ch, presentation_6ch, metering, dee: path } => {
+            let d = find(path)?;
+            let drc: dee::Drc = drc.parse()?;
+            let target = match format.as_str() {
+                "truehd" | "thd" => {
+                    let pres = |on: bool| on.then_some(dee::Presentation { drc, surround_3db: true });
+                    dee::Target::TrueHd(dee::TrueHdOptions { drc, spatial_clusters: clusters, presentation_8ch: pres(presentation_8ch), presentation_6ch: pres(presentation_6ch), ..Default::default() })
+                }
+                "ddp" | "ec3" | "eac3" => dee::Target::Ddp(dee::DdpOptions { data_rate_kbps: bitrate, drc_line: drc, drc_rf: drc, ..Default::default() }),
+                other => return Err(format!("unknown format '{other}': use truehd or ddp")),
+            };
+            let mut job = dee::AtmosJob::new(&input, &output, target);
+            job.custom_dialnorm = dialnorm;
+            job.frame_rate = frame_rate;
+            job.start = start;
+            job.end = end;
+            job.metering = metering;
+            let work = std::env::temp_dir().join(format!("subwoofa_dee_{}", std::process::id()));
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let mut shown = -1i32;
+            let done = dee::run(
+                &d,
+                &job,
+                &work,
+                &mut |p| {
+                    let pct = (p * 100.0) as i32;
+                    if pct != shown {
+                        shown = pct;
+                        eprint!("\r{pct:3}%");
+                    }
+                },
+                &mut |_| {},
+                &cancel,
+            )
+            .map_err(|e| e.to_string())?;
+            eprintln!();
+            let _ = std::fs::remove_dir_all(&work);
+            println!("wrote {} in {:.1} s", done.output.display(), done.seconds);
+            for m in done.messages.iter().filter(|m| m.contains("WARNING")) {
+                println!("{m}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verify_cmd(file: &std::path::Path, deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
