@@ -34,7 +34,4 @@ impl<'a> Bits<'a> {
             self.over = true;
         }
     }
-    pub fn left(&self) -> usize {
-        (self.d.len() * 8).saturating_sub(self.pos)
-    }
 }

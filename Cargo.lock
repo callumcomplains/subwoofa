@@ -3083,6 +3083,7 @@ dependencies = [
  "sw-pcm",
  "sw-queue",
  "sw-tools",
+ "sw-verify",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

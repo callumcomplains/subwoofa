@@ -209,5 +209,30 @@ body.tools-mode .tools { grid-row: 2 / span 4; }
 .plainlist li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tLog { margin: 0; min-height: 90px; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 12px var(--mono); border-top: 1px solid var(--rule); padding-top: 8px; }
 
+/* Verify */
+.verify { grid-template-columns: minmax(0, 980px); }
+.verify-bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.verify-bar .opt { flex: 1; min-width: 320px; }
+.verdict { font: 600 15px var(--label); letter-spacing: .12em; text-transform: uppercase; padding: 10px 14px; border: 1px solid var(--rule-hi); border-left-width: 5px; margin-bottom: 10px; }
+.verdict.pass { border-color: var(--ok); color: var(--ok); }
+.verdict.fail { border-color: var(--bad); color: var(--bad); }
+.verdict small { display: block; font: 12px var(--label); letter-spacing: 0; text-transform: none; color: var(--dim); margin-top: 2px; }
+#vResult h2 { margin: 14px 0 6px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font: 12px var(--mono); }
+.checks li { display: grid; grid-template-columns: 5.2ch minmax(14ch, 38ch) 1fr; gap: 10px; align-items: baseline; padding: 2px 0; border-bottom: 1px solid var(--rule); }
+.checks li.finding { grid-template-columns: 5.2ch 1fr; }
+.checks .tag { font-weight: 700; letter-spacing: .06em; }
+.checks .pass .tag { color: var(--ok); } .checks .fail .tag { color: var(--bad); } .checks .warn .tag { color: var(--lamp); }
+.checks .skipped .tag, .checks .info .tag { color: var(--dim); }
+.checks .detail { color: var(--dim); overflow-wrap: anywhere; }
+.checks .fail .detail { color: var(--ink); }
+.checks .at { color: var(--dim); }
+#vSections details { border-top: 1px solid var(--rule); padding: 6px 0; }
+#vSections summary { cursor: pointer; font: 600 12px var(--label); letter-spacing: .08em; text-transform: uppercase; color: var(--lamp); }
+#vSections dl { margin-top: 8px; }
+#vLog { margin: 0; min-height: 40px; white-space: pre-wrap; font: 12px var(--mono); }
+#vLog.bad { color: var(--bad); }
+body.tools-mode .verify { grid-row: 2 / span 4; }
+
 /* the hidden attribute must win over component display rules */
 [hidden] { display: none !important; }

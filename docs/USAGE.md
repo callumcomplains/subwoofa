@@ -62,7 +62,9 @@ subwoofa tools trim Film.dtshd -o cut.dtshd --start 60 --end 120
 subwoofa tools split Film.dtshd -o part --at 600 1200
 subwoofa tools append a.dtshd b.dtshd -o joined.dtshd
 subwoofa tools replace Film.dtshd fix.dtshd --at 3600 -o Film_fixed.dtshd
-subwoofa tools verify Film.dtshd        # decodes everything, reports problems and the PCM MD5
+subwoofa verify Film.dtshd              # structure, checksums, headers and the container (seconds)
+subwoofa verify Film.dtshd --deep       # also decodes everything, measures the audio, lists every header
+subwoofa verify Film.ac3 --json         # the report as JSON (the exit code is 0 only if it passed)
 ```
 
 `--start` and `--duration` (seconds) encode an excerpt, which is the quickest way to try settings.
@@ -82,3 +84,34 @@ subwoofa tools verify Film.dtshd        # decodes everything, reports problems a
 
 Every DTS-HD file Subwoofa writes can be checked with DTS's own `DTSHDVerify.exe` (if installed) and decoded
 by FFmpeg; lossless streams decode to exactly the source samples.
+
+
+## Verify
+
+`subwoofa verify <file>` (or the **Verify** mode in the app) reads a file the way a decoder would parse it and says what
+is wrong with it. It does not need another program for the simple check.
+
+**Simple verification** (a few seconds even for a feature film)
+- AC-3 / E-AC-3: sync words, frame sizes, header values, both checksums (CRC1 and CRC2) of every frame, steady parameters,
+  complete last frame.
+- DTS / DTS-HD: core frame headers (and the extension headers the core announces), extension substream headers with their
+  checksums, the sync word of every component (XBR, XXCH, X96, LBR, XLL), the lossless (XLL) common and channel set header
+  checksums, the access unit structure, and for a `.dtshd` file the container: required chunks, frame count, programme
+  length and sample rate against the stream, the frame offset table, the timecode and the stored silent frame (which is
+  what lets the DTS tools add silence).
+- TrueHD / MLP: access unit lengths, the parity nibble, the major sync checksum, every substream's parity and checksum
+  byte, the substream directory, input timing, restart points.
+
+**Deep verification** adds
+- a full decode with FFmpeg under strict error detection (anything the decoder complains about is listed), the decoded
+  length against what the headers say, and the MD5 of the decoded 24-bit audio;
+- measurements of the decoded audio: per-channel peak, RMS, DC offset, unused low bits, full-scale samples, channels that
+  are silent or identical, dropouts inside the programme;
+- bit-rate statistics (sizes, average, peak over one second);
+- for DTS-HD with a core: the core-only decode against the lossless decode (alignment and SNR);
+- DTS's own `DTSHDVerify` as a second opinion when it is installed;
+- a dump of every header in the first frame (core, extension substream, XLL, container chunks, major sync...).
+
+Limits worth knowing: the DTS core format has no checksum over its audio data, so a flipped bit inside the audio of a
+plain DTS file is only found by decoding (deep). The structure check proves the file is well-formed, not that the audio
+is what you meant to encode; for lossless streams the encoder's own auto-verify compares the decode with the source.

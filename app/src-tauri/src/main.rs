@@ -302,11 +302,20 @@ async fn tools_add_silence(path: String, output: String, head: f64, tail: f64) -
     .await
 }
 
+#[derive(serde::Serialize)]
+struct VerifyOut {
+    report: sw_verify::Report,
+    text: String,
+}
+
+/// Native verification of a stream file; `deep` adds the decode, statistics and header dumps.
 #[tauri::command]
-async fn tools_verify(path: String) -> Result<sw_tools::VerifyReport, String> {
+async fn verify_file(path: String, deep: bool) -> Result<VerifyOut, String> {
     blocking(move || {
-        let ff = ff::find_ffmpeg().ok_or("ffmpeg was not found, and it does the decoding for the check")?;
-        sw_tools::verify(std::path::Path::new(&path), &ff).map_err(|e| e.to_string())
+        let opt = sw_verify::Options { deep, ffmpeg: ff::find_ffmpeg(), reference_verifier: None };
+        let report = sw_verify::verify(std::path::Path::new(&path), &opt).map_err(|e| e.to_string())?;
+        let text = report.to_text();
+        Ok(VerifyOut { report, text })
     })
     .await
 }
@@ -458,7 +467,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, multichannel_pick, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, tools_verify
+            tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");

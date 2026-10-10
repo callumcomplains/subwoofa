@@ -601,7 +601,6 @@ struct Walk {
     junk_events: u64,
     pad: u64,
     core_samples: u64,
-    exss_secs: Option<f64>,
     frame_bytes: Vec<u32>,
     frame_samples: Vec<u32>,
     frame_starts: Vec<u64>,

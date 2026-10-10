@@ -15,6 +15,7 @@
   <nav class="modes" aria-label="Mode">
     <button id="modeEncode" aria-pressed="true">Encode</button>
     <button id="modeTools" aria-pressed="false">StreamTools</button>
+    <button id="modeVerify" aria-pressed="false">Verify</button>
   </nav>
   <div class="bar-right">
     <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
@@ -189,12 +190,36 @@
         </div>
       </div>
       <div class="op" data-op="verify" hidden>
-        <p class="hint">Decodes the whole stream and reports anything the decoder complains about, with an MD5 of the decoded audio.</p>
-        <div class="op-row"><button id="tVerify" class="go small">Verify</button></div>
+        <p class="hint">Checks the open stream: structure and checksums, and with deep verification a full decode, measurements and every header.</p>
+        <div class="op-row"><button id="tVerify" class="go small">Open in Verify</button></div>
       </div>
       <pre id="tLog" class="selectable">Open a stream to begin.</pre>
     </div>
   </div>
+</section>
+
+<section id="verify" class="tools verify" aria-label="Verify" hidden>
+  <div class="tools-open">
+    <button id="vOpen">Open file…</button>
+    <input id="vPath" readonly placeholder="An encoded file: .ac3 .eac3 .dts .dtshd .thd .mlp (drop one here)">
+  </div>
+  <div class="verify-bar">
+    <label class="opt inline"><input type="checkbox" id="vDeep"><span><b>Deep verification</b><small>Also decodes the whole file, measures the decoded audio, asks the DTS verifier if it is installed, and lists every header in the stream. Takes longer.</small></span></label>
+    <button id="vRun" class="go small">Verify</button>
+    <button id="vSave" class="plain" disabled>Save report…</button>
+  </div>
+  <div id="vResult" hidden>
+    <div id="vVerdict" class="verdict" role="status"></div>
+    <dl id="vSummary" class="kv selectable"></dl>
+    <h2>Checks</h2>
+    <ul id="vChecks" class="checks selectable"></ul>
+    <div id="vFindingsWrap" hidden>
+      <h2>Findings</h2>
+      <ul id="vFindings" class="checks selectable"></ul>
+    </div>
+    <div id="vSections"></div>
+  </div>
+  <pre id="vLog" class="selectable">Choose a file to verify.</pre>
 </section>
 
 <footer class="out">
