@@ -111,6 +111,17 @@ enum AtmosCmd {
         #[arg(long)]
         dee: Option<PathBuf>,
     },
+    /// Convert an Atmos master between ADM BWF (.wav), DAMF (.atmos) and IAB (.mxf).
+    Convert {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// adm, damf or mxf_iab
+        #[arg(long, default_value = "adm")]
+        format: String,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
     /// Encode an Atmos master to TrueHD Atmos or Dolby Digital Plus Atmos with the Dolby Encoding Engine.
     /// A multichannel WAV channel bed (up to 7.1.4) also works for Dolby Digital Plus Atmos.
     Encode {
@@ -537,6 +548,14 @@ fn run_atmos(op: AtmosCmd) -> Result<(), String> {
         AtmosCmd::Info { file, dee: path } => {
             let d = find(path)?;
             println!("{}", dee::master_info(&d, &file).map_err(|e| e.to_string())?);
+        }
+        AtmosCmd::Convert { input, output, format, dee: path } => {
+            let d = find(path)?;
+            let job = dee::AtmosJob::new(&input, &output, dee::Target::Convert { format });
+            let work = std::env::temp_dir().join(format!("subwoofa_dee_{}", std::process::id()));
+            let done = dee::run(&d, &job, &work, &mut |_| {}, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_dir_all(&work);
+            println!("wrote {} in {:.1} s", done.output.display(), done.seconds);
         }
         AtmosCmd::Encode { input, format, output, bitrate, clusters, drc, dialnorm, frame_rate, start, end, presentation_8ch, presentation_6ch, metering, dee: path } => {
             let d = find(path)?;

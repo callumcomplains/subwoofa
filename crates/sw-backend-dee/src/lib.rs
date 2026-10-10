@@ -210,10 +210,12 @@ impl Default for DdpOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "format", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
     TrueHd(TrueHdOptions),
     Ddp(DdpOptions),
+    /// Convert a master between `adm`, `damf` and `mxf_iab` (no encoding).
+    Convert { format: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,17 +280,13 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     }
     let mut x = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<job_config>\n");
     // ---- input
+    // every Dolby-authored master (ADM BWF, DAMF, IAB) goes in as an Atmos mezzanine, which is the input type
+    // the Atmos encoders and the converter connect to; only a plain channel bed is a WAV
     let (tag, extra) = match kind {
         InputKind::Wav => ("wav", String::new()),
-        InputKind::Adm => ("adm", String::new()),
-        InputKind::Damf => ("damf", String::new()),
-        InputKind::AtmosMezz => ("atmos_mezz", String::new()),
+        InputKind::Adm | InputKind::Damf | InputKind::AtmosMezz => ("atmos_mezz", String::new()),
     };
-    let mut fname = el("file_name", file);
-    if kind == InputKind::Adm || kind == InputKind::AtmosMezz {
-        // these two take a list of files
-        fname = el("file_name", file);
-    }
+    let fname = el("file_name", file);
     let rate = job.frame_rate.as_ref().map(|r| el("timecode_frame_rate", r)).unwrap_or_default();
     x.push_str(&format!("<input><audio><{tag} version=\"1\">{fname}{rate}{extra}{}</{tag}></audio></input>\n", storage(dir)));
     // ---- filter
@@ -309,6 +307,18 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
         common.push_str(&el("append_silence_duration", s));
     }
     let filter = match &job.target {
+        Target::Convert { format } => {
+            if !["adm", "damf", "mxf_iab"].contains(&format.as_str()) {
+                return Err(Error::Invalid(format!("conversion target '{format}': use adm, damf or mxf_iab")));
+            }
+            if kind == InputKind::Wav {
+                return Err(Error::Invalid("a plain channel WAV is not an Atmos master".into()));
+            }
+            let mut f = String::new();
+            f.push_str(&el("target_format", format));
+            f.push_str(&common);
+            format!("<convert_atmos_mezz version=\"2\">{f}</convert_atmos_mezz>")
+        }
         Target::TrueHd(o) => {
             if ![12u8, 14, 16].contains(&o.spatial_clusters) {
                 return Err(Error::Invalid("spatial clusters must be 12, 14 or 16".into()));
@@ -365,11 +375,9 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
             if let Some(d) = job.custom_dialnorm {
                 f.push_str(&el("custom_dialnorm", &d.clamp(-31, 0).to_string()));
             }
-            // the three filters share one syntax; which one reads which input is DEE's rule
             match kind {
                 InputKind::Wav => format!("<pcm_to_atmos_ddp version=\"3\">{f}</pcm_to_atmos_ddp>"),
-                InputKind::AtmosMezz => format!("<atmos_mezz_to_atmos_ddp version=\"3\">{f}</atmos_mezz_to_atmos_ddp>"),
-                InputKind::Adm | InputKind::Damf => format!("<encode_to_atmos_ddp version=\"1\">{f}</encode_to_atmos_ddp>"),
+                _ => format!("<atmos_mezz_to_atmos_ddp version=\"3\">{f}</atmos_mezz_to_atmos_ddp>"),
             }
         }
     };
@@ -380,6 +388,7 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     let out_tag = match job.target {
         Target::TrueHd(_) => "mlp",
         Target::Ddp(_) => "ec3",
+        Target::Convert { .. } => "atmos_mezz",
     };
     x.push_str(&format!("<output><{out_tag} version=\"1\">{}{}</{out_tag}></output>\n", el("file_name", out_file), storage(out_dir)));
     x.push_str(&format!("<misc><temp_dir><clean_temp>true</clean_temp>{}</temp_dir></misc>\n</job_config>\n", el("path", &path_str(temp_dir))));
@@ -567,10 +576,14 @@ mod tests {
         let wav = profile_xml(&ddp_job(InputKind::Wav), temp).unwrap();
         assert!(wav.contains("<pcm_to_atmos_ddp version=\"3\">") && wav.contains("<wav version=\"1\">") && wav.contains("<ec3 version=\"1\">"));
         assert!(wav.contains("<data_rate>768</data_rate>"));
-        let damf = profile_xml(&ddp_job(InputKind::Damf), temp).unwrap();
-        assert!(damf.contains("<encode_to_atmos_ddp version=\"1\">") && damf.contains("<damf version=\"1\">"));
-        let mezz = profile_xml(&ddp_job(InputKind::AtmosMezz), temp).unwrap();
-        assert!(mezz.contains("<atmos_mezz_to_atmos_ddp version=\"3\">"));
+        // masters of every kind go in as Atmos mezzanines
+        for kind in [InputKind::Damf, InputKind::Adm, InputKind::AtmosMezz] {
+            let x = profile_xml(&ddp_job(kind), temp).unwrap();
+            assert!(x.contains("<atmos_mezz_to_atmos_ddp version=\"3\">") && x.contains("<atmos_mezz version=\"1\">"), "{kind:?}");
+        }
+        let c = AtmosJob::new("D:/m/a.atmos", "D:/o/a.wav", Target::Convert { format: "adm".into() });
+        let x = profile_xml(&c, temp).unwrap();
+        assert!(x.contains("<convert_atmos_mezz version=\"2\"><target_format>adm</target_format>") && x.contains("<atmos_mezz version=\"1\"><file_name>a.wav"), "{x}");
     }
 
     #[test]
