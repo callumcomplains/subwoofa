@@ -46,7 +46,7 @@ fn xll_bit(c: Channel) -> u32 {
 }
 
 /// Loudspeaker group bit of the extension substream's activity mask (Table 7-10).
-fn exss_bit(c: Channel) -> u32 {
+pub fn exss_bit(c: Channel) -> u32 {
     use Channel::*;
     match c {
         C => 0x1,

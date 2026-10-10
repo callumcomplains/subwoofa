@@ -17,7 +17,7 @@ pub struct Dts96Config {
 }
 
 /// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
-const HALF: usize = 191;
+pub(crate) const HALF: usize = 191;
 
 fn bessel_i0(x: f64) -> f64 {
     let mut sum = 1.0;
@@ -33,7 +33,7 @@ fn bessel_i0(x: f64) -> f64 {
     sum
 }
 
-fn decimator_taps(frac: f64) -> Vec<f64> {
+pub(crate) fn decimator_taps(frac: f64) -> Vec<f64> {
     let fc = 22_300.0 / 96_000.0;
     let beta = 9.0;
     let mut h = Vec::with_capacity(2 * HALF + 1);

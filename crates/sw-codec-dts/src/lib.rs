@@ -21,6 +21,7 @@ pub mod ma_native;
 pub mod native;
 pub mod native96;
 pub mod native_xxch;
+pub mod hra96;
 pub mod qmf;
 pub mod qmf64;
 pub mod tables;

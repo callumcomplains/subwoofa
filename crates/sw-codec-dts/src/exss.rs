@@ -58,9 +58,19 @@ pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
     exss_build(p, None, None, Some(lbr), None)
 }
 
+/// Extension substream frame with XXCH (the extra channels) and X96 (the 96 kHz band of every channel); the
+/// core stays in the core substream.
+pub fn exss_frame_xxch_x96(p: &ExssParams, xxch: &[u8], x96: &[u8]) -> Vec<u8> {
+    exss_build_x(p, None, None, None, Some(xxch), Some(x96))
+}
+
 fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>, xxch: Option<&[u8]>) -> Vec<u8> {
+    exss_build_x(p, xbr, xll, lbr, xxch, None)
+}
+
+fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>, xxch: Option<&[u8]>, x96: Option<&[u8]>) -> Vec<u8> {
     let nb4f = 16u32;
-    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len()) + xxch.map_or(0, |x| x.len());
+    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len()) + xxch.map_or(0, |x| x.len()) + x96.map_or(0, |x| x.len());
     // ---- asset descriptor (its own byte size)
     let mut a = BitWriter::new();
     a.put(0, 9); // size placeholder
@@ -107,15 +117,18 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         a.put(l.len() as u32 - 1, 14);
         a.put(1, 1); // LBR sync word present in every frame
         a.put(0, 2); // sync distance 0 frames
-    } else if p.with_core || xbr.is_some() || xxch.is_some() {
+    } else if p.with_core || xbr.is_some() || xxch.is_some() || x96.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if x96.is_some() { 0x080 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
         if let Some(b) = xbr {
             a.put(b.len() as u32 - 1, 14);
         }
         if let Some(x) = xxch {
             a.put(x.len() as u32 - 1, 14);
+        }
+        if let Some(x) = x96 {
+            a.put(x.len() as u32 - 1, 12);
         }
         if let Some(x) = xll {
             write_xll(&mut a, x);
@@ -135,7 +148,9 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         a.put(0b0100101, 7);
     } else {
         a.put(0, 1); // decode in primary decoder
-        a.put(0, 1); // no revision 2 DRC
+        if xll.is_some() {
+            a.put(0, 1); // no revision 2 DRC
+        }
     }
     a.align(8);
     let mut ab = a.into_bytes();
@@ -187,7 +202,14 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
     for b in &ab {
         h.put(*b as u32, 8);
     }
-    h.put(0, 1); // no backward compatible core in an extension
+    if p.with_core {
+        // the backward compatible core sits in the core substream (substream 0, asset 0), as in the commercial streams
+        h.put(1, 1);
+        h.put(0, 2);
+        h.put(0, 3);
+    } else {
+        h.put(0, 1); // no backward compatible core
+    }
     h.align(8);
     let mut hb = h.into_bytes();
     assert_eq!(hb.len() + 2, hsize);
@@ -197,6 +219,9 @@ fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Optio
         hb.extend_from_slice(x);
     }
     if let Some(x) = xxch {
+        hb.extend_from_slice(x);
+    }
+    if let Some(x) = x96 {
         hb.extend_from_slice(x);
     }
     if let Some(x) = xll {

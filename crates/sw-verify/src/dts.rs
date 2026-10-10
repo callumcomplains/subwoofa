@@ -23,7 +23,7 @@ const AMODE_NAME: [&str; 16] = ["C", "C+C (dual mono)", "L R", "L+R (sum/differe
 const PCM_BITS: [u32; 8] = [16, 16, 20, 20, 0, 24, 24, 0];
 const EXT_AUDIO: [&str; 8] = ["XCH (channel extension)", "reserved", "X96 (96 kHz extension)", "XCH + X96", "reserved", "reserved", "XXCH (extra channels)", "reserved"];
 /// Speaker activity mask of the extension substream: one bit per speaker or pair of speakers.
-const SPEAKERS: [(&str, u32); 16] = [("C", 1), ("L R", 2), ("Ls Rs", 2), ("LFE", 1), ("Cs", 1), ("Lh Rh", 2), ("Lsr Rsr", 2), ("Ch", 1), ("Oh", 1), ("Lss Rss", 2), ("Lw Rw", 2), ("Lhs Rhs", 2), ("Chr", 1), ("Lhr Rhr", 2), ("Lc Rc", 2), ("LFE2", 1)];
+const SPEAKERS: [(&str, u32); 16] = [("C", 1), ("L R", 2), ("Ls Rs", 2), ("LFE", 1), ("Cs", 1), ("Lh Rh", 2), ("Lsr Rsr", 2), ("Ch", 1), ("Oh", 1), ("Lc Rc", 2), ("Lw Rw", 2), ("Lss Rss", 2), ("LFE2", 1), ("Lhs Rhs", 2), ("Chr", 1), ("Lhr Rhr", 2)];
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Core {
@@ -1335,7 +1335,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
         }
         if let Some(tc) = &timecode {
             let clock = if tc.len() >= 4 { u32::from_be_bytes(tc[..4].try_into().unwrap()) } else { 0 };
-            let okc = tc.len() >= 8 && clock == 48_000 && (1..=7).contains(&tc[4]);
+            let okc = tc.len() >= 8 && (clock == 48_000 || clock >= 44_100 && clock % 44_100 == 0 || clock % 48_000 == 0) && (1..=7).contains(&tc[4]);
             c.check("Timecode chunk", if okc { Status::Pass } else { Status::Warn }, format!("clock {clock} Hz, frame rate code {}", tc.get(4).copied().unwrap_or(0)));
         }
         if let Some((off, size)) = blackout {

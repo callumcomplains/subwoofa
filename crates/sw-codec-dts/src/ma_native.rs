@@ -110,6 +110,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         i.core_kbps = core_bitrate_kbps.unwrap_or(0);
         i.core_payload = core_payload;
         i.codec_delay = lead as u16;
+        if core_bitrate_kbps.is_some() {
+            // CORESSMD describes the core: 48 kHz and the speakers of the base channel set
+            i.core_rate = Some(48_000);
+            i.core_mask = Some(map.order[..map.set_sizes[0]].iter().fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16);
+        }
         i
     });
     let mut file = StreamOut::create(req.output, info)?;

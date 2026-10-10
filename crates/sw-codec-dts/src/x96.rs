@@ -109,43 +109,91 @@ impl X96Encoder {
     /// `residual[ch][band 0..64][block]`; `total` is the size of the whole X96 block in bytes (it is padded to
     /// that size).
     pub fn encode(&self, residual: &[Vec<Vec<f64>>], total: usize) -> Vec<u8> {
-        let cands: Vec<Vec<Vec<Cand>>> = {
-            use rayon::prelude::*;
-            residual.par_iter().map(|c| c.par_iter().map(|b| candidates(b)).collect()).collect()
-        };
-        let budget = total;
-        let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p) <= budget;
-        let mut lo = 1e-9f64;
-        let mut hi = 1e15f64;
-        let all = self.pick(&cands, lo);
-        let best = if fits(&all) {
-            all
-        } else {
-            let mut best = self.pick(&cands, hi);
-            for _ in 0..90 {
-                let mid = (lo * hi).sqrt();
-                let p = self.pick(&cands, mid);
-                if fits(&p) {
-                    hi = mid;
-                    best = p;
-                } else {
-                    lo = mid;
-                }
-                if hi / lo < 1.001 {
-                    break;
-                }
-            }
-            best
-        };
-        let mut bytes = self.pack(&cands, &best);
+        let cands = self.candidates_for(residual);
+        let best = self.solve(&cands, &|p| self.size(&cands, p), total);
+        let mut bytes = self.pack(&cands, &best, false);
         assert!(bytes.len() <= total, "X96 overflow: {} > {}", bytes.len(), total);
         bytes.resize(total, 0);
         // FSIZE96 covers the whole block
-        let w = BitWriter::new();
-        let _ = w;
         bytes[4] = ((total - 1) >> 4) as u8;
         bytes[5] = (((total - 1) & 0xF) as u8) << 4 | (bytes[5] & 0xF);
         bytes
+    }
+
+    /// The X96 frame of an extension substream: a frame header and one channel set per group of channels
+    /// (`sets[i][ch][band 0..64][block]`), `total` bytes in all. Bits are shared out over all channels together.
+    pub fn encode_exss(&self, sets: &[&[Vec<Vec<f64>>]], total: usize) -> Vec<u8> {
+        let flat: Vec<Vec<Vec<f64>>> = sets.iter().flat_map(|s| s.iter().cloned()).collect();
+        let cands = self.candidates_for(&flat);
+        let mut bounds = vec![0usize];
+        for s in sets {
+            bounds.push(bounds.last().unwrap() + s.len());
+        }
+        let hdr = frame_header_bytes(sets.len());
+        let size = |p: &Vec<Vec<usize>>| -> usize {
+            hdr + (0..sets.len()).map(|i| self.size_set(&cands[bounds[i]..bounds[i + 1]], &p[bounds[i]..bounds[i + 1]], true)).sum::<usize>()
+        };
+        let best = self.solve(&cands, &size, total);
+        let mut parts: Vec<Vec<u8>> = (0..sets.len()).map(|i| self.pack(&cands[bounds[i]..bounds[i + 1]], &best[bounds[i]..bounds[i + 1]], true)).collect();
+        let used: usize = hdr + parts.iter().map(|p| p.len()).sum::<usize>();
+        assert!(used <= total, "X96 overflow: {used} > {total}");
+        // whatever is left pads the last channel set
+        let last = parts.len() - 1;
+        let pad = total - used;
+        let new_len = parts[last].len() + pad;
+        parts[last].resize(new_len, 0);
+        let mut w = BitWriter::new();
+        w.put(SYNC_X96, 32);
+        w.put(hdr as u32 - 1, 6);
+        w.put(1, 4); // revision 1
+        w.put(1, 1); // channel set headers carry a CRC
+        w.put(sets.len() as u32 - 1, 2);
+        for p in &parts {
+            w.put(p.len() as u32 - 1, 12);
+        }
+        for s in sets {
+            w.put(s.len() as u32 - 1, 3);
+        }
+        w.align(8);
+        let mut out = w.into_bytes();
+        let crc = crate::xll::crc16(&out[4..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+        assert_eq!(out.len(), hdr);
+        for p in parts {
+            out.extend_from_slice(&p);
+        }
+        out
+    }
+
+    fn candidates_for(&self, residual: &[Vec<Vec<f64>>]) -> Vec<Vec<Vec<Cand>>> {
+        use rayon::prelude::*;
+        residual.par_iter().map(|c| c.par_iter().map(|b| candidates(b)).collect()).collect()
+    }
+
+    /// Lagrangian search for the choices that fit `budget` bytes (everything at full quality when it fits).
+    fn solve(&self, cands: &[Vec<Vec<Cand>>], size: &dyn Fn(&Vec<Vec<usize>>) -> usize, budget: usize) -> Vec<Vec<usize>> {
+        let fits = |p: &Vec<Vec<usize>>| size(p) <= budget;
+        let mut lo = 1e-9f64;
+        let mut hi = 1e15f64;
+        let all = self.pick(cands, lo);
+        if fits(&all) {
+            return all;
+        }
+        let mut best = self.pick(cands, hi);
+        for _ in 0..90 {
+            let mid = (lo * hi).sqrt();
+            let p = self.pick(cands, mid);
+            if fits(&p) {
+                hi = mid;
+                best = p;
+            } else {
+                lo = mid;
+            }
+            if hi / lo < 1.001 {
+                break;
+            }
+        }
+        best
     }
 
     fn pick(&self, cands: &[Vec<Vec<Cand>>], lambda: f64) -> Vec<Vec<usize>> {
@@ -187,14 +235,15 @@ impl X96Encoder {
     }
 
     fn size(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> usize {
+        self.size_set(cands, pick, false)
+    }
+
+    /// Bytes of one channel set (core form: the whole X96 block; extension form: header and data).
+    fn size_set(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], exss: bool) -> usize {
         let lay = self.layout(cands, pick);
         let nch = cands.len();
         let abits_bits = if lay.high_res { 4 } else { 3 };
-        let mut bits = 32 + 12 + 4;
-        bits += 1 + 5 + nch * (6 + 3 + 3 + 3);
-        for n in 0..(6 + 4 * lay.high_res as usize) {
-            bits += SEL_BITS[n] as usize * nch;
-        }
+        let mut bits = if exss { 0 } else { 32 + 12 + 4 + header_bits(&lay, nch) };
         for ch in 0..nch {
             for b in lay.sbs..lay.nsub[ch] {
                 let c = &cands[ch][b][pick[ch][b]];
@@ -202,17 +251,25 @@ impl X96Encoder {
             }
         }
         bits += 16; // DSYNC
-        bits.div_ceil(8)
+        if exss {
+            set_header_bytes(&lay, nch) + bits.div_ceil(8)
+        } else {
+            bits.div_ceil(8)
+        }
     }
 
-    fn pack(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> Vec<u8> {
+    fn pack(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], exss: bool) -> Vec<u8> {
         let lay = self.layout(cands, pick);
         let nch = cands.len();
         let abits_bits = if lay.high_res { 4 } else { 3 };
         let mut w = BitWriter::new();
-        w.put(SYNC_X96, 32);
-        w.put(0, 12); // FSIZE96, patched by the caller
-        w.put(1, 4); // revision 1
+        if exss {
+            w.put(set_header_bytes(&lay, nch) as u32 - 1, 7);
+        } else {
+            w.put(SYNC_X96, 32);
+            w.put(0, 12); // FSIZE96, patched by the caller
+            w.put(1, 4); // revision 1
+        }
         w.put(u32::from(lay.high_res), 1);
         w.put(lay.sbs as u32, 5);
         for ch in 0..nch {
@@ -231,6 +288,15 @@ impl X96Encoder {
             for _ in 0..nch {
                 w.put(GROUP_SIZE[n], SEL_BITS[n]); // block codes / plain codes, no Huffman
             }
+        }
+        let mut head = Vec::new();
+        if exss {
+            // the channel set header is a whole number of bytes ending in its CRC
+            w.align(8);
+            head = w.into_bytes();
+            let crc = crate::xll::crc16(&head);
+            head.extend_from_slice(&crc.to_be_bytes());
+            w = BitWriter::new();
         }
         // subframe: side information
         for ch in 0..nch {
@@ -280,6 +346,26 @@ impl X96Encoder {
             }
         }
         w.put(0xFFFF, 16);
-        w.into_bytes()
+        head.extend_from_slice(&w.into_bytes());
+        head
     }
+}
+
+/// Bits of the channel set header's fixed part (core form, from the high-resolution flag on).
+fn header_bits(lay: &Layout, nch: usize) -> usize {
+    let mut bits = 1 + 5 + nch * (6 + 3 + 3 + 3);
+    for n in 0..(6 + 4 * lay.high_res as usize) {
+        bits += SEL_BITS[n] as usize * nch;
+    }
+    bits
+}
+
+/// Bytes of a channel set header in an extension substream: length, the fields above, padding, CRC16.
+fn set_header_bytes(lay: &Layout, nch: usize) -> usize {
+    (7 + header_bits(lay, nch) + 16).div_ceil(8)
+}
+
+/// Bytes of the X96 frame header in an extension substream for `nsets` channel sets.
+fn frame_header_bytes(nsets: usize) -> usize {
+    (32 + 6 + 4 + 1 + 2 + 15 * nsets + 16).div_ceil(8)
 }

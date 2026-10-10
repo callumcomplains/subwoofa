@@ -98,11 +98,15 @@ pub struct DtsHdInfo {
     pub start: Position,
     /// Samples the decoder's output lags the source by (players that read the field drop them).
     pub codec_delay: u16,
+    /// What CORESSMD says about the core when it is not the stream's own rate and speakers: its sample rate and
+    /// speaker activity mask.
+    pub core_rate: Option<u32>,
+    pub core_mask: Option<u16>,
 }
 
 impl DtsHdInfo {
     pub fn new(sample_rate: u32, samples_per_frame: u16, total_samples: u64, ch_mask: u16, kind: Kind) -> DtsHdInfo {
-        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), codec_delay: 0 }
+        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), codec_delay: 0, core_rate: None, core_mask: None }
     }
 }
 
@@ -130,9 +134,9 @@ fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: 
     chunk(&mut out, b"DTSHDHDR", &hdr);
     if info.kind != Kind::ExtensionOnly {
         let mut c = Vec::new();
-        c.extend_from_slice(&be24(info.sample_rate));
+        c.extend_from_slice(&be24(info.core_rate.unwrap_or(info.sample_rate)));
         c.extend_from_slice(&(info.core_kbps as u16).to_be_bytes());
-        c.extend_from_slice(&info.ch_mask.to_be_bytes());
+        c.extend_from_slice(&info.core_mask.unwrap_or(info.ch_mask).to_be_bytes());
         c.push(0);
         c.extend_from_slice(&be24(info.core_payload));
         c.push(0);
@@ -227,7 +231,7 @@ impl DtsHdSink {
         }
         // clock, frame rate code, start position and reference position (see `put_position`)
         let mut tcb = vec![0u8; 32];
-        tcb[..4].copy_from_slice(&48_000u32.to_be_bytes());
+        tcb[..4].copy_from_slice(&info.sample_rate.max(48_000).to_be_bytes());
         tcb[4] = info.fps_code;
         put_position(&mut tcb[8..], info.start);
         put_position(&mut tcb[20..], info.start);

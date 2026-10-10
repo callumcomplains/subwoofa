@@ -289,6 +289,31 @@ impl Encoder {
         self.encode_subbands(&sub, lfe)
     }
 
+    /// Keeps the core's reconstruction of this frame (`last_deq`) and what it left over (`last_residual`).
+    fn keep_planes(&mut self, best: &Plan, sub: &[Vec<Vec<f64>>]) {
+        let blocks = self.cfg.blocks;
+        let mut res = Vec::with_capacity(self.cfg.channels);
+        let mut all_deq = Vec::with_capacity(self.cfg.channels);
+        for ch in 0..self.cfg.channels {
+            let mut bands = Vec::with_capacity(BANDS);
+            let mut deqs = Vec::with_capacity(BANDS);
+            for b in 0..BANDS {
+                let k = best.abits[ch][b] as usize;
+                let mut deq = vec![0i32; blocks];
+                if k > 0 {
+                    let scale = SCALE_7[best.scale_idx[ch][b] as usize] as i32;
+                    dequantize(&best.q[ch][b], STEP_LOSSY[k] as i32, scale, &mut deq);
+                }
+                bands.push(sub[ch][b].iter().zip(&deq).map(|(v, d)| v - *d as f64).collect());
+                deqs.push(deq);
+            }
+            res.push(bands);
+            all_deq.push(deqs);
+        }
+        self.last_residual = res;
+        self.last_deq = all_deq;
+    }
+
     /// Highest quality plan that fits the frame (the budget is the frame minus any X96 reserve).
     fn search_plan(&mut self, sub: &[Vec<Vec<f64>>]) -> Plan {
         let blocks = self.cfg.blocks;
@@ -334,26 +359,7 @@ impl Encoder {
         let bytes = self.pack(&best, lfe.as_ref());
         T_PACK.fetch_add(t_b.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         if self.keep_residual {
-            let mut res = Vec::with_capacity(self.cfg.channels);
-            let mut all_deq = Vec::with_capacity(self.cfg.channels);
-            for ch in 0..self.cfg.channels {
-                let mut bands = Vec::with_capacity(BANDS);
-                let mut deqs = Vec::with_capacity(BANDS);
-                for b in 0..BANDS {
-                    let k = best.abits[ch][b] as usize;
-                    let mut deq = vec![0i32; blocks];
-                    if k > 0 {
-                        let scale = SCALE_7[best.scale_idx[ch][b] as usize] as i32;
-                        dequantize(&best.q[ch][b], STEP_LOSSY[k] as i32, scale, &mut deq);
-                    }
-                    bands.push(sub[ch][b].iter().zip(&deq).map(|(v, d)| v - *d as f64).collect());
-                    deqs.push(deq);
-                }
-                res.push(bands);
-                all_deq.push(deqs);
-            }
-            self.last_residual = res;
-            self.last_deq = all_deq;
+            self.keep_planes(&best, sub);
         }
         if self.exact.is_some() {
             let t_c = std::time::Instant::now();
@@ -825,6 +831,9 @@ impl Encoder {
         let hdr = Self::xxch_set_header_fixed_bits(p, nch).div_ceil(8) * 8 + 16;
         self.header_bits_override = Some(88 + hdr + BANDS * nch + 8);
         let plan = self.search_plan(&sub);
+        if self.keep_residual {
+            self.keep_planes(&plan, &sub);
+        }
         self.pack_xxch(&plan, p, total_bytes)
     }
 
