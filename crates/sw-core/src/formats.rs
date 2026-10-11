@@ -281,6 +281,9 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::DsdDsf | StreamType::DsdDff => 6,
         StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
+    if dest == Destination::DtsMusicDisc && stream == StreamType::Dts9624 {
+        return 3; // stereo, with an LFE
+    }
     if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) { base.min(7) } else { base }
 }
 
@@ -353,7 +356,8 @@ pub enum Invalid {
 pub fn sample_rates_for(dest: Destination, stream: StreamType) -> &'static [u32] {
     match (dest, stream) {
         (Destination::DtsMusicDisc, StreamType::DtsEs | StreamType::DtsDigitalSurround) => &[44_100],
-        (Destination::DtsMusicDisc, StreamType::Dts9624) => &[96_000],
+        // a DTS CD holds 96/24 as 88.2 kHz stereo (the original encoder offers no other rate there)
+        (Destination::DtsMusicDisc, StreamType::Dts9624) => &[88_200],
         (_, StreamType::DtsEs | StreamType::DtsDigitalSurround) if dest != Destination::Generic => &[48_000],
         _ => stream.sample_rates(),
     }

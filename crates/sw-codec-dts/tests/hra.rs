@@ -90,7 +90,7 @@ fn hra_at_96_khz_is_core_x96_and_xbr() {
     let map = sw_codec_dts::native::map_layout(layout).unwrap();
     let bitrate = 1_509_000u32;
     let frame_bytes = (bitrate as usize * 512 / 48_000 / 8) & !3;
-    let mut enc = Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: 0, pcm_bits: 24, x96_bytes: (frame_bytes / 5).max(96) & !3 }).unwrap();
+    let mut enc = Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: 0, pcm_bits: 24, x96_bytes: (frame_bytes / 5).max(96) & !3, core_rate: 48_000, blocks: 16 }).unwrap();
     let n = enc.frame_samples();
     let exss = ExssParams { sample_rate: 96_000, channels: 2, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: Default::default() };
     enc.set_hra(HraStage::new(3018, 96_000, n, 16, exss));

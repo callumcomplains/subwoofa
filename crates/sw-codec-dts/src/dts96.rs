@@ -14,6 +14,10 @@ pub struct Dts96Config {
     pub pcm_bits: u32,
     /// Bytes of every core frame given to the X96 extension (a multiple of 4).
     pub x96_bytes: usize,
+    /// Sample rate of the core (48 or 44.1 kHz: half the stream's) and its frame length in 32-sample blocks (16, or
+    /// 32 for a DTS CD).
+    pub core_rate: u32,
+    pub blocks: usize,
 }
 
 /// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
@@ -74,7 +78,7 @@ impl Dts96Encoder {
     pub fn new(cfg: Dts96Config) -> Result<Dts96Encoder, Error> {
         let nprim = cfg.map.order.len();
         let mut core = CoreEncoder::new(CoreConfig {
-            sample_rate: 48_000,
+            sample_rate: cfg.core_rate,
             amode: cfg.map.amode,
             channels: nprim,
             lfe: cfg.map.lfe.is_some(),
@@ -84,7 +88,7 @@ impl Dts96Encoder {
             es: false,
             xch: false,
             perfect: false,
-            blocks: 16,
+            blocks: cfg.blocks,
         })?;
         core.keep_residual = true;
         core.x96_reserve = cfg.x96_bytes;
@@ -96,11 +100,11 @@ impl Dts96Encoder {
         let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
         let ext_delay = ext[0].delay();
         let ext_shift: isize = std::env::var("SW_X96_SHIFT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-        let lookahead = (2 * (l48 + 1) + phase + HALF + 2).max(ext_delay + 64 * 16 + 64);
+        let lookahead = (2 * (l48 + 1) + phase + HALF + 2).max(ext_delay + 64 * cfg.blocks + 64);
         Ok(Dts96Encoder {
             core,
             ext,
-            x96: X96Encoder::new(16),
+            x96: X96Encoder::new(cfg.blocks),
             taps: decimator_taps(frac),
             buf: vec![Vec::new(); nprim + usize::from(cfg.map.lfe.is_some())],
             dropped: 0,
@@ -192,7 +196,7 @@ impl Dts96Encoder {
         let t0 = std::time::Instant::now();
         // extension analysis of the programme, aligned with what the decoder's synthesis outputs (one
         // thread per channel: the analysis banks are independent)
-        let blocks = 16;
+        let blocks = self.core.frame_samples() / 32;
         let (f_off, n, delay, shift, adj, dropped) = (f * self.n, self.n, self.ext_delay, self.ext_shift, self.ext_adj, self.dropped);
         let _ = n;
         let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); self.nprim];

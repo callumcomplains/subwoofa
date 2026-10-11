@@ -138,8 +138,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
     // A DTS CD packs the stream into 14-bit words (16-bit containers, so a player that does not know DTS plays
     // quiet noise): 1024-sample frames of 3584 bytes, 1234.8 kbit/s of stream in the 1411.2 kbit/s of the disc.
-    let cd14 = wav && rate == 44_100 && req.bitrate_kbps == 1411;
-    let bitrate = core_bitrate(req);
+    let cd14 = wav && rate == 44_100 && matches!(req.bitrate_kbps, 1411 | 1234 | 1235);
+    let bitrate = if cd14 { 1_234_800 } else { core_bitrate(req) };
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 { 16 } else { 32 };
     let make_config = || Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: false, blocks };
@@ -305,7 +305,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
 }
 
 /// Canonical 44-byte WAV header for 16-bit stereo PCM holding `data_len` bytes (a DTS stream in PCM).
-fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
+pub(crate) fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
     let mut h = Vec::with_capacity(44);
     h.extend_from_slice(b"RIFF");
     h.extend_from_slice(&((36 + data_len).min(u32::MAX as u64) as u32).to_le_bytes());
@@ -325,7 +325,7 @@ fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
 
 /// The 14-bit DTS stream format: the bit stream is cut into 14-bit groups, each stored sign-extended in a 16-bit
 /// little-endian word (a frame whose size is a multiple of 14 bytes fills whole words).
-fn pack_14bit(data: &[u8]) -> Vec<u8> {
+pub(crate) fn pack_14bit(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() * 8 / 7 + 2);
     let (mut acc, mut n) = (0u32, 0u32);
     for &b in data {
