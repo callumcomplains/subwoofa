@@ -4,6 +4,7 @@
 //! encoders (destination -> stream type -> layout -> sample rate -> bit rate),
 //! built from public information only.
 
+pub mod version;
 pub mod autoimport;
 pub mod bitstream;
 pub mod channel;

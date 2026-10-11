@@ -1,7 +1,7 @@
 //! Settings of the Bitstream tab: metadata the stream carries that does not change the audio coding.
 //!
 //! They follow the original DTS-HD Master Audio Suite encoder's Bitstream tab, whose behaviour was measured by
-//! driving that encoder (see `docs/ORIGINAL-ENCODER.md`).
+//! driving that encoder (see the private research notes).
 
 use serde::{Deserialize, Serialize};
 

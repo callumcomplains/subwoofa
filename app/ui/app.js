@@ -365,7 +365,8 @@ function bitrateOk() {
 async function cascade(from, wantLayout) {
   if (from === "dest") {
     const list = unlocked ? cat.all_streams : curDest().streams;
-    fill($("stream"), list.map((s) => [s.id, s.available ? s.name : `${s.name} (planned)`]), $("stream").value);
+    fill($("stream"), list.map((s) => [s.id, !s.available ? `${s.name} (planned)` : !cat.has_ffmpeg && !s.native ? `${s.name} (needs FFmpeg)` : s.name]), $("stream").value);
+    if (!cat.has_ffmpeg) for (const o of $("stream").options) if (/needs FFmpeg/.test(o.textContent)) o.disabled = true;
   }
   if (from === "dest" || from === "stream" || from === "unlock") renderRates(curRate());
   $("ratecustom").hidden = $("rate").value !== "custom";
@@ -500,7 +501,7 @@ function update() {
   syncName();
   const need = inLayout().channels;
   const dnOk = !$("dialnorm").classList.contains("bad");
-  const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && cat.has_ffmpeg && curRate() > 0;
+  const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && (cat.has_ffmpeg || curStream().native) && curRate() > 0;
   const available = curStream().available && (!srcLayoutId || curStream().native);
   $("go").disabled = !ready || !available;
   if (!available && srcLayoutId) log("Mixing 22.2 down needs a format with a native Subwoofa encoder.");
@@ -1090,6 +1091,10 @@ async function init() {
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
   cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c === "Lfe2" ? "LFE2" : c)) }));
 
+  initBanner();
+  const ver = await invoke("app_version");
+  $("ver").textContent = ver;
+  $("verSide").textContent = `Subwoofa ${ver}`;
   const eng = $("engine");
   eng.classList.add(cat.has_ffmpeg ? "ok" : "bad");
   eng.lastElementChild.textContent = cat.has_ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found";
@@ -1487,11 +1492,31 @@ initVerify();
 
 /* ---------- Atmos (Dolby Encoding Engine) ---------- */
 
+/* ---------- missing tools ---------- */
+
+const toEngines = () => { setMode("settings"); showSettingsTab("engines"); };
+
+function initBanner() {
+  const show = !cat.has_ffmpeg && sessionStorage.getItem("ffBannerOff") !== "1";
+  $("toolBanner").hidden = !show;
+  $("toolBannerText").textContent = "FFmpeg was not found. Subwoofa's own encoders still work. Anything that needs FFmpeg (reading files other than WAV and AIFF, a few formats) stays off until you point Subwoofa at it.";
+  $("toolBannerSetup").onclick = toEngines;
+  $("toolBannerHow").onclick = () => invoke("open_docs", { page: "ENGINES.md" });
+  $("toolBannerClose").onclick = () => { try { sessionStorage.setItem("ffBannerOff", "1"); } catch { /* fine */ } $("toolBanner").hidden = true; };
+  $("atmosLockSetup").onclick = toEngines;
+  $("atmosLockHow").onclick = () => invoke("open_docs", { page: "ATMOS.md" });
+}
+
 /* ---------- settings page ---------- */
 
 
 async function pushToolPaths() {
   await invoke("set_tool_paths", { ffmpeg: toolPaths.ffmpeg, masDir: toolPaths.mas });
+  if (cat) {
+    const had = cat.has_ffmpeg;
+    cat = await invoke("catalog");
+    if (cat.has_ffmpeg !== had) { cascade && (await cascade("dest")); initBanner(); }
+  }
 }
 
 function setStatus(el, ok, text) {
@@ -1563,6 +1588,8 @@ function aLog(text, cls) {
 async function refreshEngine() {
   const found = await invoke("atmos_locate", { configured: store.get("dee") || null });
   atm.dee = found || "";
+  $("atmos").classList.toggle("locked", !found);
+  $("atmosLock").hidden = !!found;
   const el = $("aEngine");
   el.className = "status " + (found ? "ok" : "bad");
   el.lastChild.textContent = found ? `Dolby Encoding Engine: ${found}` : "Dolby Encoding Engine: not found";

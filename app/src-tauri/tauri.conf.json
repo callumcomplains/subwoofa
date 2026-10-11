@@ -20,7 +20,10 @@
     "security": { "csp": null }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "Every channel, every codec",
+    "copyright": "Subwoofa contributors, GPL-3.0-or-later",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
   }
 }

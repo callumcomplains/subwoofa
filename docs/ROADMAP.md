@@ -24,7 +24,7 @@ Estimates are focused working time for the work itself (writing, testing, docume
 | # | Item | Needs | Estimate once unblocked |
 |---|---|---|---|
 | 9 | Bitstream tab features | the reference encodes listed in `docs/REFERENCE-ENCODES.md` | 1-2 days |
-| 10 | ~~HRA 6.1 and HRA 5.1 at 96 kHz in the commercial layout~~ **done** (from your three DTSHDMASE encodes). HRA 6.1 at 48 kHz (XCH with XBR) is not written; it needs its own reference | done |
+| 10 | ~~HRA 6.1 and HRA 5.1 at 96 kHz in the commercial layout~~ **done** (from reference encodes). HRA 6.1 at 48 kHz (XCH with XBR) is not written; it needs its own reference | done |
 | 11 | DVD-Audio disc structure (AOB packs; the MLP inside is done) | one real DVD-Audio disc or its `.AOB` files | 1-2 days |
 | 12 | Dolby Atmos Theatrical (IAB in MXF, SMPTE ST 2098-2), after item 6. Not through DEE: it can read an IAB MXF as input (useful for converting cinema Atmos to home Atmos) but has no IAB output | one real Atmos cinema track file | 2-3 days |
 | 13 | DTS:X encoding | DTS's licensed encoder (detection in Verify is done) | 1-2 days |

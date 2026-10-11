@@ -4,3 +4,4 @@ dist/
 *.dtshd
 *.cpt
 *.log
+CHANGELOG-CURRENT.md

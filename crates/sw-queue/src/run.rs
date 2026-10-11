@@ -198,15 +198,14 @@ fn execute_inner(
         log.push('\n');
     }
     // audio files only have a native writer
-    let native = spec.engine == "native" || stream.is_audio_file();
+    let ffmpeg = ff::find_ffmpeg();
+    // with no FFmpeg, a format Subwoofa can encode itself simply uses its own encoder
+    let native = spec.engine == "native" || stream.is_audio_file() || (ffmpeg.is_none() && stream.is_native());
     if native && !stream.is_native() {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
-
-
-    let ffmpeg = ff::find_ffmpeg();
     if ffmpeg.is_none() && !native {
-        return Err("ffmpeg not found on PATH".into());
+        return Err("FFmpeg was not found. Set it up under Settings > Engines (see docs/ENGINES.md).".into());
     }
     let slots = if downmixed { Vec::new() } else { sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())? };
     let job = ff::Job {

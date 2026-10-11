@@ -27,6 +27,7 @@ try {
   <div class="brand">
     <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".7"/><circle cx="16" cy="16" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45"/><circle cx="16" cy="16" r="2" fill="currentColor"/></svg>
     <b>SUBWOOFA</b>
+    <span class="ver" id="ver"></span>
   </div>
   <nav class="modes" aria-label="Mode">
     <button id="modeEncode" aria-pressed="true">Encode</button>
@@ -40,6 +41,12 @@ try {
     <button id="openSettings" class="icon-btn" aria-label="Settings" aria-pressed="false"><svg><use href="#i-gear"/></svg></button>
   </div>
 </header>
+<div id="toolBanner" class="banner" role="status" hidden>
+  <span id="toolBannerText"></span>
+  <button id="toolBannerSetup" class="plain">Set it up</button>
+  <button id="toolBannerHow" class="plain">How</button>
+  <button id="toolBannerClose" class="plain" aria-label="Dismiss">×</button>
+</div>
 
 <div class="work">
   <section class="dev format" aria-label="Format">
@@ -335,6 +342,10 @@ try {
 </section>
 
 <section id="atmos" class="tools atmos" aria-label="Atmos" hidden>
+  <div id="atmosLock" class="lock-note" hidden>
+    <b>Atmos needs the Dolby Encoding Engine.</b> Subwoofa does not ship it; you bring your own licensed copy.
+    <button id="atmosLockSetup" class="plain">Set it up</button> <button id="atmosLockHow" class="plain">How</button>
+  </div>
   <div class="atmos-engine">
     <h3 class="op-title" id="atmosTitle">Dolby Atmos</h3>
     <span id="aEngine" class="status"><i class="lamp"></i><span>Dolby Encoding Engine: checking…</span></span>
@@ -389,6 +400,7 @@ try {
     <button data-s="engines" aria-pressed="false">Engines</button>
     <button data-s="appearance" aria-pressed="false">Appearance</button>
     <button data-s="presets" aria-pressed="false">Presets</button>
+    <div class="ver side" id="verSide"></div>
     <button id="sBack" class="plain back"><svg><use href="#i-back"/></svg>Back to work</button>
   </nav>
   <div class="spane">

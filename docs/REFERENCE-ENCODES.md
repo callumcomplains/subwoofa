@@ -39,7 +39,7 @@ let Subwoofa finish features it cannot check on its own. None is urgent; each is
 | HRA 7.1 at 48 kHz in the commercial layout (checks my 48 kHz XBR split against the original's) | one `.dtshd` | 7.1 at 48 kHz, 3018 kbps |
 | DVD-Audio disc structure | a DVD-Audio disc, or its `AUDIO_TS` folder (the `.AOB` files) | any commercial DVD-Audio, ideally one with MLP and one with LPCM |
 | Atmos Theatrical | one Atmos cinema track file (`.mxf`, IAB) | from a DCP or from Dolby's cinema tools; a few seconds is enough |
-| DTS:X encoding | DTS's licensed encoder, plus a DTS:X `.dts` or `.dtshd` made with it | the encoder from your lecturer, any short 7.1.4 programme |
+| DTS:X encoding | DTS's licensed encoder, plus a DTS:X `.dts` or `.dtshd` made with it | a licensed DTS:X encoder, any short 7.1.4 programme |
 | AAF import | AAF files from your editor | one with a few mono clips, one with a stereo clip, one with embedded and one with linked audio |
 | E-AC-3 enhanced coupling | a Dolby reference decoder, or a stream with enhanced coupling and the matching decode | only if one comes your way |
 | MA 192 kHz band 1 (my band 1 is 3.4% larger than the original's) | nothing more: the existing `NO WAY THIS WORKS.dtshd` is enough, it needs a segment-level parse | - |

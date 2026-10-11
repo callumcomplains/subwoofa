@@ -37,7 +37,7 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--ground); color: var(--ink);
   font: 12px/1.4 var(--label);
-  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0; overflow: hidden;
+  display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; min-height: 0; overflow: hidden;
   /* the app is a tool, not a document: stop accidental text selection and drag-selecting chrome */
   user-select: none; -webkit-user-select: none; cursor: default;
   caret-color: var(--lamp);
@@ -139,7 +139,7 @@ input[type=color]::-webkit-color-swatch { border: 0; border-radius: 1px; }
 .db { display: flex; flex-direction: column; gap: 10px; padding: 10px; overflow: auto; min-height: 0; }
 .sub { font: 600 11px var(--label); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); margin-top: 6px; }
 
-.work { grid-row: 2; display: grid; grid-template-columns: 268px 272px minmax(0, 1fr); gap: 8px; padding: 8px; min-height: 0; min-width: 0; }
+.work { grid-row: 3; display: grid; grid-template-columns: 268px 272px minmax(0, 1fr); gap: 8px; padding: 8px; min-height: 0; min-width: 0; }
 
 /* fields */
 .f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -253,7 +253,7 @@ tr.err td input, tr.err td.meta.fs { border-color: var(--bad); color: var(--bad)
 .dm-result.bad { color: var(--bad); } .dm-result.ok { color: var(--ok); }
 
 /* ---------- queue ---------- */
-.queue { grid-row: 3; margin: 0 8px 8px; padding: 6px 12px; max-height: 170px; overflow: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); }
+.queue { grid-row: 4; margin: 0 8px 8px; padding: 6px 12px; max-height: 170px; overflow: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); }
 .queue-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
 .queue-head h2 { font: 600 11px var(--label); letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
 .queue-head .readout { flex: 1; }
@@ -275,7 +275,7 @@ tr.err td input, tr.err td.meta.fs { border-color: var(--bad); color: var(--bad)
 .qbtns button { height: 22px; padding: 0 7px; font-size: 12px; }
 
 /* ---------- output bar ---------- */
-.out { grid-row: 4; padding: 8px 12px 6px; background: var(--panel); border-top: 1px solid var(--rule); }
+.out { grid-row: 5; padding: 8px 12px 6px; background: var(--panel); border-top: 1px solid var(--rule); }
 .out-row { display: flex; align-items: center; gap: 14px; }
 .dest-path { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
 #outdir { flex: 2 1 0; } #outname { flex: 1 1 0; }
@@ -285,8 +285,8 @@ pre#log.ok { color: var(--ok); } pre#log.bad { color: var(--bad); }
 
 /* ---------- full-page views: StreamTools, Verify, Atmos, Settings ---------- */
 body.tools-mode .work, body.tools-mode .queue, body.tools-mode .out { display: none; }
-body.tools-mode .tools, body.tools-mode .settings { grid-row: 2 / span 3; }
-.tools { grid-row: 2; margin: 8px; padding: 12px; min-height: 0; overflow: auto; display: grid; gap: 12px; align-content: start; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); }
+body.tools-mode .tools, body.tools-mode .settings { grid-row: 3 / span 3; }
+.tools { grid-row: 3; margin: 8px; padding: 12px; min-height: 0; overflow: auto; display: grid; gap: 12px; align-content: start; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); }
 .tools[hidden] { display: none; }
 .tools-open { display: flex; gap: 8px; }
 .tools-open input { flex: 1; }
@@ -349,7 +349,7 @@ body.tools-mode .tools, body.tools-mode .settings { grid-row: 2 / span 3; }
 #aBar.done { background: var(--ok); } #aBar.fail { background: var(--bad); }
 
 /* settings: a full page, tabs down the left */
-.settings { grid-row: 2; display: grid; grid-template-columns: 210px minmax(0, 1fr); margin: 8px; min-height: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
+.settings { grid-row: 3; display: grid; grid-template-columns: 210px minmax(0, 1fr); margin: 8px; min-height: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
 .settings[hidden] { display: none; }
 .stabs { display: flex; flex-direction: column; gap: 1px; padding: 10px 0; background: var(--hi); border-right: 1px solid var(--rule); }
 .stabs button { position: relative; height: 34px; text-align: left; border: 0; border-radius: 0; background: none; padding: 0 18px; color: var(--dim); font: 600 11px var(--label); letter-spacing: .14em; text-transform: uppercase; }
@@ -393,3 +393,11 @@ body.tools-mode .tools, body.tools-mode .settings { grid-row: 2 / span 3; }
 
 /* the hidden attribute must win over component display rules */
 [hidden] { display: none !important; }
+
+.ver { font: 11px var(--mono); color: var(--dim); margin-left: 4px; white-space: nowrap; }
+.ver.side { margin: auto 0 6px 14px; }
+.banner { grid-row: 2; display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: color-mix(in srgb, var(--bad) 12%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--bad) 45%, var(--rule)); font-size: 12px; }
+.banner span { flex: 1; min-width: 0; }
+.lock-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--bad) 55%, var(--rule)); border-radius: var(--r); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
+.atmos.locked > :not(.lock-note):not(.atmos-engine) { opacity: .4; pointer-events: none; }
+option:disabled { color: var(--dim); }

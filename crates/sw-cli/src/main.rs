@@ -7,8 +7,12 @@ use sw_core::downmix::Matrix;
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
 #[derive(Parser)]
-#[command(name = "subwoofa", version, about = "Every channel, every codec.")]
+#[command(name = "subwoofa", about = "Every channel, every codec.", disable_version_flag = true)]
 struct Cli {
+    /// Print the version and exit
+    #[allow(dead_code)]
+    #[arg(short = 'V', long, global = true)]
+    version: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -427,6 +431,11 @@ impl BitstreamArgs {
 }
 
 fn main() {
+    // Every run says which build it is. On stderr, so stdout (and --json) stays clean for scripts.
+    eprintln!("subwoofa {}", sw_core::version::display());
+    if std::env::args().skip(1).any(|a| a == "-V" || a == "--version") {
+        return;
+    }
     if let Err(e) = run() {
         eprintln!("error: {e}");
         std::process::exit(1);

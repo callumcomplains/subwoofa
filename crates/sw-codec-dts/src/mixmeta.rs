@@ -1,7 +1,7 @@
 //! The Bitstream-tab metadata, written the way the original encoder writes it.
 //!
 //! Everything here was measured by driving the original DTS-HD Master Audio Suite encoder with every setting of
-//! the tab and reading the streams back (`docs/ORIGINAL-ENCODER.md`):
+//! the tab and reading the streams back (the private research notes):
 //!
 //! * **Secondary audio mixing metadata** (DTS Express, Blu-ray): in every extension substream header the stream
 //!   says how much to turn the *primary* audio down while it plays (a 6-bit code, new for every frame so that

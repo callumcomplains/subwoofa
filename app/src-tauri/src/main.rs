@@ -216,6 +216,22 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, St
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
 
+/// Opens one of the project's documentation pages in the browser. Only known page names, never free text.
+#[tauri::command]
+fn open_docs(page: String) -> Result<(), String> {
+    const PAGES: [&str; 6] = ["ENGINES.md", "ATMOS.md", "GETTING-STARTED.md", "FORMATS.md", "TROUBLESHOOTING.md", "LEGAL.md"];
+    if !PAGES.contains(&page.as_str()) {
+        return Err("unknown page".into());
+    }
+    let url = format!("https://github.com/CallumUncensored/subwoofa/blob/main/docs/{page}");
+    std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn app_version() -> String {
+    sw_core::version::display()
+}
+
 #[tauri::command]
 async fn tools_info(path: String) -> Result<sw_tools::Info, String> {
     blocking(move || sw_tools::Stream::open(std::path::Path::new(&path)).map(|s| s.info()).map_err(|e| e.to_string())).await
@@ -510,7 +526,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             catalog, options, auto_import, multichannel_pick, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
             queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            set_tool_paths, tool_status, tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file,
+            app_version, open_docs, set_tool_paths, tool_status, tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file,
             atmos::atmos_locate, atmos::atmos_inspect, atmos::atmos_status, atmos::atmos_cancel, atmos::atmos_start
         ])
         .run(tauri::generate_context!())
