@@ -24,7 +24,8 @@ ALAC, TTA, DSD). It also verifies what it writes, and has StreamTools for trimmi
 
 Every format and its test status: [docs/FORMATS.md](docs/FORMATS.md).
 
-## AI disclaimer (and a Hi from a Human).
+## AI disclaimer (and a Hi from a Human)
+
 Hi, Callum here. 
 I am not actually a coder. I thought of a fun project and ran it through Claude Code's Sonnet 5.5 Medium.
 All of the code base is from Claude. I gave it inputs and test files and verified this program can actually do what it says on the tin the whole time. 
@@ -36,9 +37,9 @@ Subwoofa has its own encoders and works on its own for *most* formats. Dolby Atm
 Windows 10 or 11, 64-bit.
 
 1. Download the installer (or the portable zip) from the [latest release](../../releases). (Check it against `SHA256SUMS.txt`).
-3. Run it. Windows SmartScreen will warn that the app is unsigned, because the project cannot afford a signing
+2. Run it. Windows SmartScreen will warn that the app is unsigned, because the project cannot afford a signing
    certificate yet. Choose *More info*, then *Run anyway*.
-4. Open **Settings > Engines** and see what is found. Subwoofa works on its own for most formats; some things
+3. Open **Settings > Engines** and see what is found. Subwoofa works on its own for most formats; some things
    want a tool you provide. [docs/ENGINES.md](docs/ENGINES.md) explains which and why.
 
 macOS and Linux are not yet tested -- get in touch if you can test it.
