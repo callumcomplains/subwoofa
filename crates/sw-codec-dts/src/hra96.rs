@@ -67,6 +67,8 @@ pub struct Hra96Config {
     pub core_es: bool,
     /// The XXCH header of a 7.x stream.
     pub xxch: Option<XxchParams>,
+    /// Stereo downmix levels for the core's auxiliary data.
+    pub aux: Option<crate::encoder::AuxDownmix>,
 }
 
 pub struct Hra96Encoder {
@@ -111,6 +113,7 @@ impl Hra96Encoder {
         let es = matches!(cfg.kind, Hra96Kind::Matrix | Hra96Kind::Discrete) || cfg.core_es;
         let mut core = CoreEncoder::new(core_config(cfg.amode, cfg.nprim, es, cfg.kind == Hra96Kind::Discrete, has_lfe, cfg.dialnorm, cfg.pcm_bits))?;
         core.keep_residual = true;
+        core.set_aux_downmix(cfg.aux.clone());
         let rear = if cfg.kind == Hra96Kind::Rear {
             let mut r = CoreEncoder::new(CoreConfig { amode: 2, channels: 2, lfe: false, bitrate: 1_536_000, es: false, xch: false, ..core_config(2, 2, false, false, false, cfg.dialnorm, cfg.pcm_bits) })?;
             r.keep_residual = true;
@@ -384,7 +387,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let nch_total = nprim + usize::from(has_lfe) + coded_extra;
     let exss_mask: u32 = req.layout.channels.iter().enumerate().filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i))).map(|(_, c)| crate::ma::exss_bit(*c)).fold(0, |m, b| m | b);
     let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
-    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr", xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)) });
+    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr", xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)), aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, has_lfe, kind == Hra96Kind::Discrete) });
     let mix = crate::native_xxch::xxch_map(req.layout).map(|m| m.mix(&req.bitstream.downmix));
     let mut enc = make_encoder()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);

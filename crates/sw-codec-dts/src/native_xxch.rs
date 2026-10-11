@@ -141,7 +141,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         perfect: false,
         blocks,
     };
+    let aux = crate::ma::core_aux(&req.bitstream.downmix, req.layout, 9, has_lfe, false);
     let mut core = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
+    core.set_aux_downmix(aux.clone());
     core.keep_residual = true;
     let mut xbr = XbrEncoder::new(blocks);
     let mut ext = Encoder::new(mk(2, 2, false, 1_536_000))?;
@@ -264,6 +266,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     // the silent frame StreamTools' Add silence inserts: fresh encoders fed zeros until the filter bank has settled
     let blackout = {
         let mut c = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
+        c.set_aux_downmix(aux.clone());
         c.keep_residual = true;
         let mut e = Encoder::new(mk(2, 2, false, 1_536_000))?;
         let mut x = XbrEncoder::new(blocks);

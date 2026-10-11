@@ -163,6 +163,7 @@ impl MaCoreEncoder {
             perfect: false,
             blocks: 16,
         })?;
+        core.set_aux_downmix(crate::ma::core_aux(&cfg.downmix, cfg.layout, cmap.amode, cmap.lfe.is_some(), xch_x.is_some()));
         let x96 = if cfg.x96 && ratio == 2 {
             let bytes = (core.frame_bytes() / 8).max(96) & !3;
             core.keep_residual = true;

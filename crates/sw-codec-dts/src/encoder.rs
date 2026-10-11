@@ -161,6 +161,42 @@ pub struct Encoder {
     pub x96_reserve: usize,
     /// Replaces the core frame's fixed header size in the bit count (XXCH extension encoders).
     header_bits_override: Option<usize>,
+    /// The stereo downmix coefficients every frame carries in its auxiliary data.
+    aux: Option<AuxDownmix>,
+}
+
+/// Downmix coefficients in the auxiliary data of a core frame: the matrix type (1 Lo/Ro, 2 Lt/Rt) and one 9-bit
+/// code (sign bit 8, table index) per channel for each of the two outputs, channels in the core's order with the
+/// LFE last.
+#[derive(Debug, Clone)]
+pub struct AuxDownmix {
+    pub kind: u8,
+    pub rows: Vec<Vec<u16>>,
+}
+
+impl AuxDownmix {
+    /// Sync word, the data, and the checksum of the data.
+    fn block(&self) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.put(0, 1); // no decoding time stamp
+        w.put(1, 1); // dynamic downmix present
+        w.put(u32::from(self.kind), 3);
+        for row in &self.rows {
+            for c in row {
+                w.put(*c as u32, 9);
+            }
+        }
+        let payload = w.into_bytes();
+        let mut out = vec![0x9A, 0x11, 0x05, 0xA0];
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&crate::xll::crc16(&payload).to_be_bytes());
+        out
+    }
+
+    /// Bytes from the sync word to the end of the checksum.
+    fn size(&self) -> usize {
+        4 + (5 + 9 * self.rows.iter().map(Vec::len).sum::<usize>()).div_ceil(8) + 2
+    }
 }
 
 /// An XXCH extension (DTS-HD HRA 6.1/7.1): channels beyond the core's five, coded like core channels in the
@@ -237,6 +273,7 @@ impl Encoder {
             last_deq: Vec::new(),
             x96_reserve: 0,
             header_bits_override: None,
+            aux: None,
             cfg,
         })
     }
@@ -259,6 +296,17 @@ impl Encoder {
 
     pub fn frame_bytes(&self) -> usize {
         self.frame_bytes
+    }
+
+    /// Write the stereo downmix coefficients into the auxiliary data of every frame (from now on).
+    pub fn set_aux_downmix(&mut self, aux: Option<AuxDownmix>) {
+        self.aux = aux;
+    }
+
+    /// The latest place the auxiliary data may start: it ends four bytes short of the end of the core part (the
+    /// frame less the extension area), on a 32-bit boundary.
+    fn aux_sync(&self, aux: &AuxDownmix) -> usize {
+        (self.frame_bytes - 4 - self.x96_reserve - (4 + aux.size() - 4).div_ceil(4) * 4) & !3
     }
 
     /// Samples of delay between input and decoder output.
@@ -320,7 +368,11 @@ impl Encoder {
     fn search_plan(&mut self, sub: &[Vec<Vec<f64>>]) -> Plan {
         let blocks = self.cfg.blocks;
         // 3. allocation: highest quality that fits the frame
-        let budget = (self.frame_bytes - self.x96_reserve) * 8;
+        let mut budget = (self.frame_bytes - self.x96_reserve) * 8;
+        if let Some(aux) = &self.aux {
+            // the audio ends in front of the auxiliary data, with its 6-bit size field
+            budget = self.aux_sync(aux) * 8 - 8;
+        }
         let power: Vec<[f64; BANDS]> = sub
             .iter()
             .map(|c| {
@@ -681,7 +733,7 @@ impl Encoder {
         w.put(0, 1); // fixed bit
         w.put(0, 1); // dynamic range coefficients
         w.put(0, 1); // time stamp
-        w.put(0, 1); // auxiliary data
+        w.put(u32::from(self.aux.is_some()), 1); // auxiliary data
         w.put(0, 1); // HDCD
         w.put(if self.x96_reserve > 0 { 2 } else { 0 }, 3); // extension audio id: XCH (0) or X96 (2)
         w.put(u32::from(cfg.xch || self.x96_reserve > 0), 1); // extension audio present
@@ -796,7 +848,17 @@ impl Encoder {
             }
         }
         w.put(0xFFFF, 16);
+        if let Some(aux) = &self.aux {
+            w.put(aux.size() as u32, 6); // bytes of auxiliary data
+        }
         let mut bytes = w.into_bytes();
+        if let Some(aux) = &self.aux {
+            // a decoder looks for the sync word at the next 32-bit boundary after the size field
+            let at = bytes.len().div_ceil(4) * 4;
+            assert!(at <= self.aux_sync(aux), "frame overflow before the auxiliary data: {at} > {}", self.aux_sync(aux));
+            bytes.resize(at, 0);
+            bytes.extend_from_slice(&aux.block());
+        }
         if cfg.xch {
             // the extension ends the frame and its size field has 10 bits: after a quiet frame's short core data it
             // starts later than the data ends, with zeros between

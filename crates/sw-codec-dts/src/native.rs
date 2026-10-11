@@ -143,7 +143,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 { 16 } else { 32 };
     let make_config = || Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: false, blocks };
+    let aux = crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), xch);
     let mut enc = Encoder::new(make_config())?;
+    enc.set_aux_downmix(aux.clone());
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
@@ -278,6 +280,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         // filter bank has settled)
         let blackout = req.hra_kbps.and_then(|kbps| {
             let mut e = Encoder::new(make_config()).ok()?;
+            e.set_aux_downmix(aux.clone());
             e.keep_residual = true;
             let mut st = make_hra(kbps);
             let zeros = vec![vec![0.0; n]; nch + usize::from(xch) + usize::from(map.lfe.is_some())];

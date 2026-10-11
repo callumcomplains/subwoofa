@@ -35,7 +35,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     // a fifth of the frame for the extension, at least 96 bytes
     let frame_bytes = (bitrate as usize * (blocks * 32) / core_rate as usize / 8) & !3;
     let x96_bytes = ((frame_bytes / 5).max(96)) & !3;
-    let make_enc = || Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes, core_rate, blocks, es: req.es.map_or(false, |e| e.flag) });
+    let make_enc = || Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes, core_rate, blocks, es: req.es.map_or(false, |e| e.flag), aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), false) });
     let mut enc = make_enc()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;

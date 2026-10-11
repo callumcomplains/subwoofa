@@ -637,9 +637,11 @@ function syncDownmix() {
   const ma = st === "dtshd-ma", hra = st === "dtshd-hra";
   const esMatrix = lay && lay.id.startsWith("6.") && !lay.id.endsWith("premixed");
   const pair = five && ch.length === 7 + lfe;
-  const stereoOk = ma && five && ch.length <= 8;
+  // Master Audio can carry a stereo set and the levels; the core streams only write the levels (into their auxiliary data)
+  const coreLevels = ["dts", "dts-96-24", "dtshd-hra"].includes(st) && five && ch.length <= 8 && !esMatrix;
+  const stereoOk = (ma && five && ch.length <= 8) || coreLevels;
   $("dmxStereoWrap").hidden = !stereoOk;
-  $("dmxEmbedWrap").hidden = !(stereoOk && curRate() <= 96000);
+  $("dmxEmbedWrap").hidden = !(ma && stereoOk && curRate() <= 96000);
   $("dmxEmbedNote").hidden = $("dmxEmbedWrap").hidden;
   $("dmxMatrixWrap").hidden = !(stereoOk && !esMatrix);
   $("dmxLtRtWrap").hidden = $("dmxMatrixWrap").hidden;

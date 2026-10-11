@@ -18,6 +18,8 @@ pub struct Dts96Config {
     /// 32 for a DTS CD).
     pub core_rate: u32,
     pub blocks: usize,
+    /// Stereo downmix levels for the core's auxiliary data.
+    pub aux: Option<crate::encoder::AuxDownmix>,
     /// Flag the core as ES (6.x: the centre surround is mixed into the surrounds before the core).
     pub es: bool,
 }
@@ -94,6 +96,7 @@ impl Dts96Encoder {
         })?;
         core.keep_residual = true;
         core.x96_reserve = cfg.x96_bytes;
+        core.set_aux_downmix(cfg.aux.clone());
         let n = core.frame_samples() * 2;
         let l48: usize = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
         let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);

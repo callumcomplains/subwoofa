@@ -13,7 +13,7 @@ fn tone_above_24_khz_survives() {
         return;
     }
     let map = LayoutMap { amode: 2, order: vec![0, 1], lfe: None };
-    let mut enc = Dts96Encoder::new(Dts96Config { map, bitrate: 1_509_000, dialnorm: 0, pcm_bits: 24, x96_bytes: 400, core_rate: 48_000, blocks: 16, es: false }).unwrap();
+    let mut enc = Dts96Encoder::new(Dts96Config { map, bitrate: 1_509_000, dialnorm: 0, pcm_bits: 24, x96_bytes: 400, core_rate: 48_000, blocks: 16, es: false, aux: None }).unwrap();
     let n = enc.frame_samples();
     let frames = 60;
     let total = n * frames;

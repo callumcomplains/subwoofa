@@ -496,6 +496,17 @@ fn stereo_matrix(layout: &ChannelLayout, set0: &[usize], dm: &Downmix) -> Option
     Some((if dm.lt_rt { 2 } else { 1 }, vec![ids.iter().map(|&i| level_code(dm.stereo_a[i])).collect(), ids.iter().map(|&i| level_code(dm.stereo_b[i])).collect()]))
 }
 
+/// The stereo downmix levels as the auxiliary data of a 5.x core: the original writes them into every core frame
+/// when the Downmix tab's stereo levels are included (not for the other core arrangements or for 6.x).
+pub fn core_aux(dm: &Downmix, layout: &ChannelLayout, amode: u8, lfe: bool, xch: bool) -> Option<crate::encoder::AuxDownmix> {
+    if !dm.stereo_matrix || amode != 9 || xch || es_matrix(layout) {
+        return None;
+    }
+    let n = 5 + usize::from(lfe);
+    let row = |t: &[sw_core::bitstream::Level; 6]| (0..n).map(|i| level_code(t[i])).collect::<Vec<u16>>();
+    Some(crate::encoder::AuxDownmix { kind: if dm.lt_rt { 2 } else { 1 }, rows: vec![row(&dm.stereo_a), row(&dm.stereo_b)] })
+}
+
 /// 6.x layouts with a centre surround (the ES matrix and discrete forms), whose first set is not a plain 5.x group.
 fn es_matrix(layout: &ChannelLayout) -> bool {
     layout.id.starts_with("6.") && !layout.id.ends_with("premixed")
