@@ -32,6 +32,9 @@ pub struct SetCfg {
     pub residual_of_core: bool,
     /// Present for the non-primary sets of a hierarchy.
     pub dmix: Option<DmixHeader>,
+    /// The primary set can describe how a decoder mixes its channels down to stereo: the matrix type (1 = Lo/Ro,
+    /// 2 = Lt/Rt) and, for each of the two outputs, a 9-bit code for every channel of the set.
+    pub matrix: Option<(u8, Vec<Vec<u16>>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -721,8 +724,19 @@ impl XllEncoder {
         h.put(0, 2); // no interpolation
         h.put(0, 2); // not a replacement set
         h.put(u32::from(index == 0), 1); // primary channel set
-        match &set.dmix {
-            Some(d) => {
+        match (&set.dmix, &set.matrix) {
+            (None, Some((kind, rows))) => {
+                h.put(1, 1); // downmix coefficients present
+                h.put(1, 1); // embedded in the channel set header
+                h.put(u32::from(*kind), 3);
+                h.put(1, 1); // part of a hierarchy
+                for row in rows {
+                    for c in row {
+                        h.put(*c as u32, 9);
+                    }
+                }
+            }
+            (Some(d), _) => {
                 h.put(1, 1); // downmix coefficients present
                 h.put(1, 1); // and already applied by the encoder
                 h.put(1, 1); // part of a hierarchy
@@ -733,9 +747,9 @@ impl XllEncoder {
                     }
                 }
             }
-            None => {
+            (None, None) => {
                 h.put(0, 1); // no downmix coefficients
-                h.put(u32::from(cfg.sets.len() > 1), 1); // part of a hierarchy
+                h.put(1, 1); // part of a hierarchy
             }
         }
         h.put(1, 1); // channel mask enabled
@@ -837,7 +851,9 @@ impl XllEncoder {
         tmp.put((self.band_len() / nseg).trailing_zeros(), 4);
         tmp.put(nb4ssize - 1, 5);
         tmp.put(0, 2); // no band CRC
-        tmp.put(0, 1); // no MSB/LSB split
+        // The original sets this flag when the stream has downmix information, and then adds fields for the
+        // scalable resolution of every channel to the set headers; decoders do not need either, so it stays off.
+        tmp.put(0, 1);
         tmp.put(mask_bits - 1, 5);
         tmp.align(8);
         let mut cb = tmp.into_bytes();

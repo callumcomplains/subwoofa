@@ -264,3 +264,6 @@ body.tools-mode .atmos { grid-row: 2 / span 4; }
 .bs-sec, .bs-map { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
 .bs-map .hint { flex-basis: 100%; }
 .bs input[type=number] { width: 5.5em; }
+.dmx-grid { display: grid; grid-template-columns: 3.2em repeat(3, 6.5em); gap: 4px 10px; align-items: center; }
+.dmx-grid .h { font-size: .8em; opacity: .75; }
+.dmx-grid input { width: 100%; }

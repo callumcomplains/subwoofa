@@ -9,7 +9,7 @@ use crate::xbr::XbrEncoder;
 use crate::native::{NativeError, Request, Stats};
 use crate::{Config, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
-use sw_core::Channel;
+use sw_core::{Channel, Downmix};
 use sw_pcm::StemSet;
 
 /// Where the channels of a 7.1 / 7.0 layout go.
@@ -25,14 +25,77 @@ pub struct XxchMap {
     pub has_lfe: bool,
 }
 
+/// Gain of a 6-bit level code (the grid of the Downmix tab: half-dB steps to 15 dB, one dB to 30, two dB to 60).
+/// The default 3 dB is the exact square root of one half, as the original's table has it.
+pub fn code_gain(code: u32) -> f64 {
+    if code == 55 {
+        return 23170.0 / 32768.0;
+    }
+    let db = match code {
+        31..=61 => (61 - code) as f64 * 0.5,
+        16..=30 => (46 - code) as f64,
+        _ => (62 - 2 * code.min(31)) as f64,
+    };
+    10f64.powf(-db / 20.0)
+}
+
+/// How the core is made from a 7.x programme: every core channel scaled, and the extra pair added to the core
+/// channels named in the Downmix tab (`extra[e][slot]`, slots in core order C L R Ls Rs LFE).
+pub struct XxchMix {
+    pub scale: f64,
+    pub extra: [[f64; 6]; 2],
+}
+
 impl XxchMap {
+    /// The channel mask bit of each core slot.
+    fn slot_bit(&self, slot: usize) -> u32 {
+        match slot {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3 => self.side_bits[0],
+            4 => self.side_bits[1],
+            _ => 5,
+        }
+    }
+
+    /// Levels of the downmix as level codes: the scale and, per extra channel, the core slots it joins.
+    fn codes(&self, dm: &Downmix) -> (u32, [Vec<(usize, u32)>; 2]) {
+        let code = |db: f64| crate::mixmeta::level_code(db) as u32;
+        let scale = dm.primary[0].map_or(61, code);
+        let rows = [&dm.extra_a, &dm.extra_b].map(|table| (0..6).filter(|&s| s < 5 || self.has_lfe).filter_map(|s| table[s].map(|db| (s, code(db)))).collect::<Vec<_>>());
+        (scale, rows)
+    }
+
     /// The XXCH header: the core's speakers, the speakers coded here, and the embedded downmix (each extra channel
-    /// was added to the core's surround on its side, at -3 dB, and the whole core pre-scaled).
-    pub fn params(&self) -> XxchParams {
+    /// was added to the core channels the Downmix tab names, by default the surround on its side at -3 dB, and the
+    /// whole core pre-scaled).
+    pub fn params(&self, dm: &Downmix) -> XxchParams {
         let core_mask: u32 = 0x1 | 0x2 | 0x4 | (if self.has_lfe { 0x20 } else { 0 }) | (1 << self.side_bits[0]) | (1 << self.side_bits[1]);
         let spk_mask: u32 = (1 << self.rear_bits[0]) | (1 << self.rear_bits[1]);
         let top = 32 - (core_mask | spk_mask).leading_zeros();
-        XxchParams { core_mask, spk_mask, mask_bits: top.max(9), dmix: Some((55, vec![vec![(self.side_bits[0], 119)], vec![(self.side_bits[1], 119)]])) }
+        let (scale, rows) = self.codes(dm);
+        let rows: Vec<Vec<(u32, u32)>> = rows
+            .iter()
+            .map(|r| {
+                let mut v: Vec<(u32, u32)> = r.iter().map(|&(slot, code)| (self.slot_bit(slot), 64 + code)).collect();
+                v.sort();
+                v
+            })
+            .collect();
+        XxchParams { core_mask, spk_mask, mask_bits: top.max(9), dmix: Some((scale, rows)) }
+    }
+
+    pub fn mix(&self, dm: &Downmix) -> XxchMix {
+        let (scale, rows) = self.codes(dm);
+        let mut extra = [[0.0; 6]; 2];
+        for (e, row) in rows.iter().enumerate() {
+            for &(slot, code) in row {
+                extra[e][slot] = code_gain(code);
+            }
+        }
+        // the decoder multiplies by the table's inverse of the scale, which for 3 dB is 92682 / 65536
+        XxchMix { scale: if scale == 55 { 65536.0 / 92682.0 } else { code_gain(scale) }, extra }
     }
 }
 
@@ -54,11 +117,6 @@ pub fn xxch_map(layout: &sw_core::ChannelLayout) -> Option<XxchMap> {
     };
     (layout.channel_count() == 7 + usize::from(map.lfe.is_some())).then_some(map)
 }
-
-/// Pre-scaling of every core channel (the decoder multiplies by `SCALE_INV` code 55) and the rear coefficient
-/// (dmix table entry 217, 23170 / 32768).
-const SCALE: f64 = 65536.0 / 92682.0;
-const REAR_COEFF: f64 = 23170.0 / 32768.0;
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
     let total_kbps = req.hra_kbps.unwrap_or(2046);
@@ -98,7 +156,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let nch_total = 7 + usize::from(has_lfe);
     let spk = crate::ma::map_layout(req.layout).exss_mask;
     let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
-    let params = map.params();
+    let params = map.params(&req.bitstream.downmix);
+    let mix = map.mix(&req.bitstream.downmix);
     let overhead = exss_frame_xxch(&exss, &[0u8; 4]).len() - 4;
     let overhead_both = exss_frame_xbr_xxch(&exss, &[0u8; 4], &[0u8; 4]).len() - 8;
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);
@@ -175,16 +234,21 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
             v.iter_mut().for_each(|x| *x = 0.0);
         }
         for i in 0..got {
-            for (slot, &src) in map.core.iter().enumerate() {
-                let mut v = to24(planar[src][i]) * SCALE;
-                if slot >= 3 {
-                    // the sides carry the rear on the same side
-                    v += to24(planar[map.rear[slot - 3]][i]) * REAR_COEFF;
+            // every core channel scaled, with the extra pair added where the Downmix tab says
+            let fold = |slot: usize, src: usize| {
+                let mut v = to24(planar[src][i]) * mix.scale;
+                for e in 0..2 {
+                    if mix.extra[e][slot] != 0.0 {
+                        v += to24(planar[map.rear[e]][i]) * mix.extra[e][slot];
+                    }
                 }
-                core_pcm[slot][zeros + i] = v.clamp(-8_388_608.0, 8_388_607.0);
+                v.clamp(-8_388_608.0, 8_388_607.0)
+            };
+            for (slot, &src) in map.core.iter().enumerate() {
+                core_pcm[slot][zeros + i] = fold(slot, src);
             }
             if let Some(l) = map.lfe {
-                core_pcm[5][zeros + i] = (to24(planar[l][i]) * SCALE).clamp(-8_388_608.0, 8_388_607.0);
+                core_pcm[5][zeros + i] = fold(5, l);
             }
             for (slot, &src) in map.rear.iter().enumerate() {
                 ext_pcm[slot][zeros + i] = to24(planar[src][i]).clamp(-8_388_608.0, 8_388_607.0);

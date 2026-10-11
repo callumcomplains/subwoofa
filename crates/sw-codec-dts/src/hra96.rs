@@ -22,10 +22,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use sw_core::{Channel, ChannelLayout};
 use sw_pcm::StemSet;
 
-/// Pre-scaling of every core channel in the 7.1 stream (the decoder multiplies by `SCALE_INV` code 55) and the rear
-/// coefficient (dmix table entry 217, 23170 / 32768).
-const SCALE: f64 = 65536.0 / 92682.0;
-const REAR_COEFF: f64 = 23170.0 / 32768.0;
 /// Bytes of the XXCH extension in a 96 kHz 7.x stream until X96 is full (the original encoder's split, measured at every legal rate).
 const XXCH_FIXED_BYTES: usize = 512;
 /// The largest X96 component an extension substream header can describe (a 12-bit size, rounded down to words).
@@ -388,7 +384,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let nch_total = nprim + usize::from(has_lfe) + coded_extra;
     let exss_mask: u32 = req.layout.channels.iter().enumerate().filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i))).map(|(_, c)| crate::ma::exss_bit(*c)).fold(0, |m, b| m | b);
     let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
-    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr", xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params()) });
+    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr", xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)) });
+    let mix = crate::native_xxch::xxch_map(req.layout).map(|m| m.mix(&req.bitstream.downmix));
     let mut enc = make_encoder()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -459,9 +456,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
                 let value = match kind {
                     // 7.x: scaled, with the rear on the same side added to the sides
                     Hra96Kind::Rear => {
-                        let mut v = to24(planar[src][i]) * SCALE;
-                        if slot >= 3 {
-                            v += to24(planar[map.extra[slot - 3]][i]) * REAR_COEFF;
+                        let m = mix.as_ref().expect("7.x mix");
+                        let mut v = to24(planar[src][i]) * m.scale;
+                        for e in 0..2 {
+                            if m.extra[e][slot] != 0.0 {
+                                v += to24(planar[map.extra[e]][i]) * m.extra[e][slot];
+                            }
                         }
                         v
                     }
@@ -473,7 +473,10 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
             }
             if let Some(l) = map.lfe {
                 let v = to24(planar[l][i]);
-                block[lfe_slot][i] = clamp(if kind == Hra96Kind::Rear { v * SCALE } else { v });
+                block[lfe_slot][i] = clamp(match &mix {
+                    Some(m) if kind == Hra96Kind::Rear => v * m.scale + (0..2).map(|e| to24(planar[map.extra[e]][i]) * m.extra[e][5]).sum::<f64>(),
+                    _ => v,
+                });
             }
             match kind {
                 Hra96Kind::Rear => {

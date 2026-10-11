@@ -69,6 +69,18 @@ The extension substream header is padded with zero bytes before its CRC to a fix
 multiple of four if the content needs more: 32 bytes for Master Audio, 28 for High Resolution and Express (checked on
 241 streams, no exception).
 
+
+## Downmix tab
+
+Driven with `batch13`-`batch17`, read with `xllhdr.py` / `xllu.py` (XLL channel-set headers) and `xxchparse.py` (the XXCH header), compared with `xlldiff2.py`, `xlldiff3.py` and `xxchdiff.py`.
+
+* **Levels** are dB below full level with the table of the Bitstream tab's gains (`level_code`); in a Master Audio header they are indices into the 242-entry coefficient table (0.125 dB steps near 0 dB, 0.25 dB from 15 dB, 0.5 dB from 30 dB), in an XXCH header 6-bit codes (scale) and 7-bit codes (64 + code, coefficient). INF is "no coefficient" (0x100 / absent).
+* **7.x to 5.1** (`use51Downmix`, default on for 7.x): each 5.1 channel has a primary level (default 3 dB), and the two extra channels of the layout (in speaker order) each have a level into every 5.1 channel (defaults: first extra into Ls, second into Rs, 3 dB). The pair does not matter: wide, height and centre-surround pairs fold into the surrounds. Master Audio: the header of the first set above the 5.1 base has one row per lower channel (scale = primary level, coefficients = the two extra levels); the core is the 5.1 channels scaled by the primaries with the extras added. High Resolution Audio: one scale for all (the Downmix tab refuses different primary levels there), the extras' targets as a mask plus a 7-bit code each.
+* **Stereo** (`use20Downmix`): not embedded, the primary set's header carries `[present 1][embedded 1][type 3 bits: 1 Lo/Ro, 2 Lt/Rt][hierarchy 1]` and a 2 x N matrix (N = channels of the set, in speaker-bit order C L R Ls Rs LFE; row 0 to the left output, row 1 to the right). Not written for layouts with fewer than five channels or for 6.x with a centre surround that is not premixed.
+* **Embedded stereo** (`isEmbeddedDownmix`, Master Audio only; needs `use20Downmix`; not for 4.x and below): set 0 is `L R` (raw, not a residual of the core), set 1 the other 5.1 channels (a residual of the core, which is the plain 5.1 programme), then the extra sets. The header rows of set 1 have the scales `left20 a` / `right20 b` and the coefficients of C, Ls, Rs, LFE into the left and right output; cross terms (left to right) cannot be written. The embedded-stereo flag of the asset descriptor is set (and the embedded-5.1 flag as before when there are extras).
+* **Making the stereo set**: the decoder undoes the sets from the bottom up, so the stereo channels are the original ones plus the 5.1 channels *as transmitted* (extras already folded in), each with the coefficient `D x inverse(set 1 row scale) x inverse(extra set row scale of the row) x (extra set row scale of the column)`. With a decoder's downmix modes (FFmpeg `-downmix stereo` and `5.1(side)`) Subwoofa's streams decode to exactly what the original's do, for every combination tried (random levels included).
+* Not copied: the original sets the common header's "scalable resolution" bit (and adds fields to every channel set header) whenever a stream has downmix information; decoders do not need it and Subwoofa leaves it off. FFmpeg cannot open 7.1 Cs/Ch streams (also not the original's).
+
 ## Still different from the original
 
 Sweep: every legal combination at its top bit rate was encoded by both encoders and the first core and extension
@@ -79,8 +91,7 @@ headers compared (`compare.py`). Over 312 of 339 were identical in the last full
   fixed split fitted to its mean (about 0.27 x kbps + 58 bytes for XXCH).
 * Blu-ray secondary audio, 5.1 Express: the original embeds a stereo downmix in the LBR stream (header band byte
   +0x20, EXSS embedded-stereo flag). Not written yet.
-* Embedded stereo downmix in Master Audio / HRA cores and custom Downmix-tab coefficients (the code mapping is
-  known: primary scale = level code, coefficient = 64 + level code) are not written yet.
+* High Resolution Audio has no embedded stereo downmix in the original either (the setting is ignored there).
 * Express codes the full band with noise-filled high bands; Subwoofa narrows the band, so it is 6 to 9 dB worse at
   band limit 0 for the same rate.
 * Master Audio with 96 kHz extension: the EXTSS_MD chunk bit rates depend on content.

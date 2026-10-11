@@ -6,13 +6,13 @@
 
 use crate::encoder::{Config as CoreConfig, Encoder as CoreEncoder};
 use crate::exss::{exss_frame, ExssParams};
-use crate::ma::map_layout;
+use crate::ma::map_layout_with;
 use crate::native::map_channels as core_map_channels;
 use crate::ma::Hier;
 use crate::qmf64::{Analysis64, BANDS as BANDS64};
 use crate::x96::X96Encoder;
 use crate::xll::{XllConfig, XllEncoder};
-use sw_core::ChannelLayout;
+use sw_core::{ChannelLayout, Downmix};
 
 pub struct MaCoreConfig {
     pub layout: &'static ChannelLayout,
@@ -25,6 +25,8 @@ pub struct MaCoreConfig {
     pub x96: bool,
     /// Add the speaker remapping sets of a wide 7.1 stream (Bitstream tab).
     pub wide_remap: bool,
+    /// The Downmix tab (embedded stereo set, levels of the folds into 5.1).
+    pub downmix: Downmix,
 }
 
 /// Half-length of the decimator (linear phase, Kaiser window, `2 * half + 1` taps) for a rate ratio of 2 or 4.
@@ -72,6 +74,11 @@ pub struct MaCoreEncoder {
     exss: ExssParams,
     /// Source samples per XLL channel (coded order), not yet fully consumed.
     buf: Vec<Vec<i32>>,
+    /// With an embedded stereo set the core carries the 5.x programme, not the stereo downmix of `buf`: the same
+    /// channels with only the folds into 5.1 applied (empty otherwise).
+    cbuf: Vec<Vec<i32>>,
+    /// Coded channels coded as the residual of the core.
+    resid: std::ops::Range<usize>,
     /// Core slot (primary channels in stream order, then LFE) for every XLL channel (none for channels
     /// that only the lossless extension carries).
     xll_to_core: Vec<Option<usize>>,
@@ -121,9 +128,9 @@ struct X96State {
 
 impl MaCoreEncoder {
     pub fn new(cfg: MaCoreConfig) -> Result<MaCoreEncoder, crate::Error> {
-        let xmap = map_layout(cfg.layout);
+        let xmap = map_layout_with(cfg.layout, &cfg.downmix);
         // the core carries the channels of the first set
-        let base = xmap.set_sizes[0];
+        let base = xmap.core_channels();
         let base_chs: Vec<sw_core::Channel> = xmap.order[..base].iter().map(|&i| cfg.layout.channels[i]).collect();
         let cmap = core_map_channels(&base_chs, cfg.layout.id)?;
         if base != cfg.layout.channels.len() && xmap.hier.is_none() {
@@ -178,7 +185,7 @@ impl MaCoreEncoder {
             })
             .collect();
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: (-cfg.dialnorm) as u32, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: xch_x.is_some(), secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
+        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: (-cfg.dialnorm) as u32, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: xch_x.is_some(), secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.as_ref().map_or(false, |h| h.extras), emb_stereo: xmap.hier.as_ref().map_or(false, |h| h.stereo), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {
@@ -198,6 +205,11 @@ impl MaCoreEncoder {
             core,
             exss,
             buf: vec![Vec::new(); nch],
+            cbuf: if xmap.hier.as_ref().map_or(false, |h| h.stereo) { vec![Vec::new(); nch] } else { Vec::new() },
+            resid: match &xmap.hier {
+                Some(h) => h.sets[xmap.resid_set].clone(),
+                None => 0..base,
+            },
             xll_to_core,
             hier: xmap.hier.clone(),
             n,
@@ -232,7 +244,14 @@ impl MaCoreEncoder {
     pub fn push(&mut self, frame: &[Vec<i32>]) -> Vec<Vec<u8>> {
         let mut sent = frame.to_vec();
         if let Some(h) = &self.hier {
-            h.apply(&mut sent);
+            h.apply(&mut sent, false);
+            if h.stereo {
+                let mut core_sent = frame.to_vec();
+                h.apply(&mut core_sent, true);
+                for (b, f) in self.cbuf.iter_mut().zip(&core_sent) {
+                    b.extend_from_slice(f);
+                }
+            }
         }
         for (b, f) in self.buf.iter_mut().zip(&sent) {
             b.extend_from_slice(f);
@@ -249,7 +268,7 @@ impl MaCoreEncoder {
         let pushed = self.buf[0].len() + self.dropped;
         let frames = pushed.div_ceil(self.n);
         let want = frames * self.n + self.lookahead - self.dropped;
-        for b in self.buf.iter_mut() {
+        for b in self.buf.iter_mut().chain(self.cbuf.iter_mut()) {
             b.resize(want.max(b.len()), 0);
         }
         let mut jobs = Vec::new();
@@ -288,7 +307,7 @@ impl MaCoreEncoder {
         let (n, f_off, dropped, nprim) = (self.n, self.emitted * self.n, self.dropped, self.nprim);
         let gain0 = (1u64 << self.shift) as f64;
         let hier = &self.hier;
-        let bufs = &self.buf;
+        let bufs = if self.cbuf.is_empty() { &self.buf } else { &self.cbuf };
         let deq = &self.core.last_deq;
         let work: Vec<(usize, usize)> = self.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.filter(|s| *s < nprim).map(|s| (x, s))).collect();
         let x96 = self.x96.as_mut().unwrap();
@@ -325,10 +344,19 @@ impl MaCoreEncoder {
         frame[start..].copy_from_slice(&block);
     }
 
+    /// The programme the core is made from, per coded channel.
+    fn core_src(&self) -> &Vec<Vec<i32>> {
+        if self.cbuf.is_empty() {
+            &self.buf
+        } else {
+            &self.cbuf
+        }
+    }
+
     /// Core-rate input samples for one channel and frame, in 24-bit units.
     fn core_input(&self, x: usize, frame: usize) -> Vec<f64> {
         let n48 = self.n / self.ratio;
-        let src = &self.buf[x];
+        let src = &self.core_src()[x];
         let gain = (1u64 << self.shift) as f64;
         if self.ratio == 1 {
             let start = frame * self.n + self.l48 - self.dropped;
@@ -432,7 +460,7 @@ impl MaCoreEncoder {
             let keep_from = (self.emitted * n).saturating_sub(self.half + 4);
             if keep_from > self.dropped + (1 << 16) {
                 let cut = keep_from - self.dropped;
-                for b in self.buf.iter_mut() {
+                for b in self.buf.iter_mut().chain(self.cbuf.iter_mut()) {
                     b.drain(..cut);
                 }
                 self.dropped = keep_from;
@@ -445,6 +473,11 @@ impl MaCoreEncoder {
                 resid.push(self.buf[x][start..start + n].to_vec());
                 continue;
             };
+            if !self.resid.contains(&x) {
+                // carried by the core but coded on its own (the stereo downmix of an embedded stereo set)
+                resid.push(self.buf[x][start..start + n].to_vec());
+                continue;
+            }
             let c = &self.core.last_core_pcm[slot];
             debug_assert_eq!(c.len(), n);
             match &self.hier {
@@ -480,7 +513,7 @@ impl MaCoreEncoder {
         let keep_from = (self.emitted * n).saturating_sub(self.half + 4);
         if keep_from > self.dropped + (1 << 16) {
             let cut = keep_from - self.dropped;
-            for b in self.buf.iter_mut() {
+            for b in self.buf.iter_mut().chain(self.cbuf.iter_mut()) {
                 b.drain(..cut);
             }
             self.dropped = keep_from;

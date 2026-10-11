@@ -1,7 +1,7 @@
 //! File-level driver for DTS-HD Master Audio: stems in, `.dtshd` (or raw) stream out.
 
 use crate::dtshd::{DtsHdInfo, Kind, StreamOut};
-use crate::ma::{map_layout, MaConfig, MaEncoder};
+use crate::ma::{map_layout_with, MaConfig, MaEncoder};
 use crate::ma_core::{MaCoreConfig, MaCoreEncoder};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +68,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     }
     let bit_res = (stems.bits as u32).clamp(16, 24);
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
-    let map = map_layout(req.layout);
+    // the stereo set rides under the core, which stops at 96 kHz
+    let mut downmix = req.bitstream.downmix.clone();
+    if rate > 96_000 {
+        downmix.embed_stereo = false;
+    }
+    let map = map_layout_with(req.layout, &downmix);
     let nch = map.order.len();
     if nch > 24 {
         return Err(MaError::Unsupported("more than 24 channels".into()));
@@ -85,7 +90,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let wide_remap = req.bitstream.wide_remap && req.layout.channels.contains(&sw_core::Channel::Lw);
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
-            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap })?),
+            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap, downmix: downmix.clone() })?),
             None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: (-req.dialnorm) as u32, wide_remap, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2) })),
         })
     };
@@ -118,7 +123,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         if core_bitrate_kbps.is_some() {
             // CORESSMD describes the core: 48 kHz and the speakers of the base channel set
             i.core_rate = Some(if req.x96 && rate == 96_000 { 96_000 } else { 48_000 });
-            i.core_mask = Some(map.order[..map.set_sizes[0]].iter().fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16);
+            i.core_mask = Some(map.order[..map.core_channels()].iter().fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16);
         }
         i
     });

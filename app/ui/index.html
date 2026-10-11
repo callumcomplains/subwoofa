@@ -128,6 +128,28 @@
   </div>
 </details>
 
+<details id="dmx" class="bs" hidden>
+  <summary>Downmix</summary>
+  <div class="bs-grid">
+    <div class="f wide" id="dmxStereoWrap" hidden>
+      <label class="chk tight" id="dmxEmbedWrap"><input type="checkbox" id="dmxEmbed"><span>Embed a stereo downmix</span></label>
+      <small id="dmxEmbedNote">Carries a stereo mix as a channel set of its own, so a decoder can play stereo without decoding the other channels. The file gets bigger.</small>
+      <label class="chk tight" id="dmxMatrixWrap"><input type="checkbox" id="dmxMatrix"><span>Write the stereo downmix levels into the stream</span></label>
+      <label class="chk tight" id="dmxLtRtWrap"><input type="checkbox" id="dmxLtRt"><span>Mark the stereo downmix as matrix encoded (Lt/Rt)</span></label>
+    </div>
+    <div class="f wide" id="dmx51Wrap" hidden>
+      <label><span>Downmix to 5.1</span></label>
+      <div id="dmx51Grid" class="dmx-grid"></div>
+      <small id="dmx51Note">Levels in dB below full level; empty is off. The first column is the gain of each 5.1 channel when a decoder plays only the 5.1 part; the other two add the extra channels of the 7.x layout.</small>
+    </div>
+    <div class="f wide" id="dmx20Wrap" hidden>
+      <label><span>Downmix to stereo</span></label>
+      <div id="dmx20Grid" class="dmx-grid"></div>
+      <small>Levels in dB below full level; empty is off. L to left and R to right are the gain of the front channels themselves.</small>
+    </div>
+  </div>
+</details>
+
 <div class="work">
   <section class="layouts" aria-label="Channel layout">
     <h2>Channel layout</h2>

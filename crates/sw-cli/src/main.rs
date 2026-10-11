@@ -339,6 +339,31 @@ struct BitstreamArgs {
     /// Reference timecode stored in the .dtshd file (HH:MM:SS:FF); the start timecode when not given.
     #[arg(long)]
     timecode_reference: Option<String>,
+    /// Master Audio: carry a stereo downmix as a channel set of its own (needs a layout with a surround pair).
+    #[arg(long)]
+    embed_stereo: bool,
+    /// Master Audio: write the stereo downmix coefficients into the stream as information.
+    #[arg(long)]
+    stereo_matrix: bool,
+    /// Label the stereo downmix as matrix encoded (Lt/Rt) instead of Lo/Ro.
+    #[arg(long)]
+    stereo_lt_rt: bool,
+    /// Downmix to 5.1: gain of the 5.1 channels, e.g. "L=3,R=3,C=3,Ls=3,Rs=3,LFE=3" (dB; "inf" is off).
+    #[arg(long)]
+    dmx51_scale: Option<String>,
+    /// Downmix to 5.1: level at which the first extra channel of a 7.x layout is added to each 5.1 channel
+    /// (default "Ls=3").
+    #[arg(long)]
+    dmx51_a: Option<String>,
+    /// Downmix to 5.1: the same for the second extra channel (default "Rs=3").
+    #[arg(long)]
+    dmx51_b: Option<String>,
+    /// Downmix to stereo: level at which each channel goes to the left output (default "L=3,C=6,Ls=6").
+    #[arg(long)]
+    dmx20_a: Option<String>,
+    /// Downmix to stereo: the same for the right output (default "R=3,C=6,Rs=6").
+    #[arg(long)]
+    dmx20_b: Option<String>,
 }
 
 impl BitstreamArgs {
@@ -351,6 +376,21 @@ impl BitstreamArgs {
         o.timecode.start = self.timecode_start.clone().unwrap_or_default();
         o.timecode.reference = self.timecode_reference.clone().unwrap_or_default();
         o.secondary.dialog_mode = self.dialog_mode;
+        o.downmix.embed_stereo = self.embed_stereo;
+        o.downmix.stereo_matrix = self.stereo_matrix;
+        o.downmix.lt_rt = self.stereo_lt_rt;
+        // channels named on the command line replace their default level; the others keep it
+        for (text, table) in [
+            (&self.dmx51_scale, &mut o.downmix.primary),
+            (&self.dmx51_a, &mut o.downmix.extra_a),
+            (&self.dmx51_b, &mut o.downmix.extra_b),
+            (&self.dmx20_a, &mut o.downmix.stereo_a),
+            (&self.dmx20_b, &mut o.downmix.stereo_b),
+        ] {
+            if let Some(t) = text {
+                sw_core::Downmix::parse_levels(table, t).map_err(|e| format!("downmix levels: {e}"))?;
+            }
+        }
         if let Some(v) = self.primary_attenuation {
             o.secondary.attenuation_db = v.clamp(0.0, 60.0);
         }

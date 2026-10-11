@@ -1,8 +1,8 @@
 //! Core plus lossless extension: the decoder must reproduce the source exactly.
 use std::process::Command;
-use sw_codec_dts::ma::map_layout;
+use sw_codec_dts::ma::{map_layout, map_layout_with};
 use sw_codec_dts::ma_core::{MaCoreConfig, MaCoreEncoder};
-use sw_core::ChannelLayout;
+use sw_core::{ChannelLayout, Downmix};
 
 fn have_ffmpeg() -> bool {
     Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
@@ -52,12 +52,16 @@ fn core_roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res
 }
 
 fn core_roundtrip_x(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32, x96: bool) {
+    core_roundtrip_dm(name, layout_id, rate, frames, bit_res, x96, Downmix::default())
+}
+
+fn core_roundtrip_dm(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32, x96: bool, downmix: Downmix) {
     if !have_ffmpeg() {
         return;
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
-    let map = map_layout(layout);
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96, wide_remap: false }).unwrap();
+    let map = map_layout_with(layout, &downmix);
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96, wide_remap: false, downmix }).unwrap();
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 7u32;
@@ -99,6 +103,31 @@ fn core_roundtrip_x(name: &str, layout_id: &str, rate: u32, frames: usize, bit_r
     assert_eq!(bad, 0, "{name}: {bad} samples differ");
 }
 
+/// A stereo downmix carried as a channel set of its own, with custom levels, must leave the full decode exact.
+#[test]
+fn embedded_stereo_set_is_lossless() {
+    let mut dm = Downmix::default();
+    dm.embed_stereo = true;
+    core_roundtrip_dm("emb51", "5.1", 48_000, 12, 24, false, dm.clone());
+    core_roundtrip_dm("emb71", "7.1-side-rear", 48_000, 12, 24, false, dm.clone());
+    dm.stereo_a[0] = Some(3.0);
+    dm.stereo_b[3] = Some(9.0);
+    dm.primary = [Some(1.5), Some(4.5), Some(3.0), Some(6.0), Some(0.0), Some(9.0)];
+    dm.stereo_a[1] = Some(1.5);
+    core_roundtrip_dm("emb71_custom", "7.1-wide", 48_000, 12, 24, false, dm.clone());
+    core_roundtrip_dm("emb61", "6.1-discrete", 48_000, 12, 24, false, dm);
+}
+
+/// The 5.1 downmix levels of a 7.x layout change the embedded set, not the decoded programme.
+#[test]
+fn custom_five_one_downmix_is_lossless() {
+    let mut dm = Downmix::default();
+    dm.primary = [Some(6.0), Some(1.5), Some(4.5), Some(9.0), Some(12.0), Some(0.0)];
+    dm.extra_a = [Some(4.0), None, Some(2.0), Some(5.0), None, Some(13.0)];
+    dm.extra_b = [None, Some(10.0), None, Some(16.0), Some(7.0), None];
+    core_roundtrip_dm("dm71", "7.1-side-rear", 48_000, 12, 24, false, dm);
+}
+
 /// A 96/24 core (X96 in the core frames) must not disturb the lossless extension.
 #[test]
 fn core_with_x96_plus_xll_five_one_96k() {
@@ -115,8 +144,8 @@ fn core_plus_xll_seven_one_48k() {
     core_roundtrip("c71", "7.1-side-rear", 48_000, 24, 24);
 }
 
-/// A 5.1-only decoder (reading just the first channel set) must get the documented downmix:
-/// the side channels with the rear channels folded in at -3 dB each.
+/// A 5.1-only decoder (reading just the first channel set) must get the documented downmix: every channel
+/// at -3 dB (the Downmix tab's default scale), the side channels with the rear channels folded in at -3 dB each.
 #[test]
 fn seven_one_embedded_five_one_downmix() {
     if !have_ffmpeg() {
@@ -125,7 +154,7 @@ fn seven_one_embedded_five_one_downmix() {
     let layout = ChannelLayout::find("7.1-side-rear").unwrap();
     let map = map_layout(layout);
     let frames = 16;
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false, wide_remap: false }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false, wide_remap: false, downmix: Default::default() }).unwrap();
     let n = enc.frame_samples();
     let mut seed = 5u32;
     let sigs: Vec<Vec<i32>> = (0..8).map(|c| signal(c, n * frames, &mut seed)).collect();
@@ -157,10 +186,10 @@ fn seven_one_embedded_five_one_downmix() {
         let s = |coded: usize| sigs[coded][i] as f64;
         // coded indices follow ascending speaker bit: C0 L1 R2 LFE5 Lss9 Rss10 Lsr7 Rsr8 -> set 0: C L R LFE Lss Rss, set 1: Lsr Rsr
         match ch {
-            0 => s(1),
-            1 => s(2),
-            2 => s(0),
-            3 => s(3),
+            0 => scaled(s(1), 0.0),
+            1 => scaled(s(2), 0.0),
+            2 => scaled(s(0), 0.0),
+            3 => scaled(s(3), 0.0),
             4 => scaled(s(4), s(6)),
             _ => scaled(s(5), s(7)),
         }

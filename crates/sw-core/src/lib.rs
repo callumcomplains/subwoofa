@@ -11,7 +11,7 @@ pub mod downmix;
 pub mod formats;
 pub mod layout;
 
-pub use bitstream::BitstreamOptions;
+pub use bitstream::{BitstreamOptions, Downmix};
 pub use channel::Channel;
 pub use formats::{Destination, StreamType};
 pub use layout::{ChannelLayout, LAYOUTS};
