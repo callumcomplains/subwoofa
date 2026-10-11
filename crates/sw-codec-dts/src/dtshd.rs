@@ -168,7 +168,7 @@ fn leading(info: &DtsHdInfo, frames: u32, bytes: u64, avg_kbps: u32, peak_kbps: 
         Kind::CoreAndExtension if info.vbr => 5,
         Kind::CoreAndExtension => 1, // constant rate extension, as the encoder writes HRA
         Kind::CoreOnly => 1,
-        Kind::ExtensionOnly if info.vbr => 5, // lossless data without a core
+        Kind::ExtensionOnly if info.vbr => 4, // lossless data without a core
         Kind::ExtensionOnly => 8,
     };
     let mut a = vec![0u8, 0, kind_byte];

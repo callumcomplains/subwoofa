@@ -255,7 +255,8 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + nb4f as usize;
     let bits_total = bits_before_desc + alen * 8 + if p.with_core { 6 } else { 1 };
     let natural = bits_total.div_ceil(8) + 2;
-    let hsize = if p.extras.min_header == 0 { natural } else { p.extras.min_header.max(natural.div_ceil(4) * 4) };
+    // the original pads its headers with zero bytes to a multiple of four
+    let hsize = natural.div_ceil(4) * 4;
     // whole 32-bit words: DTS-HD tools (StreamTools) refuse streams whose frames are not padded to 4 bytes
     let pad = (4 - (hsize + payload) % 4) % 4;
     let frame_size = hsize + payload + pad;

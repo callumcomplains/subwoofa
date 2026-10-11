@@ -320,11 +320,20 @@ pub struct MaEncoder {
     cfg: MaConfig,
     xll: XllEncoder,
     frame_samples: usize,
+    /// Frame length in units of 512 samples at the 48 kHz clock.
+    units: usize,
 }
 
 impl MaEncoder {
     pub fn new(cfg: MaConfig) -> MaEncoder {
-        let frame_samples = match cfg.sample_rate {
+        // A stream without a core has longer frames, as the original writes it: two and a half times as many samples
+        // for stereo (2048 at the 48 kHz clock), 1024 up to 7.1, and the usual 512 beyond that.
+        let units = match cfg.map.order.len() {
+            0..=2 => 4,
+            3..=8 => 2,
+            _ => 1,
+        };
+        let frame_samples = units * match cfg.sample_rate {
             44_100 | 48_000 => 512,
             88_200 | 96_000 => 1024,
             176_400 | 192_000 => 2048,
@@ -336,7 +345,7 @@ impl MaEncoder {
             frame_samples,
             sets: cfg.map.xll_sets(false),
         });
-        MaEncoder { cfg, xll, frame_samples }
+        MaEncoder { cfg, xll, frame_samples, units }
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -361,9 +370,9 @@ impl MaEncoder {
                 spk_mask: self.cfg.map.exss_mask,
                 with_core: false,
                 dialnorm: self.cfg.dialnorm,
-                frame_duration_code: 0,
+                frame_duration_code: self.units as u32 - 1,
                 x96_in_core: false, xch_in_core: false, secondary: false,
-                extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: self.cfg.map.hier.is_some(), wide_remap: self.cfg.wide_remap, repr_type: self.cfg.repr_type, ..Default::default() },
+                extras: crate::exss::ExssExtras { min_header: 0, emb_5_1: self.cfg.map.hier.is_some(), wide_remap: self.cfg.wide_remap, repr_type: self.cfg.repr_type, ..Default::default() },
             },
             &data,
         )

@@ -107,7 +107,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     // A stream with a core opens with two frames of silence, as the commercial encoder does: the decoder has no
     // history for the first frame (the lossless stage cannot reproduce it exactly when the channels sit in two
     // sets), and the file's codec delay field tells decoders to drop them, so every source sample is kept.
-    let lead = if req.container && core_bitrate_kbps.is_some() { 2 * n } else { 0 };
+    let lead = if req.container && core_bitrate_kbps.is_some() { 2 * n } else if req.container { n } else { 0 };
     let info = req.container.then(|| {
         let mut i = DtsHdInfo::new(rate, n as u16, want, map.exss_mask as u16, if core_bitrate_kbps.is_some() { Kind::CoreAndExtension } else { Kind::ExtensionOnly });
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
@@ -133,12 +133,15 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let mut bytes = 0u64;
     let mut frames = 0u64;
     if lead > 0 {
-        if let Enc::Core(e) = &mut enc {
-            for f in e.push(&vec![vec![0i32; lead]; nch]) {
-                file.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
-                bytes += f.len() as u64;
-                frames += 1;
-            }
+        let silence = vec![vec![0i32; lead]; nch];
+        let ready = match &mut enc {
+            Enc::Core(e) => e.push(&silence),
+            Enc::Lossless(e) => lossless_frames(e, &silence, lead, n),
+        };
+        for f in ready {
+            file.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
+            bytes += f.len() as u64;
+            frames += 1;
         }
     }
     // several frames per push so the lossless stage can run in parallel
