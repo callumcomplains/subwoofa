@@ -578,6 +578,7 @@ function syncBitstream() {
   $("bsCsv").hidden = $("bsSeamless").value !== "csv";
   $("bsCsvNote").textContent = $("bsSeamless").value === "csv" ? (bsCsvPath ? `${bsCsvPoints.length} branch point${bsCsvPoints.length === 1 ? "" : "s"} from ${bsCsvPath.split(/[\\/]/).pop()}` : "no CSV file chosen") : "";
   syncDownmix();
+  syncTabs();
 }
 
 const DMX_CH = ["C", "L", "R", "Ls", "Rs", "LFE"];
@@ -692,6 +693,109 @@ async function chooseBranchCsv() {
   syncBitstream();
 }
 
+/* ---------- themes ---------- */
+
+const THEMES = [
+  ["amber", "Studio Amber"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["ocean", "Ocean"], ["moss", "Moss"],
+  ["rose", "Rose Dusk"], ["terminal", "Terminal"], ["paper", "Paper"], ["daylight", "Daylight"], ["contrast", "High Contrast"],
+];
+
+function applyTheme(name) {
+  if (!THEMES.some((t) => t[0] === name)) name = "amber";
+  document.documentElement.dataset.theme = name;
+  store.set("theme", name);
+  for (const b of $("themeGrid").children) b.setAttribute("aria-checked", String(b.dataset.theme === name));
+}
+
+function buildThemeGrid() {
+  $("themeGrid").innerHTML = THEMES.map(([id, label]) =>
+    `<button type="button" role="radio" class="theme" data-theme="${id}" aria-checked="false"><span class="sw"><i></i><b></b><u></u><s></s></span><span class="n">${label}</span></button>`).join("");
+  $("themeGrid").onclick = (e) => { const b = e.target.closest(".theme"); if (b) applyTheme(b.dataset.theme); };
+  applyTheme(document.documentElement.dataset.theme);
+}
+
+/* ---------- tabs of the main card ---------- */
+
+function showTab(id) {
+  for (const p of ["inputsPanel", "bs", "dmx"]) $(p).classList.toggle("active", p === id);
+  for (const b of $("mainTabs").children) b.setAttribute("aria-pressed", String(b.dataset.tab === id));
+}
+
+/** A tab is offered only while its panel applies to the chosen format and layout. */
+function syncTabs() {
+  let active = [...$("mainTabs").children].find((b) => b.getAttribute("aria-pressed") === "true")?.dataset.tab || "inputsPanel";
+  for (const b of $("mainTabs").children) b.hidden = b.dataset.tab !== "inputsPanel" && $(b.dataset.tab).hidden;
+  $("mainTabs").hidden = $("bs").hidden && $("dmx").hidden;
+  if ($(active).hidden) active = "inputsPanel";
+  showTab(active);
+}
+
+/* ---------- (i) marks ---------- */
+
+const INFO = [
+  ["#dest", "Where the file will be used. It decides which formats and limits are offered: Blu-ray, DVD, a streaming or download delivery, a DTS music disc, a generic file, or a plain audio file."],
+  ["#stream", "The audio format. Lossless formats (DTS-HD Master Audio, Dolby TrueHD) keep every bit of your audio; lossy ones (DTS, Dolby Digital, DTS Express) are much smaller. Pick what your player or disc specification asks for."],
+  ["#rate", "Samples per second of the encoded audio. Match your source if you can: 48 kHz is standard for video, 96 kHz and up is high resolution. A source at another rate is converted."],
+  ["#bitrate", "How much data per second the lossy part may use. More means better quality and a bigger file. The range next to it is what this format allows; the buttons are common values."],
+  ["#dialnormOn", "Dialogue normalisation: the average loudness of the speech, stored so players can level different titles to each other. Leave it off unless you know the figure; film mixes are often around -27."],
+  ["#dtsOpts", "Extras for DTS ES (6.1) streams. The phase shift keeps the rear centre channel from cancelling against the other rears; the -3 dB trim lowers the rear channels to match a matrixed surround."],
+  ["#pcmFormat", "How each sample is stored in the audio file: integers or floating point at 16 to 64 bits, or one-bit DSD audio."],
+  ["@.layouts h2", "The speaker arrangement of the encoded audio. Pick a family such as 5.1, then the exact variant; the diagram shows where each channel plays. Input files follow the same layout."],
+  ["@#inputsPanel .inputs-head h2", "One mono file per channel. Drop the left-channel file anywhere and the rest are found next to it, or import a single multichannel file and everything fills itself."],
+  ["#srcLayout", "Use this when your source files have a different layout from the output. NHK 22.2 sources, for example, are mixed down to the layout you picked."],
+  ["#entire", "Untick to encode only a section of the audio: set where it starts and how long it runs, in seconds. Handy for quick tests."],
+  ["#bsInfo", "Free text stored inside the .dtshd file, such as a title or notes for yourself. It is not heard in playback."],
+  ["#bsFps", "The video frame rate and start time stored in the file, so authoring tools place the audio exactly. The reference time is where the programme was cut from."],
+  ["#bsSeamless", "Seamless branching lets a Blu-ray player jump between versions of a film without a glitch, by making the stream restart cleanly at set points. Use a CSV of timecodes, one per line, for several branch points."],
+  ["#bsWide", "Adds extra information that lets a decoder play wide front channels on a side-rear speaker layout or on a 5.1 system."],
+  ["#bsDialog", "Express dialog mode codes only the lower half of the frequency range, which is enough for speech and saves bits."],
+  ["#bsAtt", "How far the main film audio is turned down, in dB, while this secondary (commentary) track plays."],
+  ["#bsFadeDown", "How many seconds the main audio takes to reach that lower level when the commentary starts."],
+  ["#bsFadeUp", "How many seconds the main audio takes to come back up when the commentary ends."],
+  ["#dmxEmbed", "Adds a ready-made stereo mix inside the file, so a stereo player does not have to fold the surround down itself. The file gets bigger."],
+  ["#dmxMatrix", "Stores your stereo mixing levels in the stream as information. Decoders and players may use them when they downmix."],
+  ["#dmxLtRt", "Labels the stereo mix as Lt/Rt (surround encoded, for a matrix decoder) instead of plain Lo/Ro."],
+  ["@#dmx51Wrap > label", "How a 7.x stream plays as 5.1. The first column is the gain of each 5.1 channel; Extra 1 and Extra 2 say how much of the two extra channels is added to it. Numbers are dB below full level, empty means not mixed in."],
+  ["@#dmx20Wrap > label", "How the stream plays as stereo: how much of each channel goes to the left and to the right output, in dB below full level. Empty means none."],
+  ["#optUnlocked", "For experts: the encoder stops checking your choices against the format rules."],
+  ["#optConc", "How many encodes may run at the same time. More is faster on a big computer."],
+  ["#optOrder", "Some multichannel files list their channels in a different order. Auto uses the film order for 7.1; the others follow the file's speaker mask or the order of the layout."],
+];
+
+function addInfos() {
+  for (const [sel, text] of INFO) {
+    let host;
+    if (sel.startsWith("@")) host = document.querySelector(sel.slice(1));
+    else {
+      const el = document.querySelector(sel);
+      const f = el && el.closest(".f, .chk, .opt, label");
+      host = f && (f.querySelector(":scope > span > b, :scope > b, :scope > span, :scope > label > span, span"));
+    }
+    if (!host || host.querySelector(".info")) continue;
+    const i = document.createElement("i");
+    i.className = "info"; i.tabIndex = 0; i.textContent = "i"; i.dataset.tip = text; i.setAttribute("aria-label", text);
+    host.append(i);
+  }
+}
+
+function initTips() {
+  const tip = $("tip");
+  const show = (el) => {
+    tip.textContent = el.dataset.tip;
+    tip.classList.add("on");
+    const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+    const x = Math.max(8, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 8));
+    const y = r.bottom + 8 + t.height > innerHeight ? r.top - t.height - 8 : r.bottom + 8;
+    tip.style.left = x + "px"; tip.style.top = Math.max(8, y) + "px";
+  };
+  const hide = () => tip.classList.remove("on");
+  document.addEventListener("mouseover", (e) => { const el = e.target.closest?.(".info"); if (el) show(el); });
+  document.addEventListener("mouseout", (e) => { if (e.target.closest?.(".info")) hide(); });
+  document.addEventListener("focusin", (e) => { const el = e.target.closest?.(".info"); if (el) show(el); });
+  document.addEventListener("focusout", hide);
+  document.addEventListener("scroll", hide, true);
+}
+
 /* ---------- presets (.swpreset, plain JSON) ---------- */
 
 const PRESET_FILTER = [{ name: "Subwoofa preset", extensions: ["swpreset"] }];
@@ -768,6 +872,8 @@ function setUnlocked(v) {
 
 async function init() {
   buildDmxGrids();
+  buildThemeGrid();
+  initTips();
   cat = await invoke("catalog");
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
   cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c === "Lfe2" ? "LFE2" : c)) }));
@@ -794,6 +900,8 @@ async function init() {
   $("bsSeamless").onchange = syncBitstream;
   for (const id of ["dmxEmbed", "dmxMatrix", "dmxLtRt"]) $(id).onchange = syncDownmix;
   $("dmx51Grid").oninput = syncDownmix;
+  $("mainTabs").onclick = (e) => { const b = e.target.closest("button"); if (b) showTab(b.dataset.tab); };
+  addInfos();
   $("bsCsv").onclick = chooseBranchCsv;
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };

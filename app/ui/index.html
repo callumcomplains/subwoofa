@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Subwoofa</title>
 <link rel="stylesheet" href="style.css">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("theme") || "amber"; } catch (e) { document.documentElement.dataset.theme = "amber"; }</script>
 </head>
 <body>
 <header class="bar">
@@ -13,22 +14,21 @@
     <b>SUBWOOFA</b>
   </div>
   <nav class="modes" aria-label="Mode">
-    <button id="modeEncode" aria-pressed="true">Encode</button>
-    <button id="modeTools" aria-pressed="false">StreamTools</button>
-    <button id="modeVerify" aria-pressed="false">Verify</button>
-    <button id="modeAtmos" aria-pressed="false">Atmos</button>
+    <button id="modeEncode" title="Make a new encoded file from your audio" aria-pressed="true">Encode</button>
+    <button id="modeTools" title="Cut, join, relabel and inspect an existing stream" aria-pressed="false">StreamTools</button>
+    <button id="modeVerify" title="Check that an encoded file is valid and decodes cleanly" aria-pressed="false">Verify</button>
+    <button id="modeAtmos" title="Encode a Dolby Atmos master with the Dolby Encoding Engine" aria-pressed="false">Atmos</button>
   </nav>
   <div class="bar-right">
     <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
     <span id="engine" class="status"><i class="lamp"></i><span>checking engine</span></span>
-    <button id="openSettings" class="plain">Settings</button>
+    <button id="openSettings" class="plain" title="Theme, behaviour and presets">Settings</button>
   </div>
 </header>
 
 <section class="strip" aria-label="Format">
   <label class="f"><span>Destination</span><select id="dest"></select></label>
-  <label class="f wide"><span>Stream type</span><select id="stream"></select></label>
-  <div class="f wide"><small id="streamNote"></small></div>
+  <label class="f wide"><span>Stream type</span><select id="stream"></select><small id="streamNote"></small></label>
   <div class="f rate">
     <label for="rate"><span>Sample rate</span></label>
     <div class="combo">
@@ -78,8 +78,57 @@
   </div>
 </section>
 
-<details id="bs" class="bs" hidden>
-  <summary>Bitstream</summary>
+
+
+
+
+<div class="work">
+  <section class="layouts" aria-label="Channel layout">
+    <h2>Channel layout</h2>
+    <svg id="speakers" viewBox="-110 -105 220 210" role="img" aria-label="Speaker layout"></svg>
+    <div id="families" class="families" role="tablist"></div>
+    <div id="variants" class="variants" role="listbox"></div>
+  </section>
+
+  <div class="main">
+    <nav class="tabs" id="mainTabs" aria-label="Settings">
+      <button data-tab="inputsPanel" aria-pressed="true">Inputs</button>
+      <button data-tab="bs" aria-pressed="false" hidden>Bitstream</button>
+      <button data-tab="dmx" aria-pressed="false" hidden>Downmix</button>
+    </nav>
+  <section class="panel inputs active" id="inputsPanel" aria-label="Input files">
+    <div class="inputs-head">
+      <h2>Input files</h2>
+      <span class="hint">Drop a file on a row, or drop the L file anywhere to fill the rest</span>
+      <label class="f small"><span>Input layout</span><select id="srcLayout"><option value="">Same as output</option><option value="22.2">NHK 22.2 (24 ch), mixed down</option></select></label>
+      <button id="importMc" class="plain" title="Pick one multichannel file (2.0, 5.1, 7.1...): the layout and every row fill themselves">Import file…</button>
+      <button id="batch" class="plain" title="Encode every complete set of channel files in a folder, one job each">Batch from folder…</button>
+      <button id="clear" class="plain">Clear all</button>
+    </div>
+    <table id="files">
+      <thead><tr><th>Ch</th><th>File</th><th>Src</th><th>Bits</th><th>Rate</th><th>Length</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="range">
+      <label class="chk"><input type="checkbox" id="entire" checked><span>Encode entire file</span></label>
+      <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
+      <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
+    </div>
+
+    <details id="dm" class="dm">
+      <summary>Downmix &amp; clip check</summary>
+      <div class="dm-bar">
+        <label class="f small"><span>Target</span><select id="dmTarget"></select></label>
+        <button id="dmReset" class="plain">Reset</button>
+        <button id="dmSafe" class="plain">Safe trim</button>
+        <button id="dmCheck">Check clipping</button>
+        <span id="dmNote" class="hint"></span>
+      </div>
+      <div class="dm-scroll"><table id="dmTable" class="dmtable"></table></div>
+      <pre id="dmResult" class="dm-result"></pre>
+    </details>
+  </section>
+<section id="bs" class="panel" hidden>
   <div class="bs-grid">
     <label class="f wide" id="bsInfoWrap"><span>Program information</span>
       <textarea id="bsInfo" rows="2" maxlength="2000" placeholder="Text stored in the .dtshd file (up to 2000 characters, plain Latin-1)"></textarea></label>
@@ -126,10 +175,8 @@
       </div>
     </div>
   </div>
-</details>
-
-<details id="dmx" class="bs" hidden>
-  <summary>Downmix</summary>
+</section>
+<section id="dmx" class="panel" hidden>
   <div class="bs-grid">
     <div class="f wide" id="dmxStereoWrap" hidden>
       <label class="chk tight" id="dmxEmbedWrap"><input type="checkbox" id="dmxEmbed"><span>Embed a stereo downmix</span></label>
@@ -148,48 +195,8 @@
       <small>Levels in dB below full level; empty is off. L to left and R to right are the gain of the front channels themselves.</small>
     </div>
   </div>
-</details>
-
-<div class="work">
-  <section class="layouts" aria-label="Channel layout">
-    <h2>Channel layout</h2>
-    <svg id="speakers" viewBox="-110 -105 220 210" role="img" aria-label="Speaker layout"></svg>
-    <div id="families" class="families" role="tablist"></div>
-    <div id="variants" class="variants" role="listbox"></div>
-  </section>
-
-  <section class="inputs" aria-label="Input files">
-    <div class="inputs-head">
-      <h2>Input files</h2>
-      <span class="hint">Drop a file on a row, or drop the L file anywhere to fill the rest</span>
-      <label class="f small"><span>Input layout</span><select id="srcLayout"><option value="">Same as output</option><option value="22.2">NHK 22.2 (24 ch), mixed down</option></select></label>
-      <button id="importMc" class="plain" title="Pick one multichannel file (2.0, 5.1, 7.1...): the layout and every row fill themselves">Import file…</button>
-      <button id="batch" class="plain" title="Encode every complete set of channel files in a folder, one job each">Batch from folder…</button>
-      <button id="clear" class="plain">Clear all</button>
-    </div>
-    <table id="files">
-      <thead><tr><th>Ch</th><th>File</th><th>Src</th><th>Bits</th><th>Rate</th><th>Length</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="range">
-      <label class="chk"><input type="checkbox" id="entire" checked><span>Encode entire file</span></label>
-      <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
-      <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
-    </div>
-
-    <details id="dm" class="dm">
-      <summary>Downmix &amp; clip check</summary>
-      <div class="dm-bar">
-        <label class="f small"><span>Target</span><select id="dmTarget"></select></label>
-        <button id="dmReset" class="plain">Reset</button>
-        <button id="dmSafe" class="plain">Safe trim</button>
-        <button id="dmCheck">Check clipping</button>
-        <span id="dmNote" class="hint"></span>
-      </div>
-      <div class="dm-scroll"><table id="dmTable" class="dmtable"></table></div>
-      <pre id="dmResult" class="dm-result"></pre>
-    </details>
-  </section>
+</section>
+  </div>
 </div>
 
 <section id="queue" class="queue" aria-label="Encode queue" hidden>
@@ -371,7 +378,11 @@
 
 <dialog id="settings">
   <form method="dialog">
-    <h2>Settings</h2>
+    <h2>Appearance</h2>
+    <div id="themeGrid" class="themes" role="radiogroup" aria-label="Theme"></div>
+    <div class="opt-row">
+      <h2 style="flex-basis:100%">Behaviour</h2>
+    </div>
     <label class="opt">
       <input type="checkbox" id="optUnlocked">
       <span>
@@ -394,6 +405,7 @@
     <menu><button value="close" class="go small">Done</button></menu>
   </form>
 </dialog>
+<div id="tip" role="tooltip"></div>
 <script src="app.js"></script>
 </body>
 </html>
