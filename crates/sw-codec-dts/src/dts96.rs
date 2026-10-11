@@ -18,6 +18,8 @@ pub struct Dts96Config {
     /// 32 for a DTS CD).
     pub core_rate: u32,
     pub blocks: usize,
+    /// Flag the core as ES (6.x: the centre surround is mixed into the surrounds before the core).
+    pub es: bool,
 }
 
 /// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
@@ -85,7 +87,7 @@ impl Dts96Encoder {
             bitrate: cfg.bitrate,
             dialnorm: cfg.dialnorm,
             pcm_bits: cfg.pcm_bits,
-            es: false,
+            es: cfg.es,
             xch: false,
             perfect: false,
             blocks: cfg.blocks,

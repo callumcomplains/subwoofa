@@ -12,7 +12,17 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     if rate != 96_000 && rate != 88_200 {
         return Err(crate::Error::Unsupported(format!("DTS 96/24 needs 88.2 or 96 kHz input, not {rate} Hz")).into());
     }
-    let mut map = map_layout(req.layout)?;
+    // 6.x with a matrixed centre surround: the core is the 5.x downmix (Cs at -3 dB on both surrounds), flagged ES
+    let mix_cs = req.es.map_or(false, |e| e.mix_cs && !e.xch) && req.layout.channels.contains(&sw_core::Channel::Cs);
+    let cs_src = req.layout.channels.iter().position(|c| *c == sw_core::Channel::Cs).filter(|_| mix_cs);
+    let mut map = if mix_cs {
+        let idx: Vec<usize> = (0..req.layout.channels.len()).filter(|&i| req.layout.channels[i] != sw_core::Channel::Cs).collect();
+        let chans: Vec<sw_core::Channel> = idx.iter().map(|&i| req.layout.channels[i]).collect();
+        let cm = crate::native::map_channels(&chans, req.layout.id)?;
+        crate::native::LayoutMap { amode: cm.amode, order: cm.order.iter().map(|&i| idx[i]).collect(), lfe: cm.lfe.map(|i| idx[i]) }
+    } else {
+        map_layout(req.layout)?
+    };
     let nprim = map.order.len();
     let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
     // a DTS CD: 44.1 kHz core of 1024-sample frames, the stream packed into 14-bit words of a WAV file
@@ -25,7 +35,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     // a fifth of the frame for the extension, at least 96 bytes
     let frame_bytes = (bitrate as usize * (blocks * 32) / core_rate as usize / 8) & !3;
     let x96_bytes = ((frame_bytes / 5).max(96)) & !3;
-    let make_enc = || Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes, core_rate, blocks });
+    let make_enc = || Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes, core_rate, blocks, es: req.es.map_or(false, |e| e.flag) });
     let mut enc = make_enc()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -68,7 +78,22 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         }
         let got = (remaining as usize).min(chunk);
         stems.read_planar(&mut planar, got)?;
-        let block: Vec<Vec<f64>> = slots.iter().map(|&s| planar[s][..got].iter().map(|v| (*v as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0)).collect()).collect();
+        let surround = |c: sw_core::Channel| matches!(c, sw_core::Channel::Ls | sw_core::Channel::Rs | sw_core::Channel::Lss | sw_core::Channel::Rss);
+        let block: Vec<Vec<f64>> = slots
+            .iter()
+            .map(|&s| {
+                let add_cs = cs_src.filter(|_| surround(req.layout.channels[s]));
+                (0..got)
+                    .map(|i| {
+                        let mut v = planar[s][i] as f64 * 8_388_608.0;
+                        if let Some(cs) = add_cs {
+                            v += planar[cs][i] as f64 * 8_388_608.0 * std::f64::consts::FRAC_1_SQRT_2;
+                        }
+                        v.clamp(-8_388_608.0, 8_388_607.0)
+                    })
+                    .collect()
+            })
+            .collect();
         remaining -= got as u64;
         for f in enc.push(&block) {
             put(&mut out, &mut wav_out, &mut written, &f, core_payload, cd)?;
