@@ -85,7 +85,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac | Container::OggFlac => channels::wav_order(layout).order,
+        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -216,4 +216,34 @@ fn ogg_flac_16_bit_stereo() {
 fn ogg_flac_24_bit_seven_one_at_96k() {
     // 8 channels of noisy 24-bit audio make frames larger than one Ogg page can hold
     check("ogg71", OggFlac, "oga", Int24, "7.1-side-rear", 96_000, 70_000);
+}
+
+#[test]
+fn alac_16_bit_stereo() {
+    check("alac16", Alac, "m4a", Int16, "2.0", 44_100, 100_001);
+}
+
+#[test]
+fn alac_24_bit_stereo() {
+    check("alac24", Alac, "m4a", Int24, "2.0", 96_000, 70_000);
+}
+
+#[test]
+fn alac_mono() {
+    check("alacmono", Alac, "m4a", Int24, "1.0", 48_000, 20_000);
+}
+
+#[test]
+fn alac_24_bit_five_one() {
+    check("alac51", Alac, "m4a", Int24, "5.1", 48_000, 50_000);
+}
+
+#[test]
+fn alac_16_bit_seven_one_wide() {
+    check("alac71", Alac, "m4a", Int16, "7.1-wide", 48_000, 30_000);
+}
+
+#[test]
+fn alac_shorter_than_one_frame() {
+    check("alacshort", Alac, "m4a", Int24, "2.0", 48_000, 1_000);
 }

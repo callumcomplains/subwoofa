@@ -5,6 +5,8 @@
 //! channels and hands the blocks over.
 
 mod aiff;
+mod alac;
+mod bitwriter;
 mod caf;
 pub mod channels;
 mod flac;
@@ -26,6 +28,8 @@ pub enum Container {
     Flac,
     /// FLAC frames in an Ogg stream (`.oga`).
     OggFlac,
+    /// Apple Lossless in an M4A file.
+    Alac,
 }
 
 /// How each sample is stored.
@@ -178,7 +182,16 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let mask_order = channels::wav_order(req.layout);
     let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac);
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
-    let order: Vec<usize> = if wav_style { mask_order.order.clone() } else { (0..req.layout.channels.len()).collect() };
+    let mut layout_tag = 0;
+    let order: Vec<usize> = if req.container == Container::Alac {
+        let (order, tag) = alac::alac_order(req.layout).ok_or_else(|| PcmError::Unsupported(format!("ALAC has no channel arrangement for {} (it takes mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides)", req.layout.id)))?;
+        layout_tag = tag;
+        order
+    } else if wav_style {
+        mask_order.order.clone()
+    } else {
+        (0..req.layout.channels.len()).collect()
+    };
     let labels = order.iter().map(|&i| channels::caf_label(req.layout.channels[i], i)).collect();
     let params = Params { rate, format: req.format, total_frames: wanted, order, mask: mask_order.mask, labels, time_reference: stems.time_reference.map(|t| t + first) };
 
@@ -188,6 +201,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::Caf => Box::new(caf::CafWriter::create(req.output, params)?),
         Container::Flac => Box::new(flac::FlacWriter::create(req.output, params, false)?),
         Container::OggFlac => Box::new(flac::FlacWriter::create(req.output, params, true)?),
+        Container::Alac => Box::new(alac::AlacWriter::create(req.output, params, layout_tag)?),
     };
     let block = 16_384usize;
     let mut planar: Vec<Vec<f32>> = Vec::new();

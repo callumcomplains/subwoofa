@@ -20,7 +20,7 @@ Early foundation. What works today:
 | Native DTS core (Digital Surround) encoder, 1.0 to 5.1 at 32 to 48 kHz (no ADPCM/VQ yet), verified by decoding | working |
 | Native DTS-ES: 6.1 / 6.0 Matrix (with optional surround phase shift and rear -3 dB) and Discrete (XCH extension) | working |
 | Native DTS 96/24 (core + X96 extension, 96 kHz input) | working |
-| Audio file outputs: WAV/BWF (with RF64 and time reference), AIFF/AIFF-C, CAF and a native multichannel FLAC encoder (smaller than FFmpeg's best setting on test material), 16/24/32-bit integer and 32/64-bit float | working; bit-exact through FFmpeg |
+| Audio file outputs: WAV/BWF (with RF64 and time reference), AIFF/AIFF-C, CAF, a native multichannel FLAC encoder (also in Ogg) and Apple Lossless (M4A) (smaller than FFmpeg's best setting on test material), 16/24/32-bit integer and 32/64-bit float | working; bit-exact through FFmpeg |
 | Native DTS-HD High Resolution, 2046-5760 kbps: core + XBR for up to 5.1 at 48 kHz, core + XXCH for 7.1 and 7.0 at 48 kHz, core + XXCH + X96 for 7.1 and 7.0 at 96 kHz (the layout of the commercial encoder's streams) | working |
 | Immersive layouts 5.1.2, 5.1.4, 7.1.2, 7.1.4, 9.1.6 and NHK 22.2 (24 channels) as lossless DTS-HD MA (no core; hierarchical channel sets of up to 8 channels), decoded bit-exact by FFmpeg | working |
 | Native DTS-HD Master Audio (CBR core + lossless extension, 1.0 to 7.1 at 44.1 to 96 kHz, embedded 5.1 downmix for 6.x/7.x, optional core or 96/24 core): bit-exact through FFmpeg, passes DTS's own verifier, `.dtshd` container; a full feature film encodes about 5% smaller than the legacy encoder | working |
