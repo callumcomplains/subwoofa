@@ -25,12 +25,11 @@ ALAC, TTA, DSD). It also verifies what it writes, and has StreamTools for trimmi
 Every format and its test status: [docs/FORMATS.md](docs/FORMATS.md).
 
 ## AI disclaimer (and a Hi from a Human).
-
 Hi, Callum here. 
 I am not actually a coder. I thought of a fun project and ran it through Claude Code's Sonnet 5.5 Medium.
 All of the code base is from Claude. I gave it inputs and test files and verified this program can actually do what it says on the tin the whole time. 
 The "verify" feature is one you should utilize if you use this program.
-You will need DEE (Dolby Encoding Engine or DTSHDMASE (DTS-HD MA Encoder Suite) to use this program. They are unfortunately paid programs, that require expensive licences (especially the new DTS:X Creator Suite, which is why it's absent from this program right now), but DTSHDMASE is abandonware, and floats around the internet occasionally. 
+Subwoofa has its own encoders and works on its own for *most* formats. Dolby Atmos needs the Dolby Encoding Engine (licensed from Dolby), and FFmpeg is only needed to read inputs that aren’t WAV/AIFF. See [docs/ENGINES.md](docs/ENGINES.md).
 
 ## Install
 
