@@ -86,7 +86,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
             Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap })?),
-            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0, wide_remap, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2) })),
+            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: (-req.dialnorm) as u32, wide_remap, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2) })),
         })
     };
     let mut enc = make()?;
@@ -117,7 +117,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         i.codec_delay = lead as u16;
         if core_bitrate_kbps.is_some() {
             // CORESSMD describes the core: 48 kHz and the speakers of the base channel set
-            i.core_rate = Some(48_000);
+            i.core_rate = Some(if req.x96 && rate == 96_000 { 96_000 } else { 48_000 });
             i.core_mask = Some(map.order[..map.set_sizes[0]].iter().fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16);
         }
         i

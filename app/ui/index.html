@@ -83,6 +83,15 @@
   <div class="bs-grid">
     <label class="f wide" id="bsInfoWrap"><span>Program information</span>
       <textarea id="bsInfo" rows="2" maxlength="2000" placeholder="Text stored in the .dtshd file (up to 2000 characters, plain Latin-1)"></textarea></label>
+    <div class="f" id="bsTcWrap">
+      <label for="bsFps"><span>Timecode</span></label>
+      <div class="combo">
+        <select id="bsFps"><option value="">24</option><option>23.976</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select>
+        <input id="bsTcStart" type="text" placeholder="start 00:00:00:00" size="12" aria-label="Start timecode">
+        <input id="bsTcRef" type="text" placeholder="reference (optional)" size="12" aria-label="Reference timecode">
+      </div>
+      <small>Frame rate and start stored in the .dtshd file.</small>
+    </div>
     <div class="f" id="bsSeamlessWrap">
       <label for="bsSeamless"><span>Seamless branching</span></label>
       <div class="combo">

@@ -568,6 +568,7 @@ function syncBitstream() {
   const secondary = st === "dts-express" && dest === "bluray-secondary";
   const express = st === "dts-express";
   $("bsInfoWrap").hidden = !container || !dts;
+  $("bsTcWrap").hidden = !container || !dts;
   $("bsSeamlessWrap").hidden = !container || !dts || express;
   $("bsWideWrap").hidden = !(lay === "7.1-wide" && ["dtshd-ma", "dtshd-hra"].includes(st));
   $("bsDialogWrap").hidden = !express;
@@ -591,6 +592,7 @@ function bitstreamSpec() {
     program_info: $("bsInfoWrap").hidden ? "" : $("bsInfo").value,
     seamless: $("bsSeamlessWrap").hidden || seam === "off" ? "Off" : seam === "single" ? "SingleClip" : { Timecodes: bsCsvPoints },
     wide_remap: !$("bsWideWrap").hidden && $("bsWide").checked,
+    timecode: $("bsTcWrap").hidden ? { rate: "", start: "", reference: "" } : { rate: $("bsFps").value, start: $("bsTcStart").value.trim(), reference: $("bsTcRef").value.trim() },
     secondary: {
       attenuation_db: Math.max(0, Math.min(60, Number($("bsAtt").value) || 0)),
       fade_down_secs: Math.max(0, Math.min(9, Number($("bsFadeDown").value) || 0)),
@@ -623,7 +625,7 @@ function presetState() {
     bitrate: $("bitrate").value === "" ? null : Number($("bitrate").value),
     pcm_format: $("pcmFormat").value, core_on: $("coreOn").checked, dialnorm_on: $("dialnormOn").checked, dialnorm: Number($("dialnorm").value),
     es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
-    bitstream: { info: $("bsInfo").value, seamless: $("bsSeamless").value, csv_path: bsCsvPath, wide: $("bsWide").checked, dialog: $("bsDialog").checked,
+    bitstream: { fps: $("bsFps").value, tc_start: $("bsTcStart").value, tc_ref: $("bsTcRef").value, info: $("bsInfo").value, seamless: $("bsSeamless").value, csv_path: bsCsvPath, wide: $("bsWide").checked, dialog: $("bsDialog").checked,
       att: $("bsAtt").value, fade_down: $("bsFadeDown").value, fade_up: $("bsFadeUp").value,
       map: { c: $("bsMapC").value, l: $("bsMapL").value, r: $("bsMapR").value, ls: $("bsMapLs").value, rs: $("bsMapRs").value, lfe: $("bsMapLfe").value } },
     unlocked, outname: $("outname").value, output_dir: outDir,
@@ -647,6 +649,7 @@ async function applyPreset(p) {
   $("rear3").checked = !!p.rear_minus_3db;
   const bs = p.bitstream || {};
   $("bsInfo").value = bs.info || "";
+  $("bsFps").value = bs.fps || ""; $("bsTcStart").value = bs.tc_start || ""; $("bsTcRef").value = bs.tc_ref || "";
   $("bsSeamless").value = ["off", "single", "csv"].includes(bs.seamless) ? bs.seamless : "off";
   $("bsWide").checked = !!bs.wide;
   $("bsDialog").checked = !!bs.dialog;

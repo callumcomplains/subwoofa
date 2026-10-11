@@ -153,6 +153,16 @@ pub fn branch_points(units: &[u32]) -> Vec<u8> {
     v
 }
 
+/// `(hours, minutes, seconds, frames)` of `HH:MM:SS:FF` (`;` or `.` before the frames are accepted too).
+pub fn parse_timecode(tc: &str) -> Option<(u32, u32, u32, u32)> {
+    let parts: Vec<&str> = tc.trim().split([':', ';', '.']).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let n: Vec<u32> = parts.iter().map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+    Some((n[0], n[1], n[2], n[3]))
+}
+
 /// Seconds into the programme of a timecode `HH:MM:SS:FF` (`;` or `.` before the frames mean drop frame, which
 /// only matters at 29.97 and 30 frames per second), for a stream whose first sample is at `start` seconds.
 pub fn timecode_to_secs(tc: &str, fps_code: u8, start_secs: f64) -> Option<f64> {
@@ -177,6 +187,35 @@ pub fn timecode_to_secs(tc: &str, fps_code: u8, start_secs: f64) -> Option<f64> 
 /// of the encode in seconds. Returns notes for the log.
 pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span: f64) -> Vec<String> {
     let mut notes = Vec::new();
+    let rate = bs.timecode.rate.trim().to_ascii_lowercase();
+    if !rate.is_empty() {
+        use crate::dtshd::*;
+        info.fps_code = match rate.as_str() {
+            "23.976" | "23.98" => FPS_23_976,
+            "25" => FPS_25,
+            "29.97" => FPS_29_97,
+            "29.97 drop" | "29.97df" | "29.97 df" => FPS_29_97_DROP,
+            "30" => FPS_30,
+            "30 drop" | "30df" | "30 df" => FPS_30_DROP,
+            "24" => FPS_24,
+            other => {
+                notes.push(format!("frame rate '{other}' is not one the file can store; 24 used"));
+                FPS_24
+            }
+        };
+    }
+    if !bs.timecode.start.trim().is_empty() {
+        match parse_timecode(&bs.timecode.start) {
+            Some((h, m, s, f)) => info.start = crate::dtshd::position_of(info.fps_code, timecode_frames(info.fps_code, h, m, s, f)),
+            None => notes.push(format!("start timecode '{}' is not HH:MM:SS:FF; zero used", bs.timecode.start)),
+        }
+    }
+    if !bs.timecode.reference.trim().is_empty() {
+        match parse_timecode(&bs.timecode.reference) {
+            Some((h, m, s, f)) => info.reference = Some(crate::dtshd::position_of(info.fps_code, timecode_frames(info.fps_code, h, m, s, f))),
+            None => notes.push(format!("reference timecode '{}' is not HH:MM:SS:FF; the start used", bs.timecode.reference)),
+        }
+    }
     if !bs.program_info.is_empty() {
         info.file_info = file_info(&bs.program_info);
     }

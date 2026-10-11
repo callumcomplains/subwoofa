@@ -330,6 +330,15 @@ struct BitstreamArgs {
     /// Wide 7.1: add the speaker remapping sets for side-rear and 5.1 playback.
     #[arg(long)]
     wide_remap: bool,
+    /// Frame rate stored in the .dtshd file: 23.976, 24 (default), 25, 29.97, "29.97 drop", 30 or "30 drop".
+    #[arg(long)]
+    fps: Option<String>,
+    /// Start timecode stored in the .dtshd file (HH:MM:SS:FF).
+    #[arg(long)]
+    timecode_start: Option<String>,
+    /// Reference timecode stored in the .dtshd file (HH:MM:SS:FF); the start timecode when not given.
+    #[arg(long)]
+    timecode_reference: Option<String>,
 }
 
 impl BitstreamArgs {
@@ -338,6 +347,9 @@ impl BitstreamArgs {
         let mut o = sw_core::BitstreamOptions::default();
         o.program_info = self.program_info.clone().unwrap_or_default();
         o.wide_remap = self.wide_remap;
+        o.timecode.rate = self.fps.clone().unwrap_or_default();
+        o.timecode.start = self.timecode_start.clone().unwrap_or_default();
+        o.timecode.reference = self.timecode_reference.clone().unwrap_or_default();
         o.secondary.dialog_mode = self.dialog_mode;
         if let Some(v) = self.primary_attenuation {
             o.secondary.attenuation_db = v.clamp(0.0, 60.0);
@@ -535,7 +547,7 @@ fn run() -> Result<(), String> {
                     let req = sw_codec_dts::ma_native::MaRequest {
                         layout,
                         core_bitrate_kbps: match bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
-                        dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+                        dialnorm: sw_queue::run::dts_dialnorm(dialnorm),
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
@@ -559,7 +571,7 @@ fn run() -> Result<(), String> {
                         bitstream: bitstream.clone(),
                         dvd: dest == Destination::DvdVideo,
                         hra_kbps: if stream == StreamType::DtsHdHra { Some(bitrate.unwrap_or(3018)) } else { None },
-                        dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+                        dialnorm: sw_queue::run::dts_dialnorm(dialnorm),
                         pcm_bits: (stems.bits as u32).clamp(16, 24),
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,

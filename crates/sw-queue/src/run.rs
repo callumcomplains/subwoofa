@@ -54,6 +54,12 @@ pub struct EncodeSpec {
     pub bitstream: sw_core::BitstreamOptions,
 }
 
+/// The dialnorm setting (the dialogue level, 1 to 31 for -1 to -31 dBFS) as the attenuation a DTS decoder applies,
+/// written as a negative number of dB: -27 dBFS is 4 dB of attenuation, -31 dBFS none.
+pub fn dts_dialnorm(level: Option<u8>) -> i32 {
+    -(31 - level.unwrap_or(31).clamp(1, 31) as i32)
+}
+
 fn yes() -> bool {
     true
 }
@@ -286,7 +292,7 @@ fn execute_inner(
         let req = sw_codec_dts::ma_native::MaRequest {
             layout,
             core_bitrate_kbps: match spec.bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
-            dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+            dialnorm: dts_dialnorm(spec.dialnorm),
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
@@ -306,7 +312,7 @@ fn execute_inner(
             bitstream: spec.bitstream.clone(),
             dvd: dest == Destination::DvdVideo,
             hra_kbps: if stream == StreamType::DtsHdHra { Some(spec.bitrate.unwrap_or(3018)) } else { None },
-            dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
+            dialnorm: dts_dialnorm(spec.dialnorm),
             pcm_bits: (stems.bits as u32).clamp(16, 24),
             start_secs: start,
             duration_secs: Some(span),

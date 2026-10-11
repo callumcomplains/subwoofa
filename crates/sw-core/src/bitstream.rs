@@ -20,6 +20,22 @@ pub struct BitstreamOptions {
     /// layout or a 5.1 system.
     #[serde(default)]
     pub wide_remap: bool,
+    /// Frame rate and start timecode stored in the file (the Audio tab's Timecode section).
+    #[serde(default)]
+    pub timecode: Timecode,
+}
+
+/// `rate` is one of "23.976", "24", "25", "29.97", "29.97 drop", "30", "30 drop" (empty means 24); `start` is
+/// `HH:MM:SS:FF` (empty means zero).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Timecode {
+    #[serde(default)]
+    pub rate: String,
+    #[serde(default)]
+    pub start: String,
+    /// Reference timecode (the position the programme was cut from), `HH:MM:SS:FF`; empty means the start.
+    #[serde(default)]
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
