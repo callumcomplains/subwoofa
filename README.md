@@ -56,7 +56,7 @@ Every command prints its version to stderr first, so stdout stays clean for scri
 
 ## Build from source
 
-Rust stable. On Windows the repo pins the GNU toolchain, so Visual Studio is not needed.
+Rust stable. On Windows either toolchain works; the GNU one needs no Visual Studio (`rustup default stable-x86_64-pc-windows-gnu`).
 
 ```sh
 cargo build --release -p sw-cli

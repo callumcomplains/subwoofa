@@ -10,8 +10,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain (pinned in rust-toolchain.toml)
-        run: rustup show
+      - name: Rust toolchain (GNU, so no Visual Studio is needed)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          echo "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu" >> "$GITHUB_ENV"
+        shell: bash
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --exclude subwoofa-app
