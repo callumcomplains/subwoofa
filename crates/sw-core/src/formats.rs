@@ -124,7 +124,7 @@ impl StreamType {
     }
 
     pub const fn is_lossless(self) -> bool {
-        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp) || self.is_audio_file()
+        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp) || (self.is_audio_file() && !matches!(self, StreamType::DsdDsf | StreamType::DsdDff))
     }
 
     /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting

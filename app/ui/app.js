@@ -901,7 +901,7 @@ initTools();
 
 /* ---------- Verify ---------- */
 
-const VERIFY_FILTERS = [{ name: "Encoded audio streams", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd"] }, { name: "All files", extensions: ["*"] }];
+const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
 const verify = { path: null, text: "", running: false };
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const STATUS_TAG = { pass: "OK", fail: "FAIL", warn: "WARN", skipped: "SKIP", info: "INFO" };

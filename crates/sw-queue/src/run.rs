@@ -333,6 +333,23 @@ fn execute_inner(
     if !verify || downmixed {
         return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
     }
+    if stream.is_audio_file() {
+        // the FFmpeg check compares a decode with the source sample for sample, which cannot hold for files that
+        // reorder channels, round to a smaller sample format or are one-bit: use the native file check instead
+        on_progress(1.0, true);
+        let options = sw_verify::Options { deep: ffmpeg.is_some(), ffmpeg: ffmpeg.clone(), reference_verifier: None };
+        let report = sw_verify::verify(std::path::Path::new(&spec.output), &options).map_err(|e| Failure::Error(e.to_string()))?;
+        let failed: Vec<String> = report.checks.iter().filter(|c| c.status == sw_verify::Status::Fail).map(|c| format!("{}: {}", c.name, c.detail)).collect();
+        if !report.passed {
+            log.push_str(&format!("Verify: FAILED: {}
+", failed.join("; ")));
+            return Err(Failure::Error(format!("the encoded file failed verification: {}", failed.join("; "))));
+        }
+        let msg = if ffmpeg.is_some() { "file structure and a full decode check out".to_string() } else { "file structure checks out (not decoded: no ffmpeg)".to_string() };
+        log.push_str(&format!("Verify: {msg}
+"));
+        return Ok(Outcome { message: msg, verified: true });
+    }
     if ffmpeg.is_none() {
         log.push_str("Verify: skipped (ffmpeg not available to decode the result)\n");
         return Ok(Outcome { message: format!("encoded {:.1} MB (not verified: no decoder available)", size as f64 / 1e6), verified: false });

@@ -12,3 +12,6 @@ sw-codec-truehd = { path = "../sw-codec-truehd" }
 
 [dev-dependencies]
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
+sw-codec-pcm = { path = "../sw-codec-pcm" }
+sw-pcm = { path = "../sw-pcm" }
+sw-core = { path = "../sw-core" }

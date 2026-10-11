@@ -8,6 +8,7 @@
 //!   dump of every header the stream carries.
 
 mod ac3;
+mod audiofile;
 mod bits;
 mod crc;
 mod deep;
@@ -160,8 +161,18 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
     let mut c = Collector::new(path, w.len, opt.deep);
     let head: Vec<u8> = w.get(0, 64).to_vec();
     let kind = sniff(&head);
-    c.report.format = kind.name().to_string();
     let mut probe = None;
+    // plain audio files (WAV, FLAC, ALAC ...) are told apart first; the codec streams are recognised by their sync words
+    if let Some(file_kind) = audiofile::sniff(&head) {
+        c.report.format = file_kind.name().to_string();
+        probe = Some(audiofile::verify(&mut w, &mut c, file_kind));
+        c.report.duration_secs = probe.as_ref().map_or(0.0, |p| p.duration_secs);
+        if opt.deep {
+            deep::run(path, opt, &mut c, probe.as_ref());
+        }
+        return Ok(c.finish());
+    }
+    c.report.format = kind.name().to_string();
     match kind {
         Kind::Ac3 | Kind::Eac3 => probe = Some(ac3::verify(&mut w, &mut c, kind == Kind::Eac3)),
         Kind::Dts | Kind::DtsHd => probe = Some(dts::verify(&mut w, &mut c, kind == Kind::DtsHd)),
@@ -171,7 +182,7 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
             c.check("Frame structure", Status::Skipped, "the structure check reads the plain byte-stream form; unpack the stream first, or use deep verification, which decodes it");
         }
         Kind::Unknown => {
-            c.check("Recognised stream", Status::Fail, "the file does not start with a known sync word (AC-3, E-AC-3, DTS, DTS-HD, TrueHD, MLP)");
+            c.check("Recognised stream", Status::Fail, "the file is not a known stream or audio file (AC-3, E-AC-3, DTS, DTS-HD, TrueHD, MLP, WAV, AIFF, CAF, FLAC, ALAC/M4A, TTA, DSD)");
         }
     }
     if let Some(p) = &probe {

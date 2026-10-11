@@ -175,3 +175,29 @@ fn concurrency_limit_is_respected() {
     assert_eq!(max_running, 1);
     q.shutdown();
 }
+
+/// Audio files go through the native file check, not the sample-for-sample FFmpeg comparison (which would call a 7.1
+/// FLAC wrong, because the file stores its channels in speaker-position order).
+#[test]
+fn audio_files_are_verified_by_the_file_check() {
+    if !have_ffmpeg() { eprintln!("ffmpeg missing, skipping"); return; }
+    let dir = tmpdir("audiofile");
+    let mut inputs = HashMap::new();
+    for (i, ch) in ["L", "R", "C", "LFE", "Lss", "Rss", "Lsr", "Rsr"].iter().enumerate() {
+        let p = dir.join(format!("S_{ch}.wav"));
+        write_wav(&p, 48_000, 2.0, i as u32 + 1);
+        inputs.insert(ch.to_string(), p.to_string_lossy().into_owned());
+    }
+    for (stream, ext, format) in [("flac", "flac", "s24"), ("alac", "m4a", "s16"), ("dsf", "dsf", "dsd64")] {
+        let layout = if stream == "alac" || stream == "dsf" { "5.1" } else { "7.1-side-rear" };
+        let mut sp = spec(&dir, &format!("out.{ext}"), stream, &inputs);
+        sp.dest = "files".into();
+        sp.layout = layout.into();
+        sp.pcm_format = format.into();
+        if layout == "5.1" {
+            sp.inputs = stems(&dir, 2.0);
+        }
+        let out = sw_queue::run::execute(&sp, true, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).unwrap_or_else(|_| panic!("{stream} job failed"));
+        assert!(out.verified, "{stream}: {}", out.message);
+    }
+}

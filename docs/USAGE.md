@@ -65,6 +65,7 @@ subwoofa tools replace Film.dtshd fix.dtshd --at 3600 -o Film_fixed.dtshd
 subwoofa verify Film.dtshd              # structure, checksums, headers and the container (seconds)
 subwoofa verify Film.dtshd --deep       # also decodes everything, measures the audio, lists every header
 subwoofa verify Film.ac3 --json         # the report as JSON (the exit code is 0 only if it passed)
+subwoofa verify mix.flac --deep         # audio files too: WAV, AIFF, CAF, FLAC (also in Ogg), M4A/ALAC, TTA, DSF, DSDIFF
 ```
 
 ```
