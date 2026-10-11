@@ -103,7 +103,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
-        x96_in_core: false, secondary: req.secondary,
+        x96_in_core: false, xch_in_core: false, secondary: req.secondary,
     };
     // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
     let overhead = exss_frame_lbr(&exss, &[0u8; 4]).len() - 4;

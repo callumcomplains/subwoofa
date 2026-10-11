@@ -31,7 +31,7 @@ fn mono_stream_decodes() {
     }
     payloads.extend(enc.finish());
     assert!(payloads.len() >= frames, "{} frames", payloads.len());
-    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));
@@ -75,7 +75,7 @@ fn lfe_channel_decodes() {
         payloads.extend(enc.push(&block));
     }
     payloads.extend(enc.finish());
-    let exss = ExssParams { sample_rate: 48_000, channels: 6, bit_res: 16, spk_mask: 0xF, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 6, bit_res: 16, spk_mask: 0xF, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));
@@ -136,7 +136,7 @@ fn tonal_components_lift_a_steady_signal() {
         payloads.extend(enc.push(&[chunk.to_vec()]));
     }
     payloads.extend(enc.finish());
-    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));

@@ -292,9 +292,10 @@ impl Encoder {
     /// Keeps the core's reconstruction of this frame (`last_deq`) and what it left over (`last_residual`).
     fn keep_planes(&mut self, best: &Plan, sub: &[Vec<Vec<f64>>]) {
         let blocks = self.cfg.blocks;
-        let mut res = Vec::with_capacity(self.cfg.channels);
-        let mut all_deq = Vec::with_capacity(self.cfg.channels);
-        for ch in 0..self.cfg.channels {
+        let planes = self.nplan(); // the primaries, and the XCH channel when there is one
+        let mut res = Vec::with_capacity(planes);
+        let mut all_deq = Vec::with_capacity(planes);
+        for ch in 0..planes {
             let mut bands = Vec::with_capacity(BANDS);
             let mut deqs = Vec::with_capacity(BANDS);
             for b in 0..BANDS {
@@ -603,7 +604,8 @@ impl Encoder {
         if self.cfg.xch {
             // the extension starts on a 32-bit boundary; sync, size, arrangement, channel count, the header
             // arrays (21 bits) and PMODE flags (32 bits) of its channel, and its DSYNC
-            let x = xch_bits + 49 + 21 + BANDS + 16;
+            // decoders look for the extension from the end of the frame and want it at least 96 bytes long
+            let x = (xch_bits + 49 + 21 + BANDS + 16).max(96 * 8);
             bits = bits.div_ceil(32) * 32 + x;
             if x.div_ceil(8) > 1000 {
                 bits = usize::MAX / 4; // XChFSIZE is 10 bits
@@ -795,7 +797,10 @@ impl Encoder {
         w.put(0xFFFF, 16);
         let mut bytes = w.into_bytes();
         if cfg.xch {
+            // the extension ends the frame and its size field has 10 bits: after a quiet frame's short core data it
+            // starts later than the data ends, with zeros between
             let start = bytes.len().div_ceil(4) * 4;
+            let start = start.max((self.frame_bytes - 1020) & !3);
             bytes.resize(start, 0);
             bytes.extend_from_slice(&self.pack_xch(plan, self.frame_bytes - start));
         }

@@ -300,7 +300,7 @@ fn execute_inner(
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
-            es: sw_codec_dts::es_options(stream == StreamType::DtsEs, layout, spec.es_phase_shift, spec.rear_minus_3db),
+            es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.channels.contains(&Channel::Cs)), layout, spec.es_phase_shift, spec.rear_minus_3db),
         };
         sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,

@@ -20,6 +20,8 @@ pub struct ExssParams {
     pub frame_duration_code: u32,
     /// The core frames carry an X96 extension (a 96/24 core).
     pub x96_in_core: bool,
+    /// The core frames carry an XCH extension (the sixth channel of DTS-ES discrete).
+    pub xch_in_core: bool,
     /// DTS Express as Blu-ray secondary audio: extension substream index 2, mixed with the primary audio.
     pub secondary: bool,
 }
@@ -60,6 +62,11 @@ pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
 
 /// Extension substream frame with XXCH (the extra channels) and X96 (the 96 kHz band of every channel); the
 /// core stays in the core substream.
+/// Extension substream frame with X96 alone (the core, with or without XCH, is in the core substream).
+pub fn exss_frame_x96(p: &ExssParams, x96: &[u8]) -> Vec<u8> {
+    exss_build_x(p, None, None, None, None, Some(x96))
+}
+
 pub fn exss_frame_xxch_x96(p: &ExssParams, xxch: &[u8], x96: &[u8]) -> Vec<u8> {
     exss_build_x(p, None, None, None, Some(xxch), Some(x96))
 }
@@ -86,7 +93,7 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
         a.put(0, 1); // no embedded stereo downmix
     }
     if p.channels > 6 {
-        a.put(u32::from(xxch.is_some()), 1); // embedded 5.1 downmix (inside the XXCH extension)
+        a.put(u32::from(xxch.is_some() || p.xch_in_core), 1); // embedded 5.1 downmix (in the XXCH extension, or the 5.1 core of an XCH stream)
     }
     let mask_bits: u32 = if p.spk_mask <= 0xF { 4 } else if p.spk_mask <= 0xFF { 8 } else if p.spk_mask <= 0xFFF { 12 } else { 16 };
     a.put(1, 1); // speaker mask enabled
@@ -119,7 +126,7 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
         a.put(0, 2); // sync distance 0 frames
     } else if p.with_core || xbr.is_some() || xxch.is_some() || x96.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if x96.is_some() { 0x080 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if p.xch_in_core { 0x008 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if x96.is_some() { 0x080 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
         if let Some(b) = xbr {
             a.put(b.len() as u32 - 1, 14);

@@ -484,7 +484,7 @@ fn run() -> Result<(), String> {
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
-                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs, layout, es_phase_shift, rear_3db),
+                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.channels.contains(&sw_core::Channel::Cs)), layout, es_phase_shift, rear_3db),
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;

@@ -95,7 +95,7 @@ pub struct Stats {
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
     if req.hra_kbps.is_some() && stems.sample_rate > 48_000 {
-        if let Some(m) = crate::native_xxch::xxch_map(req.layout) {
+        if let Some(m) = crate::hra96::hra96_map(req.layout) {
             return crate::hra96::encode_to_file(stems, req, m, on_progress, cancel);
         }
     }
@@ -143,7 +143,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     let make_hra = |kbps: u32| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, secondary: false };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false };
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     };
     let mut hra = req.hra_kbps.map(|kbps| {

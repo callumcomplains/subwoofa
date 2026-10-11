@@ -286,6 +286,9 @@ function describeStream() {
     const rest = Math.max(0, total - 1509);
     if (nch > 6 && rate > 48000) {
       t = `A 1509 kbps 48 kHz core (5.1 downmix) for older players, an XXCH part for the rear pair (about ${Math.round(rest * 0.2)} kbps) and an X96 part for the 96 kHz band of every channel (about ${Math.round(rest * 0.8)} kbps).`;
+    } else if (rate > 48000) {
+      const six = nch - (lay.channels.includes("LFE") ? 1 : 0) === 6;
+      t = `A 1509 kbps 48 kHz core for older players${six ? " (the centre surround folded into the surrounds, and also sent separately for DTS-ES decoders when the layout is Discrete)" : ""}, plus an X96 part for the 96 kHz band of every channel (about ${rest} kbps).`;
     } else if (nch > 6) {
       t = `A 1509 kbps core (5.1 downmix) for older players, plus an XXCH part for the rear pair and an XBR part with extra detail (together about ${rest} kbps).`;
     } else {

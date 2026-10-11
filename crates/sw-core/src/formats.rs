@@ -332,7 +332,7 @@ pub fn bitrate_presets(
         StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsHdMa => {
             &[192, 256, 384, 448, 512, 768, 1024, 1411, 1509]
         }
-        StreamType::DtsHdHra => &[2046, 2500, 3018, 3500, 4000, 4500, 5000, 5376, 5760],
+        StreamType::DtsHdHra => &[2046, 2500, 3018, 3500, 4000, 4224, 4500, 5000, 5376, 5760],
         StreamType::DtsExpress => &[48, 64, 96, 128, 192, 256, 320, 384, 510],
         _ => &[],
     };
