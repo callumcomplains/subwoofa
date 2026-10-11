@@ -213,7 +213,10 @@ fn execute_inner(
     log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
 
     if stream.is_audio_file() {
-        let format = if spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
+        // for DSD the setting is the DSD rate ("dsd64", "dsd128"); for the rest the sample format
+        let is_dsd = matches!(stream, StreamType::DsdDsf | StreamType::DsdDff);
+        let dsd_multiplier = if is_dsd { match spec.pcm_format.as_str() { "" | "dsd64" => 64, "dsd128" => 128, other => return Err(format!("unknown DSD rate '{other}' (use dsd64 or dsd128)").into()) } } else { 0 };
+        let format = if is_dsd || spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
         let container = match stream {
             StreamType::PcmWav => sw_codec_pcm::Container::Wav,
             StreamType::PcmAiff => sw_codec_pcm::Container::Aiff,
@@ -221,11 +224,18 @@ fn execute_inner(
             StreamType::OggFlac => sw_codec_pcm::Container::OggFlac,
             StreamType::Alac => sw_codec_pcm::Container::Alac,
             StreamType::Tta => sw_codec_pcm::Container::Tta,
+            StreamType::DsdDsf => sw_codec_pcm::Container::Dsf,
+            StreamType::DsdDff => sw_codec_pcm::Container::Dff,
             _ => sw_codec_pcm::Container::Flac,
         };
-        log.push_str(&format!("Sample format: {} ({}-bit {})
+        if is_dsd {
+            log.push_str(&format!("DSD rate: DSD{} ({} Hz), one-bit, fifth-order sigma-delta
+", dsd_multiplier, 44_100 * dsd_multiplier));
+        } else {
+            log.push_str(&format!("Sample format: {} ({}-bit {})
 ", format.id(), format.bits(), if format.is_float() { "floating point" } else { "integer" }));
-        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output) };
+        }
+        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output), dsd_multiplier };
         sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_pcm::PcmError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),

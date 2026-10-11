@@ -75,7 +75,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format, start_secs: 0.0, duration_secs: None, output: &out };
+    let req = Request { layout, container, format, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0 };
     let stats = encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     assert_eq!(stats.frames, frames as u64, "{name}: frames written");
     assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
@@ -202,7 +202,7 @@ fn flac_refuses_what_it_cannot_hold() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("x.flac");
-    let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out };
+    let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0 };
     assert!(encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -261,4 +261,94 @@ fn tta_24_bit_five_one() {
 #[test]
 fn tta_mono_shorter_than_a_frame() {
     check("ttashort", Tta, "tta", Int24, "1.0", 48_000, 1_000);
+}
+
+/// DSD cannot be compared sample for sample: encode a different tone on every channel and check that FFmpeg's
+/// decode of the file has each tone, at half the level (the modulator runs at half scale), in the right channel only.
+fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate: u32, multiplier: u32) {
+    if !have_ffmpeg() {
+        return;
+    }
+    let layout = ChannelLayout::find(layout_id).unwrap();
+    let dir = std::env::temp_dir().join(format!("sw_dsd_{}_{}", std::process::id(), name));
+    std::fs::create_dir_all(&dir).unwrap();
+    let seconds = 3usize;
+    let frames = rate as usize * seconds;
+    let nch = layout.channels.len();
+    let freqs: Vec<f64> = (0..nch).map(|k| 700.0 + 1300.0 * k as f64).collect();
+    let mut inputs = HashMap::new();
+    for (k, ch) in layout.channels.iter().enumerate() {
+        let tone: Vec<i32> = (0..frames).map(|i| ((2.0 * std::f64::consts::PI * freqs[k] * i as f64 / rate as f64).sin() * 0.8 * 8_388_607.0) as i32).collect();
+        let path = dir.join(format!("{}.wav", ch.short()));
+        write_wav(&path, rate, &tone);
+        inputs.insert(*ch, path);
+    }
+    let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
+    let out = dir.join(format!("out.{ext}"));
+    let req = Request { layout, container, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier };
+    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-ar", "352800", "-"]).output().unwrap();
+    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
+    let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let n = y.len() / nch;
+    assert!(n >= 352_800 * seconds - 400, "{name}: decoded {n} samples per channel");
+    // the file's channels are in the order of the layout where it has the standard DSD arrangement (L R C LFE Ls Rs)
+    let file_order = layout_id_to_file_order(layout_id);
+    for (src, &file_ch) in file_order.iter().enumerate() {
+        let amp = |c: usize, f: f64| -> f64 {
+            let (mut sc, mut ss) = (0.0f64, 0.0f64);
+            let (from, to) = (352_800 / 2, n - 352_800 / 2);
+            for i in from..to {
+                let a = 2.0 * std::f64::consts::PI * f * i as f64 / 352_800.0;
+                sc += y[i * nch + c] as f64 * a.cos();
+                ss += y[i * nch + c] as f64 * a.sin();
+            }
+            2.0 * (sc * sc + ss * ss).sqrt() / (to - from) as f64
+        };
+        let here = amp(file_ch, freqs[src]);
+        assert!((here - 0.4).abs() < 0.01, "{name}: tone {src} came out at {here:.3} in file channel {file_ch}");
+        for other in (0..nch).filter(|&c| c != file_ch) {
+            let leak = amp(other, freqs[src]);
+            assert!(leak < 0.002, "{name}: tone {src} leaks {leak:.4} into file channel {other}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// For each layout channel, the channel of the decoded file it lands in (the arrangements used by the DSD formats).
+fn layout_id_to_file_order(layout_id: &str) -> Vec<usize> {
+    let layout = ChannelLayout::find(layout_id).unwrap();
+    let d = sw_codec_pcm::dsd_order(layout).unwrap();
+    // `d[k]` = layout channel placed at file channel k; invert it
+    let mut inverse = vec![0usize; d.len()];
+    for (file_ch, &layout_ch) in d.iter().enumerate() {
+        inverse[layout_ch] = file_ch;
+    }
+    inverse
+}
+
+#[test]
+fn dsd64_stereo_dsf_from_44_1k() {
+    check_dsd("dsf441", Dsf, "dsf", "2.0", 44_100, 64);
+}
+
+#[test]
+fn dsd64_stereo_dff_from_48k() {
+    check_dsd("dff48", Dff, "dff", "2.0", 48_000, 64);
+}
+
+#[test]
+fn dsd128_five_one_dsf_from_96k() {
+    check_dsd("dsf51", Dsf, "dsf", "5.1", 96_000, 128);
+}
+
+#[test]
+fn dsd64_five_one_dff_from_192k() {
+    check_dsd("dff51", Dff, "dff", "5.1", 192_000, 64);
+}
+
+#[test]
+fn dsd_three_zero_is_reordered() {
+    // layout 3.0 is L C R; DSD wants L R C
+    check_dsd("dsf30", Dsf, "dsf", "3.0", 44_100, 64);
 }

@@ -306,14 +306,19 @@ function describeStream() {
 /** Audio files (WAV, AIFF, CAF, FLAC) have a sample format instead of a bit rate and a dialnorm. */
 function syncPcmFormat() {
   const st = $("stream").value;
-  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta"].includes(st);
+  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "dsf", "dff"].includes(st);
   $("pcmWrap").hidden = !file;
   document.querySelector(".f.dialnorm").hidden = file; // no dialogue level in a plain audio file
   if (!file) return;
+  const dsd = st === "dsf" || st === "dff";
   const flac = st === "flac" || st === "oggflac" || st === "alac" || st === "tta";
-  for (const o of $("pcmFormat").options) o.disabled = flac && !["s16", "s24"].includes(o.value);
-  if (flac && $("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = "s24";
-  $("pcmNote").textContent = st === "tta"
+  // DSD offers only the DSD rates; the integer-only formats only 16 and 24 bit; the rest no DSD
+  const allowed = (v) => dsd ? v.startsWith("dsd") : v.startsWith("dsd") ? false : flac ? ["s16", "s24"].includes(v) : true;
+  for (const o of $("pcmFormat").options) o.disabled = !allowed(o.value);
+  if ($("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = dsd ? "dsd64" : "s24";
+  $("pcmNote").textContent = dsd
+    ? "One-bit DSD made with a fifth-order sigma-delta modulator at half scale (-6 dB), the filters keeping the band up to about 20 kHz (40 kHz from 88.2 kHz sources). Audio only: no disc image."
+    : st === "tta"
     ? "TTA stores 16 or 24 bit integers."
     : st === "alac"
     ? "Apple Lossless stores 16 or 24 bit integers, up to 8 channels in Apple's arrangements (7.1 needs the wide layout)."
@@ -466,7 +471,7 @@ function jobSpec(inputsFor, name) {
     sample_rate: curRate(),
     bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
     dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
-    pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
+    pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "dsf", "dff"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
   };

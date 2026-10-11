@@ -9,6 +9,7 @@ mod alac;
 mod bitwriter;
 mod caf;
 pub mod channels;
+mod dsd;
 mod flac;
 mod ogg;
 mod tta;
@@ -33,6 +34,10 @@ pub enum Container {
     Alac,
     /// True Audio.
     Tta,
+    /// DSD in a `.dsf` file.
+    Dsf,
+    /// DSD in a DSDIFF `.dff` file.
+    Dff,
 }
 
 /// How each sample is stored.
@@ -92,6 +97,8 @@ pub struct Request<'a> {
     pub start_secs: f64,
     pub duration_secs: Option<f64>,
     pub output: &'a Path,
+    /// DSD only: the DSD rate as a multiple of 44.1 kHz (64 = DSD64, 128 = DSD128).
+    pub dsd_multiplier: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -172,6 +179,12 @@ pub(crate) fn to_integers(planar: &[Vec<f32>], order: &[usize], frames: usize, b
     order.iter().map(|&ch| planar[ch][..frames].iter().map(|&v| to_int(v, bits - 1) as i32).collect()).collect()
 }
 
+/// The layout channel placed at each channel of a DSD file (the file has Apple-style fixed arrangements), or `None`
+/// for layouts DSD has no arrangement for.
+pub fn dsd_order(layout: &ChannelLayout) -> Option<Vec<usize>> {
+    dsd::dsd_layout(layout).map(|d| d.order)
+}
+
 /// Writes the stems as the requested file.
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, PcmError> {
     let rate = stems.sample_rate;
@@ -186,7 +199,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac | Container::Tta);
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
     let mut layout_tag = 0;
-    let order: Vec<usize> = if req.container == Container::Alac {
+    let dsd_layout = if matches!(req.container, Container::Dsf | Container::Dff) {
+        Some(dsd::dsd_layout(req.layout).ok_or_else(|| PcmError::Unsupported(format!("DSD files have channel arrangements for mono, stereo, 3.0, 3.1, quad, 5.0 and 5.1, not {}", req.layout.id)))?)
+    } else {
+        None
+    };
+    let order: Vec<usize> = if let Some(d) = &dsd_layout {
+        d.order.clone()
+    } else if req.container == Container::Alac {
         let (order, tag) = alac::alac_order(req.layout).ok_or_else(|| PcmError::Unsupported(format!("ALAC has no channel arrangement for {} (it takes mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides)", req.layout.id)))?;
         layout_tag = tag;
         order
@@ -206,6 +226,10 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::OggFlac => Box::new(flac::FlacWriter::create(req.output, params, true)?),
         Container::Alac => Box::new(alac::AlacWriter::create(req.output, params, layout_tag)?),
         Container::Tta => Box::new(tta::TtaWriter::create(req.output, params)?),
+        Container::Dsf | Container::Dff => {
+            let file = if req.container == Container::Dsf { dsd::DsdFile::Dsf } else { dsd::DsdFile::Dff };
+            Box::new(dsd::DsdWriter::create(req.output, params, file, dsd_layout.as_ref().unwrap(), req.dsd_multiplier)?)
+        }
     };
     let block = 16_384usize;
     let mut planar: Vec<Vec<f32>> = Vec::new();

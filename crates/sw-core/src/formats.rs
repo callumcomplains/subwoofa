@@ -38,6 +38,10 @@ pub enum StreamType {
     Alac,
     /// True Audio.
     Tta,
+    /// DSD (the audio of SACD) in a DSF file.
+    DsdDsf,
+    /// DSD in a DSDIFF file.
+    DsdDff,
 }
 
 impl StreamType {
@@ -59,6 +63,8 @@ impl StreamType {
         StreamType::OggFlac,
         StreamType::Alac,
         StreamType::Tta,
+        StreamType::DsdDsf,
+        StreamType::DsdDff,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -80,6 +86,8 @@ impl StreamType {
             StreamType::OggFlac => "oggflac",
             StreamType::Alac => "alac",
             StreamType::Tta => "tta",
+            StreamType::DsdDsf => "dsf",
+            StreamType::DsdDff => "dff",
         }
     }
 
@@ -106,6 +114,8 @@ impl StreamType {
             StreamType::OggFlac => "FLAC in Ogg",
             StreamType::Alac => "Apple Lossless (ALAC)",
             StreamType::Tta => "TTA (True Audio)",
+            StreamType::DsdDsf => "DSD (DSF)",
+            StreamType::DsdDff => "DSD (DSDIFF)",
         }
     }
 
@@ -120,7 +130,7 @@ impl StreamType {
     /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting
     /// instead of a bit rate.
     pub const fn is_audio_file(self) -> bool {
-        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta)
+        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::DsdDsf | StreamType::DsdDff)
     }
 
     /// Whether Subwoofa has its own encoder for the stream (every stream type does; the FFmpeg engine is an
@@ -145,6 +155,8 @@ impl StreamType {
                 | StreamType::OggFlac
                 | StreamType::Alac
                 | StreamType::Tta
+                | StreamType::DsdDsf
+                | StreamType::DsdDff
         )
     }
 
@@ -161,6 +173,8 @@ impl StreamType {
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::Mlp => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
+            // the PCM rate of the source: the DSD rate is a separate setting
+            StreamType::DsdDsf | StreamType::DsdDff => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
         }
     }
 }
@@ -213,7 +227,7 @@ impl Destination {
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],
-            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac, Alac, Tta],
+            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac, Alac, Tta, DsdDsf, DsdDff],
         }
     }
 
@@ -229,6 +243,8 @@ impl Destination {
                 StreamType::OggFlac => "oga",
                 StreamType::Alac => "m4a",
                 StreamType::Tta => "tta",
+                StreamType::DsdDsf => "dsf",
+                StreamType::DsdDff => "dff",
                 _ => "wav",
             },
             Destination::Generic => match stream {
@@ -258,6 +274,7 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::Eac3 => 8, // up to 7.1 via independent+dependent substreams
         StreamType::TrueHd | StreamType::Mlp => 8,
         StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta => 8,
+        StreamType::DsdDsf | StreamType::DsdDff => 6,
         StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
     if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) { base.min(7) } else { base }
@@ -290,7 +307,7 @@ pub fn bitrate_range_kbps(
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
-        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta => None,
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::DsdDsf | StreamType::DsdDff => None,
     }
 }
 
@@ -350,6 +367,9 @@ const EAC3_EXTENDED_LAYOUTS: &[&str] = &["7.1-side-rear", "7.1-ls-rs-lsr-rsr", "
 /// Layouts Apple Lossless has a channel arrangement for.
 const ALAC_LAYOUTS: &[&str] = &["1.0", "2.0", "3.0", "4.0-lcrs", "5.0", "5.1", "6.1-discrete", "7.1-wide"];
 
+/// Layouts the DSD file formats define a channel arrangement for.
+const DSD_LAYOUTS: &[&str] = &["1.0", "2.0", "3.0", "3.1", "4.0-quad", "5.0", "5.1"];
+
 /// Layouts DTS Express can carry: front L R / C, surrounds Ls Rs, optional LFE.
 const EXPRESS_LAYOUTS: &[&str] = &["5.1", "5.0", "4.1-quad", "4.0-quad", "3.1", "3.0", "2.1", "2.0", "1.0"];
 
@@ -384,6 +404,9 @@ pub fn validate(
     }
     // top-layer speakers (7.1.4, 9.1.6, 22.2...) are carried by the lossless DTS-HD stream only for now
     if layout.channels.iter().any(|c| c.is_top_layer()) && stream != StreamType::DtsHdMa && !stream.is_audio_file() {
+        return Err(Invalid::LayoutNotSupported);
+    }
+    if matches!(stream, StreamType::DsdDsf | StreamType::DsdDff) && !DSD_LAYOUTS.contains(&layout.id) {
         return Err(Invalid::LayoutNotSupported);
     }
     if stream == StreamType::Alac && !ALAC_LAYOUTS.contains(&layout.id) {

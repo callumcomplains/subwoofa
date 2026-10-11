@@ -17,7 +17,7 @@ Estimates are focused working time for the work itself (writing, testing, docume
 | # | Item | Estimate |
 |---|---|---|
 | 6 | DCP audio: 24-bit PCM at 48/96 kHz, up to 16 channels, MXF track files (SMPTE and Interop); checked with FFmpeg and asdcplib, not with a cinema server | 8 h |
-| 7 | SACD as files: PCM to DSD (sigma-delta modulator), `.dsf` / `.dff` output; checked with FFmpeg and by listening. Disc image authoring and DST compression are out (proprietary) | 7 h |
+| 7 | ~~SACD as files: PCM to DSD, `.dsf` / `.dff` output~~ **done** (DSD64 and DSD128; checked with FFmpeg; still wants a listen). Disc image authoring and DST compression are out (proprietary) | done |
 | 8 | Lossless audio file family: ~~ALAC, Ogg FLAC, TTA~~ **done**. Still to do: WavPack (FFmpeg's encoder is 3000 lines of C to port or rewrite from the format description), Monkey's Audio and MPEG-4 ALS (FFmpeg only has decoders for those, so the encoders would be written from their specifications and verified by FFmpeg's decoders) | WavPack 6 h, Monkey's 6 h, ALS 8 h |
 
 ### Blocked on reference files or tools

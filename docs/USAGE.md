@@ -86,7 +86,7 @@ subwoofa encode --stream flac --layout 7.1-side-rear --sample-rate 96000 --pcm-f
 | DTS Music Disc | 44.1 kHz, 754 or 1411 kbps, written as a DTS-in-PCM WAV |
 | AC-3 / E-AC-3 | up to 5.1 (E-AC-3 also 7.1 / 7.0); block switching and rematrixing |
 | TrueHD / MLP | lossless; TrueHD to 7.1 with a stereo downmix substream, MLP for DVD-Audio |
-| Audio files | destination "Audio files": WAV/BWF (RF64 above 4 GB, channel mask set, time reference kept), AIFF (AIFF-C for float), CAF (labelled channels), FLAC and FLAC in Ogg (16/24-bit, up to 8 channels), TTA (16/24-bit), Apple Lossless in M4A (16/24-bit; mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides; 24-bit keeps the lowest byte raw, as the format does). Sample format `--pcm-format s16`, `s24` (default), `s32`, `f32` or `f64`. WAV, CAF and AIFF take any layout, including 22.2 |
+| Audio files | destination "Audio files": WAV/BWF (RF64 above 4 GB, channel mask set, time reference kept), AIFF (AIFF-C for float), CAF (labelled channels), FLAC and FLAC in Ogg (16/24-bit, up to 8 channels), DSD as `.dsf` or `.dff` (`--stream dsf|dff --pcm-format dsd64|dsd128`; mono to 5.1; from 44.1/48 kHz and 2x/4x sources; audio only, no SACD disc image), TTA (16/24-bit), Apple Lossless in M4A (16/24-bit; mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides; 24-bit keeps the lowest byte raw, as the format does). Sample format `--pcm-format s16`, `s24` (default), `s32`, `f32` or `f64`. WAV, CAF and AIFF take any layout, including 22.2 |
 
 Every DTS-HD file Subwoofa writes can be checked with DTS's own `DTSHDVerify.exe` (if installed) and decoded
 by FFmpeg; lossless streams decode to exactly the source samples.

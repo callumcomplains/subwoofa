@@ -9,3 +9,4 @@ sw-core = { path = "../sw-core" }
 sw-pcm = { path = "../sw-pcm" }
 thiserror.workspace = true
 md5 = "0.8"
+rayon = "1.12.0"
