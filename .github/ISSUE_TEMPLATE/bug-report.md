@@ -3,7 +3,7 @@ name: Bug Report
 about: Standard Bug Report Method
 title: "[BUG] [TITLE]"
 labels: bug
-assignees: CallumUncensored
+assignees: callumcomplains
 type: Bug
 
 ---

@@ -223,7 +223,7 @@ fn open_docs(page: String) -> Result<(), String> {
     if !PAGES.contains(&page.as_str()) {
         return Err("unknown page".into());
     }
-    let url = format!("https://github.com/CallumUncensored/subwoofa/blob/main/docs/{page}");
+    let url = format!("https://github.com/callumcomplains/subwoofa/blob/main/docs/{page}");
     std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 

@@ -3,7 +3,7 @@ name: Feature request
 about: Standard Feature Request Method
 title: "[FEATURE] [TITLE]"
 labels: enhancement
-assignees: CallumUncensored
+assignees: callumcomplains
 type: Feature
 
 ---

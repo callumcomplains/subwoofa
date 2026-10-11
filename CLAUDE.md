@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues live in GitHub Issues for CallumUncensored/subwoofa (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for callumcomplains/subwoofa (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
