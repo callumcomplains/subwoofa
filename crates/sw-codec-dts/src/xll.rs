@@ -291,6 +291,19 @@ fn hybrid_gate() -> Option<f64> {
     *G.get_or_init(|| Some(std::env::var("SW_HYB_GATE").ok().and_then(|v| v.parse().ok()).unwrap_or(8.0)))
 }
 
+/// The channel with its predictable part taken out (an order-2 linear predictor fitted to it; `SW_WHITEN` sets the
+/// order, 0 = the samples as they are).
+fn whiten(x: &[i32]) -> Vec<f64> {
+    let order: usize = std::env::var("SW_WHITEN").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    if order == 0 || x.len() < 64 || x.iter().all(|v| *v == 0) {
+        return x.iter().map(|v| *v as f64).collect();
+    }
+    let ks = reflection_coefficients(x, order);
+    let rcq: Vec<i32> = ks.iter().map(|k| rc_value(quantize_rc(*k))).collect();
+    let coeff = lattice_to_direct(&rcq);
+    predict(x, &coeff).iter().map(|v| *v as f64).collect()
+}
+
 /// Indices of the `c` largest values (ties: lowest index first), in ascending index order.
 fn isolated_positions(u: &[u32], c: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..u.len()).collect();
@@ -425,13 +438,15 @@ impl XllEncoder {
     fn decorrelate(&self, pcm: &[Vec<i32>]) -> (Vec<usize>, Vec<i32>, Vec<Vec<i32>>) {
         let n = pcm.len();
         let len = pcm[0].len();
-        let energy: Vec<f64> = pcm.iter().map(|c| c.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>()).collect();
+        // pairing and coefficients are judged on whitened channels: that is what the predictors then see
+        let white: Vec<Vec<f64>> = pcm.iter().map(|c| whiten(c)).collect();
+        let energy: Vec<f64> = white.iter().map(|c| c.iter().map(|v| v * v).sum::<f64>()).collect();
         let mut used = vec![false; n];
         let mut order: Vec<usize> = Vec::new();
         let mut coeffs: Vec<i32> = Vec::new();
         // greedy pairing by normalised correlation
         let corr = |a: usize, b: usize| -> f64 {
-            let xy: f64 = pcm[a].iter().zip(&pcm[b]).map(|(x, y)| *x as f64 * *y as f64).sum();
+            let xy: f64 = white[a].iter().zip(&white[b]).map(|(x, y)| x * y).sum();
             xy / (energy[a] * energy[b]).sqrt().max(1e-9)
         };
         while used.iter().filter(|u| !**u).count() >= 2 {
@@ -452,7 +467,7 @@ impl XllEncoder {
             used[b] = true;
             // basis = the louder channel
             let (basis, dec) = if energy[a] >= energy[b] { (a, b) } else { (b, a) };
-            let xy: f64 = pcm[basis].iter().zip(&pcm[dec]).map(|(x, y)| *x as f64 * *y as f64).sum();
+            let xy: f64 = white[basis].iter().zip(&white[dec]).map(|(x, y)| x * y).sum();
             let ratio = if energy[basis] > 0.0 { xy / energy[basis] } else { 0.0 };
             let q = (ratio * 8.0).round().clamp(-64.0, 63.0) as i32;
             order.push(basis);
