@@ -10,7 +10,7 @@ Estimates are focused working time for the work itself (writing, testing, docume
 | 1 | ~~Quality of life: speed pass, regression sweep, format notes in the GUI~~ **done** | done |
 | 2 | ~~PCM outputs: WAV/BWF, RF64, AIFF, CAF, multichannel FLAC~~ **done** | done |
 | 3 | ~~Probe the Dolby Encoding Engine for AC-4 job types~~ **done: DEE 5.2.1 has no AC-4 encoder** (AC-4 is only a file type it passes through; no AC-4 filter among its audio filters) | done |
-| 4 | Lossless size work: MA band 1 (reuse of previous segment parameters, common parameters); TrueHD stereo matrix with LSB bypass | 5 h |
+| 4 | ~~Lossless size work~~ **done as far as it goes**: channel pairing judged on whitened channels (-0.5% at 192 kHz); MA band 1 gap (3.4% to the original) and the TrueHD stereo gap (~0.7% to Dolby) were investigated and not closed, see the changelog | done |
 | 5 | Reference checklist: exactly which encodes unlock each blocked item, with the settings to use | 0.5 h |
 
 ### Next (public specs, verifiable here)
