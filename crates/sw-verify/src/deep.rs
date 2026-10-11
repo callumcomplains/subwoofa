@@ -416,10 +416,7 @@ fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &mut Collecto
     if !probe.map_or(false, |p| p.dts) {
         return;
     }
-    let tool = opt.reference_verifier.clone().or_else(|| {
-        let p = PathBuf::from(r"C:\Program Files (x86)\DTS\MAS-SAS\DTSHDVerify.exe");
-        p.exists().then_some(p)
-    });
+    let tool = opt.reference_verifier.clone().or_else(crate::mas_verifier);
     let Some(tool) = tool else {
         c.check("DTS reference verifier", Status::Skipped, "DTSHDVerify is not installed; install the DTS-HD encoder suite to add its verdict");
         return;

@@ -5,204 +5,217 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Subwoofa</title>
 <link rel="stylesheet" href="style.css">
-<script>try { document.documentElement.dataset.theme = localStorage.getItem("theme") || "amber"; } catch (e) { document.documentElement.dataset.theme = "amber"; }</script>
+<script>
+try {
+  var t = localStorage.getItem("theme") || "amber";
+  document.documentElement.dataset.theme = t;
+  if (t === "custom") { var c = JSON.parse(localStorage.getItem("customTheme") || "null"); if (c && c.vars) for (var k in c.vars) document.documentElement.style.setProperty(k, c.vars[k]); }
+} catch (e) { document.documentElement.dataset.theme = "amber"; }
+</script>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.8 4.2c0-.5.4-.9.9-.9h3.2l1.4 1.5h5.9c.5 0 .9.4.9.9v6c0 .5-.4.9-.9.9H2.7c-.5 0-.9-.4-.9-.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></symbol>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
 <header class="bar">
   <div class="brand">
-    <span class="meters" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".7"/><circle cx="16" cy="16" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45"/><circle cx="16" cy="16" r="2" fill="currentColor"/></svg>
     <b>SUBWOOFA</b>
   </div>
   <nav class="modes" aria-label="Mode">
-    <button id="modeEncode" title="Make a new encoded file from your audio" aria-pressed="true">Encode</button>
-    <button id="modeTools" title="Cut, join, relabel and inspect an existing stream" aria-pressed="false">StreamTools</button>
-    <button id="modeVerify" title="Check that an encoded file is valid and decodes cleanly" aria-pressed="false">Verify</button>
-    <button id="modeAtmos" title="Encode a Dolby Atmos master with the Dolby Encoding Engine" aria-pressed="false">Atmos</button>
+    <button id="modeEncode" aria-pressed="true">Encode</button>
+    <button id="modeTools" aria-pressed="false">StreamTools</button>
+    <button id="modeVerify" aria-pressed="false">Verify</button>
+    <button id="modeAtmos" aria-pressed="false">Atmos</button>
   </nav>
   <div class="bar-right">
     <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
     <span id="engine" class="status"><i class="lamp"></i><span>checking engine</span></span>
-    <button id="openSettings" class="plain" title="Theme, behaviour and presets">Settings</button>
+    <button id="openSettings" class="icon-btn" aria-label="Settings" aria-pressed="false"><svg><use href="#i-gear"/></svg></button>
   </div>
 </header>
 
-<section class="strip" aria-label="Format">
-  <label class="f"><span>Destination</span><select id="dest"></select></label>
-  <label class="f wide"><span>Stream type</span><select id="stream"></select><small id="streamNote"></small></label>
-  <div class="f rate">
-    <label for="rate"><span>Sample rate</span></label>
-    <div class="combo">
-      <select id="rate"></select>
-      <input id="ratecustom" type="number" min="1" step="1" placeholder="Hz" hidden>
-    </div>
-  </div>
-  <div class="f bitrate">
-    <label for="bitrate"><span>Bit rate <em id="brange"></em></span></label>
-    <div class="combo">
-      <input id="bitrate" type="number" min="1" step="1" inputmode="numeric">
-      <span class="unit">kbps</span>
-    </div>
-    <div id="presets" class="chips" role="group" aria-label="Bit rate presets"></div>
-    <label class="chk tight" id="x96Wrap" hidden><input type="checkbox" id="x96Core"><span>96/24 core (X96 extension: core-only decoders play the full 96 kHz band)</span></label>
-    <label class="chk tight" id="coreWrap" hidden><input type="checkbox" id="coreOn" checked><span>Backward-compatible core (turn off for lossless data only)</span></label>
-  </div>
-  <div class="f wide" id="pcmWrap" hidden>
-    <label for="pcmFormat"><span>Sample format</span></label>
-    <select id="pcmFormat">
-      <option value="s16">16-bit integer</option>
-      <option value="s24" selected>24-bit integer</option>
-      <option value="s32">32-bit integer</option>
-      <option value="f32">32-bit float</option>
-      <option value="f64">64-bit float</option>
-      <option value="dsd64">DSD64 (2.8224 MHz)</option>
-      <option value="dsd128">DSD128 (5.6448 MHz)</option>
-    </select>
-    <small id="pcmNote"></small>
-  </div>
-  <div class="f dialnorm">
-    <label for="dialnormOn"><span>Dialnorm</span></label>
-    <div class="combo">
-      <label class="chk tight"><input type="checkbox" id="dialnormOn"><span>On</span></label>
-      <input id="dialnorm" type="number" min="-31" max="-1" step="1" value="-27" disabled aria-label="Dialnorm in dBFS">
-      <span class="unit">dBFS</span>
-    </div>
-    <small id="dialnormNote">off (-31)</small>
-  </div>
-  <div class="f dtsopts" id="dtsOpts" hidden>
-    <label><span>DTS options</span></label>
-    <div class="combo">
-      <label class="chk tight" id="esShiftWrap" hidden><input type="checkbox" id="esShift"><span>ES phase shift</span></label>
-      <label class="chk tight"><input type="checkbox" id="rear3"><span>Rear channels -3 dB</span></label>
-    </div>
-    <small id="esNote"></small>
-  </div>
-</section>
-
-
-
-
-
 <div class="work">
-  <section class="layouts" aria-label="Channel layout">
-    <h2>Channel layout</h2>
-    <svg id="speakers" viewBox="-110 -105 220 210" role="img" aria-label="Speaker layout"></svg>
-    <div id="families" class="families" role="tablist"></div>
-    <div id="variants" class="variants" role="listbox"></div>
+  <section class="dev format" aria-label="Format">
+    <h2 class="dh">Format</h2>
+    <div class="db">
+      <label class="f"><span>Destination</span><select id="dest"></select></label>
+      <label class="f"><span>Stream type</span><select id="stream"></select></label>
+      <div id="fmtPlate" class="plate" aria-hidden="true"></div>
+      <div class="row2">
+        <div class="f rate">
+          <label for="rate"><span>Sample rate</span></label>
+          <div class="combo">
+            <select id="rate"></select>
+            <input id="ratecustom" type="number" min="1" step="1" placeholder="Hz" hidden>
+          </div>
+        </div>
+        <div class="f bitrate">
+          <label for="bitrate"><span>Bit rate <em id="brange"></em></span></label>
+          <div class="combo">
+            <input id="bitrate" type="number" min="1" step="1" inputmode="numeric">
+            <span class="unit">kbps</span>
+          </div>
+        </div>
+      </div>
+      <div id="presets" class="chips" role="group" aria-label="Bit rate presets"></div>
+      <label class="chk" id="x96Wrap" hidden><input type="checkbox" id="x96Core"><span>96/24 core</span></label>
+      <label class="chk" id="coreWrap" hidden><input type="checkbox" id="coreOn" checked><span>Backward-compatible core</span></label>
+      <div class="f" id="pcmWrap" hidden>
+        <label for="pcmFormat"><span>Sample format</span></label>
+        <select id="pcmFormat">
+          <option value="s16">16-bit integer</option>
+          <option value="s24" selected>24-bit integer</option>
+          <option value="s32">32-bit integer</option>
+          <option value="f32">32-bit float</option>
+          <option value="f64">64-bit float</option>
+          <option value="dsd64">DSD64 (2.8224 MHz)</option>
+          <option value="dsd128">DSD128 (5.6448 MHz)</option>
+        </select>
+      </div>
+      <div class="f dialnorm">
+        <label for="dialnormOn"><span>Dialnorm</span></label>
+        <div class="combo">
+          <label class="chk tight"><input type="checkbox" id="dialnormOn"><span>On</span></label>
+          <input id="dialnorm" type="number" min="-31" max="-1" step="1" value="-27" disabled aria-label="Dialnorm in dBFS">
+          <span class="unit">dBFS</span>
+          <small id="dialnormNote" class="readout">off (−31)</small>
+        </div>
+      </div>
+      <div class="f dtsopts" id="dtsOpts" hidden>
+        <label><span>DTS options</span></label>
+        <div class="stack">
+          <label class="chk tight" id="esShiftWrap" hidden><input type="checkbox" id="esShift"><span>ES phase shift</span></label>
+          <label class="chk tight"><input type="checkbox" id="rear3"><span>Rear channels −3 dB</span></label>
+        </div>
+      </div>
+    </div>
   </section>
 
-  <div class="main">
+  <section class="dev layouts" aria-label="Channel layout">
+    <h2 class="dh">Channel layout</h2>
+    <div class="db">
+      <div class="lcd"><svg id="speakers" viewBox="-110 -105 220 210" role="img" aria-label="Speaker layout"></svg></div>
+      <div id="families" class="families" role="tablist"></div>
+      <div id="variants" class="variants" role="listbox"></div>
+    </div>
+  </section>
+
+  <div class="dev main">
     <nav class="tabs" id="mainTabs" aria-label="Settings">
       <button data-tab="inputsPanel" aria-pressed="true">Inputs</button>
       <button data-tab="bs" aria-pressed="false" hidden>Bitstream</button>
       <button data-tab="dmx" aria-pressed="false" hidden>Downmix</button>
     </nav>
-  <section class="panel inputs active" id="inputsPanel" aria-label="Input files">
-    <div class="inputs-head">
-      <h2>Input files</h2>
-      <span class="hint">Drop a file on a row, or drop the L file anywhere to fill the rest</span>
-      <label class="f small"><span>Input layout</span><select id="srcLayout"><option value="">Same as output</option><option value="22.2">NHK 22.2 (24 ch), mixed down</option></select></label>
-      <button id="importMc" class="plain" title="Pick one multichannel file (2.0, 5.1, 7.1...): the layout and every row fill themselves">Import file…</button>
-      <button id="batch" class="plain" title="Encode every complete set of channel files in a folder, one job each">Batch from folder…</button>
-      <button id="clear" class="plain">Clear all</button>
-    </div>
-    <table id="files">
-      <thead><tr><th>Ch</th><th>File</th><th>Src</th><th>Bits</th><th>Rate</th><th>Length</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="range">
-      <label class="chk"><input type="checkbox" id="entire" checked><span>Encode entire file</span></label>
-      <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
-      <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
-    </div>
 
-    <details id="dm" class="dm">
-      <summary>Downmix &amp; clip check</summary>
-      <div class="dm-bar">
-        <label class="f small"><span>Target</span><select id="dmTarget"></select></label>
-        <button id="dmReset" class="plain">Reset</button>
-        <button id="dmSafe" class="plain">Safe trim</button>
-        <button id="dmCheck">Check clipping</button>
-        <span id="dmNote" class="hint"></span>
+    <section class="panel inputs active" id="inputsPanel" aria-label="Input files">
+      <div class="inputs-head">
+        <h2>Input files</h2>
+        <label class="f small"><span>Input layout</span><select id="srcLayout"><option value="">Same as output</option><option value="22.2">NHK 22.2 (24 ch), mixed down</option></select></label>
+        <button id="importMc">Import file…</button>
+        <button id="batch">Batch from folder…</button>
+        <button id="clear" class="plain">Clear all</button>
       </div>
-      <div class="dm-scroll"><table id="dmTable" class="dmtable"></table></div>
-      <pre id="dmResult" class="dm-result"></pre>
-    </details>
-  </section>
-<section id="bs" class="panel" hidden>
-  <div class="bs-grid">
-    <label class="f wide" id="bsInfoWrap"><span>Program information</span>
-      <textarea id="bsInfo" rows="2" maxlength="2000" placeholder="Text stored in the .dtshd file (up to 2000 characters, plain Latin-1)"></textarea></label>
-    <div class="f" id="bsTcWrap">
-      <label for="bsFps"><span>Timecode</span></label>
-      <div class="combo">
-        <select id="bsFps"><option value="">24</option><option>23.976</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select>
-        <input id="bsTcStart" type="text" placeholder="start 00:00:00:00" size="12" aria-label="Start timecode">
-        <input id="bsTcRef" type="text" placeholder="reference (optional)" size="12" aria-label="Reference timecode">
+      <table id="files">
+        <thead><tr><th>Ch</th><th>File</th><th>Src</th><th>Bits</th><th>Rate</th><th>Length</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="range">
+        <label class="chk"><input type="checkbox" id="entire" checked><span>Encode entire file</span></label>
+        <label class="f small"><span>From (s)</span><input id="start" type="number" min="0" step="0.1" value="0" disabled></label>
+        <label class="f small"><span>Length (s)</span><input id="duration" type="number" min="0" step="0.1" value="60" disabled></label>
       </div>
-      <small>Frame rate and start stored in the .dtshd file.</small>
-    </div>
-    <div class="f" id="bsSeamlessWrap">
-      <label for="bsSeamless"><span>Seamless branching</span></label>
-      <div class="combo">
-        <select id="bsSeamless"><option value="off">Off</option><option value="single">Single clip</option><option value="csv">Use CSV branch points</option></select>
-        <button id="bsCsv" class="plain" hidden>Choose CSV…</button>
+
+      <details id="dm" class="dm">
+        <summary>Downmix &amp; clip check</summary>
+        <div class="dm-bar">
+          <label class="f small"><span>Target</span><select id="dmTarget"></select></label>
+          <button id="dmReset" class="plain">Reset</button>
+          <button id="dmSafe" class="plain">Safe trim</button>
+          <button id="dmCheck">Check clipping</button>
+          <span id="dmNote" class="readout"></span>
+        </div>
+        <div class="dm-scroll"><table id="dmTable" class="dmtable"></table></div>
+        <pre id="dmResult" class="dm-result"></pre>
+      </details>
+    </section>
+
+    <section id="bs" class="panel" hidden>
+      <div class="bs-grid">
+        <label class="f wide" id="bsInfoWrap"><span>Program information</span>
+          <textarea id="bsInfo" rows="2" maxlength="2000" placeholder="Title, notes, a message to future you"></textarea></label>
+        <div class="f" id="bsTcWrap">
+          <label for="bsFps"><span>Timecode</span></label>
+          <div class="combo">
+            <select id="bsFps"><option value="">24</option><option>23.976</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select>
+            <input id="bsTcStart" type="text" placeholder="start 00:00:00:00" aria-label="Start timecode">
+            <input id="bsTcRef" type="text" placeholder="reference (optional)" aria-label="Reference timecode">
+          </div>
+        </div>
+        <div class="f" id="bsSeamlessWrap">
+          <label for="bsSeamless"><span>Seamless branching</span></label>
+          <div class="combo">
+            <select id="bsSeamless"><option value="off">Off</option><option value="single">Single clip</option><option value="csv">Use CSV branch points</option></select>
+            <button id="bsCsv" class="plain" hidden>Choose CSV…</button>
+          </div>
+          <small id="bsCsvNote" class="readout"></small>
+        </div>
+        <div class="f" id="bsWideWrap" hidden>
+          <label class="chk tight"><input type="checkbox" id="bsWide"><span>Wide 7.1 remapping</span></label>
+        </div>
+        <div class="f" id="bsDialogWrap" hidden>
+          <label class="chk tight"><input type="checkbox" id="bsDialog"><span>Express dialog mode</span></label>
+        </div>
+        <div class="f wide" id="bsSecWrap" hidden>
+          <label><span>Blu-ray secondary audio</span></label>
+          <div class="bs-sec">
+            <label class="f small"><span>Duck primary by (dB)</span><input id="bsAtt" type="number" min="0" max="60" step="0.5" value="6"></label>
+            <label class="f small"><span>Fade down (s)</span><input id="bsFadeDown" type="number" min="0" max="9" step="0.5" value="0"></label>
+            <label class="f small"><span>Fade up (s)</span><input id="bsFadeUp" type="number" min="0" max="9" step="0.5" value="0"></label>
+          </div>
+          <div class="bs-map" id="bsMapWrap">
+            <span class="cap">Mono placement (dB below full, empty = off)</span>
+            <label class="f small"><span>C</span><input id="bsMapC" type="number" min="0" max="60" step="0.5" value="0"></label>
+            <label class="f small"><span>L</span><input id="bsMapL" type="number" min="0" max="60" step="0.5"></label>
+            <label class="f small"><span>R</span><input id="bsMapR" type="number" min="0" max="60" step="0.5"></label>
+            <label class="f small"><span>Ls</span><input id="bsMapLs" type="number" min="0" max="60" step="0.5"></label>
+            <label class="f small"><span>Rs</span><input id="bsMapRs" type="number" min="0" max="60" step="0.5"></label>
+            <label class="f small"><span>LFE</span><input id="bsMapLfe" type="number" min="0" max="60" step="0.5"></label>
+          </div>
+        </div>
       </div>
-      <small id="bsCsvNote"></small>
-    </div>
-    <div class="f" id="bsWideWrap" hidden>
-      <label class="chk tight"><input type="checkbox" id="bsWide"><span>Enable Wide 7.1 remapping</span></label>
-      <small>Adds the speaker remapping sets that let a decoder play the wide channels on a side-rear layout or a 5.1 system.</small>
-    </div>
-    <div class="f" id="bsDialogWrap" hidden>
-      <label class="chk tight"><input type="checkbox" id="bsDialog"><span>Express dialog mode</span></label>
-      <small>Codes only the lower half of the band (speech).</small>
-    </div>
-    <div class="f wide" id="bsSecWrap" hidden>
-      <label><span>Blu-ray secondary audio</span></label>
-      <div class="bs-sec">
-        <label class="f small"><span>Primary audio attenuation (dB)</span><input id="bsAtt" type="number" min="0" max="60" step="0.5" value="6"></label>
-        <label class="f small"><span>Fade down (s)</span><input id="bsFadeDown" type="number" min="0" max="9" step="0.5" value="0"></label>
-        <label class="f small"><span>Fade up (s)</span><input id="bsFadeUp" type="number" min="0" max="9" step="0.5" value="0"></label>
+    </section>
+
+    <section id="dmx" class="panel" hidden>
+      <div class="bs-grid">
+        <div class="f wide" id="dmxStereoWrap" hidden>
+          <label class="chk tight" id="dmxEmbedWrap"><input type="checkbox" id="dmxEmbed"><span>Embed a stereo downmix</span></label>
+          <label class="chk tight" id="dmxMatrixWrap"><input type="checkbox" id="dmxMatrix"><span>Write the stereo levels into the stream</span></label>
+          <label class="chk tight" id="dmxLtRtWrap"><input type="checkbox" id="dmxLtRt"><span>Mark the stereo mix as Lt/Rt</span></label>
+        </div>
+        <div class="f wide" id="dmx51Wrap" hidden>
+          <label><span>Downmix to 5.1</span></label>
+          <div id="dmx51Grid" class="dmx-grid"></div>
+        </div>
+        <div class="f wide" id="dmx20Wrap" hidden>
+          <label><span>Downmix to stereo</span></label>
+          <div id="dmx20Grid" class="dmx-grid"></div>
+        </div>
       </div>
-      <div class="bs-map" id="bsMapWrap">
-        <span class="hint">Where a mono secondary goes (dB below full level, empty = off)</span>
-        <label class="f small"><span>C</span><input id="bsMapC" type="number" min="0" max="60" step="0.5" value="0"></label>
-        <label class="f small"><span>L</span><input id="bsMapL" type="number" min="0" max="60" step="0.5"></label>
-        <label class="f small"><span>R</span><input id="bsMapR" type="number" min="0" max="60" step="0.5"></label>
-        <label class="f small"><span>Ls</span><input id="bsMapLs" type="number" min="0" max="60" step="0.5"></label>
-        <label class="f small"><span>Rs</span><input id="bsMapRs" type="number" min="0" max="60" step="0.5"></label>
-        <label class="f small"><span>LFE</span><input id="bsMapLfe" type="number" min="0" max="60" step="0.5"></label>
-      </div>
-    </div>
-  </div>
-</section>
-<section id="dmx" class="panel" hidden>
-  <div class="bs-grid">
-    <div class="f wide" id="dmxStereoWrap" hidden>
-      <label class="chk tight" id="dmxEmbedWrap"><input type="checkbox" id="dmxEmbed"><span>Embed a stereo downmix</span></label>
-      <small id="dmxEmbedNote">Carries a stereo mix as a channel set of its own, so a decoder can play stereo without decoding the other channels. The file gets bigger.</small>
-      <label class="chk tight" id="dmxMatrixWrap"><input type="checkbox" id="dmxMatrix"><span>Write the stereo downmix levels into the stream</span></label>
-      <label class="chk tight" id="dmxLtRtWrap"><input type="checkbox" id="dmxLtRt"><span>Mark the stereo downmix as matrix encoded (Lt/Rt)</span></label>
-    </div>
-    <div class="f wide" id="dmx51Wrap" hidden>
-      <label><span>Downmix to 5.1</span></label>
-      <div id="dmx51Grid" class="dmx-grid"></div>
-      <small id="dmx51Note">Levels in dB below full level; empty is off. The first column is the gain of each 5.1 channel when a decoder plays only the 5.1 part; the other two add the extra channels of the 7.x layout.</small>
-    </div>
-    <div class="f wide" id="dmx20Wrap" hidden>
-      <label><span>Downmix to stereo</span></label>
-      <div id="dmx20Grid" class="dmx-grid"></div>
-      <small>Levels in dB below full level; empty is off. L to left and R to right are the gain of the front channels themselves.</small>
-    </div>
-  </div>
-</section>
+    </section>
   </div>
 </div>
 
 <section id="queue" class="queue" aria-label="Encode queue" hidden>
   <div class="queue-head">
     <h2>Queue</h2>
-    <span id="qCount" class="hint"></span>
+    <span id="qCount" class="readout"></span>
     <button id="qClear" class="plain">Clear finished</button>
   </div>
   <ul id="qList"></ul>
@@ -211,17 +224,19 @@
 <section id="tools" class="tools" aria-label="StreamTools" hidden>
   <div class="tools-open">
     <button id="tOpen">Open stream…</button>
-    <input id="tPath" readonly placeholder="A DTS, DTS-HD, TrueHD or MLP stream (.dts .dtshd .thd .mlp)">
+    <input id="tPath" readonly data-opens="tOpen" placeholder="Double-click to open a stream (.dts .dtshd .thd .mlp)">
   </div>
   <div class="tools-cols">
-    <div class="tools-info">
-      <h2>Stream</h2>
-      <dl id="tInfo" class="kv selectable"><dt>No stream open</dt><dd></dd></dl>
-      <h2>Bit rate over time</h2>
-      <canvas id="tPbr" width="720" height="170"></canvas>
-      <div id="tPbrNote" class="hint"></div>
+    <div class="tools-info dev">
+      <h2 class="dh">Stream</h2>
+      <div class="db">
+        <dl id="tInfo" class="kv selectable"><dt>No stream open</dt><dd></dd></dl>
+        <h3 class="sub">Bit rate over time</h3>
+        <canvas id="tPbr" width="720" height="170"></canvas>
+        <div id="tPbrNote" class="readout"></div>
+      </div>
     </div>
-    <div class="tools-ops">
+    <div class="tools-ops dev">
       <div class="op-tabs" role="tablist">
         <button data-op="trim" aria-pressed="true">Trim</button>
         <button data-op="split" aria-pressed="false">Split</button>
@@ -231,63 +246,65 @@
         <button data-op="silence" aria-pressed="false">Add silence</button>
         <button data-op="verify" aria-pressed="false">Verify</button>
       </div>
-      <div class="op" data-op="trim">
-        <p class="hint">Keeps the part between two times, cut on frame boundaries (TrueHD and MLP start at the nearest earlier restart point).</p>
-        <div class="op-row">
-          <label class="f small"><span>From (s)</span><input id="tFrom" type="number" min="0" step="0.1" value="0"></label>
-          <label class="f small"><span>To (s, blank = end)</span><input id="tTo" type="number" min="0" step="0.1"></label>
-          <button id="tTrim" class="go small">Trim…</button>
+      <div class="db">
+        <div class="op" data-op="trim">
+          <h3 class="op-title">Trim</h3>
+          <div class="op-row">
+            <label class="f small"><span>From (s)</span><input id="tFrom" type="number" min="0" step="0.1" value="0"></label>
+            <label class="f small"><span>To (s, blank = end)</span><input id="tTo" type="number" min="0" step="0.1"></label>
+            <button id="tTrim" class="go small">Trim…</button>
+          </div>
         </div>
-      </div>
-      <div class="op" data-op="split" hidden>
-        <p class="hint">Cuts the stream at each time and writes numbered files next to the name you choose.</p>
-        <div class="op-row">
-          <label class="f"><span>Split at (seconds, comma separated)</span><input id="tAt" type="text" placeholder="60, 120.5"></label>
-          <button id="tSplit" class="go small">Split…</button>
+        <div class="op" data-op="split" hidden>
+          <h3 class="op-title">Split</h3>
+          <div class="op-row">
+            <label class="f grow"><span>Split at (seconds, comma separated)</span><input id="tAt" type="text" placeholder="60, 120.5"></label>
+            <button id="tSplit" class="go small">Split…</button>
+          </div>
         </div>
-      </div>
-      <div class="op" data-op="append" hidden>
-        <p class="hint">Joins streams of the same format and sample rate end to end; the open stream comes first.</p>
-        <ul id="tAppendList" class="plainlist selectable"></ul>
-        <div class="op-row">
-          <button id="tAppendAdd" class="plain">Add stream…</button>
-          <button id="tAppendRun" class="go small">Append…</button>
+        <div class="op" data-op="append" hidden>
+          <h3 class="op-title">Append</h3>
+          <ul id="tAppendList" class="plainlist selectable"></ul>
+          <div class="op-row">
+            <button id="tAppendAdd">Add stream…</button>
+            <button id="tAppendRun" class="go small">Append…</button>
+          </div>
         </div>
-      </div>
-      <div class="op" data-op="replace" hidden>
-        <p class="hint">Swaps a stretch of the open stream for another stream (same format, rate and channels) starting at the time you give, or inserts it without removing anything. Cuts move to frames decoding can start at.</p>
-        <div class="op-row">
-          <label class="f"><span>Replacement stream</span><input id="tRepPath" readonly placeholder="Choose a stream…"></label>
-          <button id="tRepOpen" class="plain">Choose…</button>
+        <div class="op" data-op="replace" hidden>
+          <h3 class="op-title">Replace</h3>
+          <div class="op-row">
+            <label class="f grow"><span>Replacement stream</span><input id="tRepPath" readonly data-opens="tRepOpen" placeholder="Double-click to choose a stream"></label>
+            <button id="tRepOpen">Choose…</button>
+          </div>
+          <div class="op-row">
+            <label class="f small"><span>At (s)</span><input id="tRepAt" type="number" min="0" step="0.1" value="0"></label>
+            <label class="chk"><input type="checkbox" id="tRepInsert"><span>Insert only</span></label>
+            <button id="tRepRun" class="go small">Write…</button>
+          </div>
         </div>
-        <div class="op-row">
-          <label class="f small"><span>At (s)</span><input id="tRepAt" type="number" min="0" step="0.1" value="0"></label>
-          <label class="chk"><input type="checkbox" id="tRepInsert"><span>Insert only</span></label>
-          <button id="tRepRun" class="go small">Write…</button>
+        <div class="op" data-op="restripe" hidden>
+          <h3 class="op-title">Re-stripe</h3>
+          <div class="op-row">
+            <label class="f small"><span>Now</span><input id="tStripeNow" readonly></label>
+            <label class="f small"><span>New start (hh:mm:ss:ff)</span><input id="tStripeStart" value="00:00:00:00" spellcheck="false"></label>
+            <label class="f small"><span>Frame rate</span><select id="tStripeFps"><option>23.976</option><option selected>24</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select></label>
+            <button id="tStripeRun" class="go small">Write…</button>
+          </div>
         </div>
-      </div>
-      <div class="op" data-op="restripe" hidden>
-        <p class="hint">Relabels the start time and frame rate of a .dtshd file. The audio is not touched, and the reference time stays as it was. Needs a file with a timecode chunk (made by Subwoofa or the DTS encoder).</p>
-        <div class="op-row">
-          <label class="f small"><span>Now</span><input id="tStripeNow" readonly></label>
-          <label class="f small"><span>New start (hh:mm:ss:ff)</span><input id="tStripeStart" value="00:00:00:00" spellcheck="false"></label>
-          <label class="f small"><span>Frame rate</span><select id="tStripeFps"><option>23.976</option><option selected>24</option><option>25</option><option>29.97</option><option>29.97 drop</option><option>30</option><option>30 drop</option></select></label>
-          <button id="tStripeRun" class="go small">Write…</button>
+        <div class="op" data-op="silence" hidden>
+          <h3 class="op-title">Add silence</h3>
+          <div class="op-row">
+            <label class="f small"><span>Head (s)</span><input id="tSilHead" type="number" min="0" step="0.1" value="0"></label>
+            <label class="f small"><span>Tail (s)</span><input id="tSilTail" type="number" min="0" step="0.1" value="0"></label>
+            <button id="tSilRun" class="go small">Write…</button>
+          </div>
         </div>
-      </div>
-      <div class="op" data-op="silence" hidden>
-        <p class="hint">Adds silent frames to the start and/or end of a .dtshd file. Only whole frames are added, so the length is right to within one frame. Needs a file with a stored silent frame (made by Subwoofa MA or the DTS encoder).</p>
-        <div class="op-row">
-          <label class="f small"><span>Head (s)</span><input id="tSilHead" type="number" min="0" step="0.1" value="0"></label>
-          <label class="f small"><span>Tail (s)</span><input id="tSilTail" type="number" min="0" step="0.1" value="0"></label>
-          <button id="tSilRun" class="go small">Write…</button>
+        <div class="op" data-op="verify" hidden>
+          <h3 class="op-title">Verify</h3>
+          <div class="op-row"><button id="tVerify" class="go small">Open in Verify</button></div>
         </div>
+        <pre id="tLog" class="selectable">Open a stream to begin.</pre>
       </div>
-      <div class="op" data-op="verify" hidden>
-        <p class="hint">Checks the open stream: structure and checksums, and with deep verification a full decode, measurements and every header.</p>
-        <div class="op-row"><button id="tVerify" class="go small">Open in Verify</button></div>
-      </div>
-      <pre id="tLog" class="selectable">Open a stream to begin.</pre>
     </div>
   </div>
 </section>
@@ -295,10 +312,10 @@
 <section id="verify" class="tools verify" aria-label="Verify" hidden>
   <div class="tools-open">
     <button id="vOpen">Open file…</button>
-    <input id="vPath" readonly placeholder="An encoded file: .ac3 .eac3 .dts .dtshd .thd .mlp (drop one here)">
+    <input id="vPath" readonly data-opens="vOpen" placeholder="Double-click to open an encoded file (.ac3 .eac3 .dts .dtshd .thd .mlp), or drop one here">
   </div>
   <div class="verify-bar">
-    <label class="opt inline"><input type="checkbox" id="vDeep"><span><b>Deep verification</b><small>Also decodes the whole file, measures the decoded audio, asks the DTS verifier if it is installed, and lists every header in the stream. Takes longer.</small></span></label>
+    <label class="chk"><input type="checkbox" id="vDeep"><span>Deep verification</span></label>
     <button id="vRun" class="go small">Verify</button>
     <button id="vSave" class="plain" disabled>Save report…</button>
   </div>
@@ -318,20 +335,20 @@
 
 <section id="atmos" class="tools atmos" aria-label="Atmos" hidden>
   <div class="atmos-engine">
+    <h3 class="op-title" id="atmosTitle">Dolby Atmos</h3>
     <span id="aEngine" class="status"><i class="lamp"></i><span>Dolby Encoding Engine: checking…</span></span>
     <button id="aLocate" class="plain">Locate dee.exe…</button>
   </div>
-  <p class="hint">Atmos is encoded by the Dolby Encoding Engine, a copy you are licensed to use; Subwoofa only drives it and checks what comes out. Masters must have been written by Dolby's tools (DAMF .atmos, or an ADM BWF .wav): the engine refuses anything else. A plain channel bed (.wav, up to 7.1.4) makes Dolby Digital Plus Atmos.</p>
   <div class="tools-open">
     <button id="aOpen">Open master…</button>
-    <input id="aPath" readonly placeholder="An Atmos master (.atmos, ADM BWF .wav) or a channel bed .wav">
+    <input id="aPath" readonly data-opens="aOpen" placeholder="Double-click to open an Atmos master (.atmos, ADM BWF .wav) or a channel bed .wav">
   </div>
   <pre id="aInfo" class="selectable" hidden></pre>
   <div class="atmos-grid">
     <div class="f"><span>Output format</span>
       <div class="seg" role="radiogroup" aria-label="Output format">
         <button id="aFmtThd" aria-pressed="true">TrueHD Atmos</button>
-        <button id="aFmtDdp" aria-pressed="false">Dolby Digital Plus Atmos</button>
+        <button id="aFmtDdp" aria-pressed="false">DD+ Atmos</button>
       </div>
     </div>
     <label class="f small"><span>Dynamic range preset</span>
@@ -340,7 +357,7 @@
       <select id="aBr"><option>384</option><option>448</option><option>576</option><option>640</option><option selected>768</option><option>1024</option></select></label>
     <label class="f small" id="aClWrap"><span>Spatial clusters</span>
       <select id="aClusters"><option selected>12</option><option>14</option><option>16</option></select></label>
-    <label class="f small"><span>Dialogue level (-31..-1, 0 = measured)</span><input id="aDialnorm" type="number" min="-31" max="0" step="1" value="0"></label>
+    <label class="f small"><span>Dialogue level</span><input id="aDialnorm" type="number" min="-31" max="0" step="1" value="0"></label>
     <label class="f small"><span>Loudness metering</span>
       <select id="aMeter"><option value="">none</option><option>1770-4</option><option>1770-3</option><option>1770-2</option><option>1770-1</option><option>LeqA</option></select></label>
     <label class="f small"><span>Timecode frame rate</span>
@@ -365,46 +382,100 @@
   <pre id="aLog" class="selectable">Open a master to begin.</pre>
 </section>
 
-<footer class="out">
-  <div class="dest-path">
-    <button id="browse" class="plain">Output folder…</button>
-    <input id="outdir" placeholder="No folder chosen" readonly>
-    <input id="outname" value="SUBWOOFA" spellcheck="false" aria-label="File name">
-    <span id="ext" class="ext">.ac3</span>
+<section id="settingsPage" class="settings" aria-label="Settings" hidden>
+  <nav class="stabs" id="sTabs" aria-label="Settings sections">
+    <button data-s="general" aria-pressed="true">General</button>
+    <button data-s="engines" aria-pressed="false">Engines</button>
+    <button data-s="appearance" aria-pressed="false">Appearance</button>
+    <button data-s="presets" aria-pressed="false">Presets</button>
+    <button id="sBack" class="plain back"><svg><use href="#i-back"/></svg>Back to work</button>
+  </nav>
+  <div class="spane">
+    <div class="spage" data-s="general">
+      <h2 class="sh">General</h2>
+      <label class="srow"><input type="checkbox" id="optUnlocked"><span><b>Unlocked mode</b></span></label>
+      <label class="srow"><input type="checkbox" id="optVerify" checked><span><b>Verify after encoding</b></span></label>
+      <label class="srow"><input type="checkbox" id="optNative"><span><b>Prefer Subwoofa's own encoders</b></span></label>
+      <label class="srow"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b></span></label>
+      <label class="f small"><span>Encodes at the same time</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
+      <label class="f"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
+    </div>
+
+    <div class="spage" data-s="engines" hidden>
+      <h2 class="sh">Engines</h2>
+      <div class="engine">
+        <div class="eh"><span class="wordmark">FFmpeg</span><span id="ffStatus" class="status"><i class="lamp"></i><span>checking</span></span></div>
+        <div class="epath">
+          <input id="ffPath" readonly data-opens="ffBrowse" placeholder="Automatic: looked up on PATH">
+          <button id="ffBrowse">Browse…</button>
+          <button id="ffReset" class="plain">Use PATH</button>
+        </div>
+        <div id="ffVersion" class="readout"></div>
+      </div>
+      <div class="engine">
+        <div class="eh"><img class="dts" src="logos/dts.png" alt="DTS" height="22"><span class="wordmark">DTS-HD Master Audio Suite</span><span id="masStatus" class="status"><i class="lamp"></i><span>checking</span></span></div>
+        <div class="epath">
+          <input id="masPath" readonly data-opens="masBrowse" placeholder="Automatic: C:\Program Files (x86)\DTS\MAS-SAS">
+          <button id="masBrowse">Browse…</button>
+          <button id="masReset" class="plain">Use default</button>
+        </div>
+        <ul id="masFiles" class="files-found"></ul>
+      </div>
+      <div class="engine">
+        <div class="eh"><span class="wordmark">Dolby Encoding Engine</span><span id="deeStatus" class="status"><i class="lamp"></i><span>checking</span></span></div>
+        <div class="epath">
+          <input id="deePath" readonly data-opens="deeBrowse" placeholder="Not set: Atmos needs dee.exe">
+          <button id="deeBrowse">Browse…</button>
+          <button id="deeReset" class="plain">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="spage" data-s="appearance" hidden>
+      <h2 class="sh">Appearance</h2>
+      <div id="themeGrid" class="themes" role="radiogroup" aria-label="Theme"></div>
+      <div id="customEditor" class="custom" hidden>
+        <h3 class="sub">Custom theme</h3>
+        <div class="swatches">
+          <label class="f"><span>Window</span><input type="color" data-var="ground"></label>
+          <label class="f"><span>Panels</span><input type="color" data-var="panel"></label>
+          <label class="f"><span>Borders</span><input type="color" data-var="rule"></label>
+          <label class="f"><span>Text</span><input type="color" data-var="ink"></label>
+          <label class="f"><span>Quiet text</span><input type="color" data-var="dim"></label>
+          <label class="f"><span>Accent</span><input type="color" data-var="lamp"></label>
+        </div>
+        <div class="op-row">
+          <label class="f small"><span>Start from</span><select id="customBase"></select></label>
+          <button id="customReset" class="plain">Reset to base</button>
+          <button id="customCopy" class="plain">Copy as text</button>
+          <button id="customPaste" class="plain">Paste</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="spage" data-s="presets" hidden>
+      <h2 class="sh">Presets</h2>
+      <div class="op-row">
+        <button type="button" id="presetSave">Save preset…</button>
+        <button type="button" id="presetLoad">Load preset…</button>
+      </div>
+    </div>
   </div>
-  <button id="go" class="go" disabled>Encode</button>
+</section>
+
+<footer class="out">
+  <div class="out-row">
+    <div class="dest-path">
+      <button id="browse" class="icon-btn" aria-label="Choose output folder"><svg><use href="#i-folder"/></svg></button>
+      <input id="outdir" readonly data-opens="browse" placeholder="Double-click to choose the output folder">
+      <input id="outname" value="SUBWOOFA" spellcheck="false" aria-label="File name">
+      <span id="ext" class="ext">.ac3</span>
+    </div>
+    <button id="go" class="go" disabled><svg><use href="#i-play"/></svg>Encode</button>
+  </div>
   <pre id="log" aria-live="polite">Ready.</pre>
 </footer>
 
-<dialog id="settings">
-  <form method="dialog">
-    <h2>Appearance</h2>
-    <div id="themeGrid" class="themes" role="radiogroup" aria-label="Theme"></div>
-    <div class="opt-row">
-      <h2 style="flex-basis:100%">Behaviour</h2>
-    </div>
-    <label class="opt">
-      <input type="checkbox" id="optUnlocked">
-      <span>
-        <b>Unlocked mode</b>
-        <small>Turns off the spec checks. Any bit rate or sample rate can be typed, every layout is offered for every format, and any stream type can go to any destination. The encoder may reject combinations it cannot make, and results may not play on real hardware.</small>
-      </span>
-    </label>
-    <div class="opt-row">
-      <label class="f small"><span>Max concurrent encodes</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
-      <label class="opt inline"><input type="checkbox" id="optNative"><span><b>Use native encoders</b><small>Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP and the DTS family) use it instead of FFmpeg. Formats FFmpeg cannot make (DTS-HD MA, HRA, ES, 96/24) always use it.</small></span></label>
-      <label class="f small"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
-      <label class="opt inline"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b><small>Native TrueHD only: add a stereo substream so stereo-only players get a proper downmix. Makes the file roughly 5 to 8% larger.</small></span></label>
-      <label class="opt inline"><input type="checkbox" id="optVerify" checked><span><b>Auto verify</b><small>Lossless encodes are decoded and compared with the source (MD5); lossy ones must decode cleanly; audio files (WAV, FLAC, ALAC, DSD...) get a structure check and a full decode.</small></span></label>
-    </div>
-    <div class="opt-row">
-      <span class="hint">Presets keep the format, layout, sample rate, bit rate, dialnorm and DTS options (not the input files).</span>
-      <button type="button" id="presetSave" class="plain">Save preset…</button>
-      <button type="button" id="presetLoad" class="plain">Load preset…</button>
-    </div>
-    <menu><button value="close" class="go small">Done</button></menu>
-  </form>
-</dialog>
 <div id="tip" role="tooltip"></div>
 <script src="app.js"></script>
 </body>

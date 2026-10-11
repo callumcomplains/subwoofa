@@ -308,3 +308,24 @@ impl Report {
         o
     }
 }
+
+static MAS_DIR: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
+
+/// Where the DTS-HD Master Audio Suite lives, when it is not in its usual place.
+pub fn set_mas_dir(dir: Option<std::path::PathBuf>) {
+    *MAS_DIR.write().unwrap() = dir;
+}
+
+/// The suite's folder: the one set in the app, else the default install.
+pub fn mas_dir() -> Option<std::path::PathBuf> {
+    let set = MAS_DIR.read().unwrap().clone();
+    set.filter(|d| d.is_dir()).or_else(|| {
+        let d = std::path::PathBuf::from(r"C:\Program Files (x86)\DTS\MAS-SAS");
+        d.is_dir().then_some(d)
+    })
+}
+
+/// DTS's own verifier, when the suite is installed.
+pub fn mas_verifier() -> Option<std::path::PathBuf> {
+    mas_dir().map(|d| d.join("DTSHDVerify.exe")).filter(|p| p.is_file())
+}

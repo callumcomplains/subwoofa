@@ -327,8 +327,26 @@ pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
     }
 }
 
-/// Locate ffmpeg on PATH.
+static FFMPEG_OVERRIDE: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Use this ffmpeg (a file, or a folder that holds it) instead of searching PATH; `None` goes back to PATH.
+pub fn set_ffmpeg_override(path: Option<PathBuf>) {
+    *FFMPEG_OVERRIDE.write().unwrap() = path;
+}
+
+/// The ffmpeg the app was told to use, when it exists.
+fn overridden() -> Option<PathBuf> {
+    let p = FFMPEG_OVERRIDE.read().unwrap().clone()?;
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let file = if p.is_dir() { p.join(exe) } else { p };
+    file.is_file().then_some(file)
+}
+
+/// Locate ffmpeg: the path set in the app, else PATH.
 pub fn find_ffmpeg() -> Option<PathBuf> {
+    if let Some(p) = overridden() {
+        return Some(p);
+    }
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     std::env::var_os("PATH").and_then(|p| {
         std::env::split_paths(&p).map(|d| d.join(exe)).find(|c: &PathBuf| Path::new(c).is_file())

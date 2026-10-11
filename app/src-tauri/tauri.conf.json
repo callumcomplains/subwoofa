@@ -11,10 +11,10 @@
     "windows": [
       {
         "title": "Subwoofa — every channel, every codec",
-        "width": 1100,
-        "height": 760,
-        "minWidth": 900,
-        "minHeight": 620
+        "width": 1320,
+        "height": 860,
+        "minWidth": 1200,
+        "minHeight": 780
       }
     ],
     "security": { "csp": null }

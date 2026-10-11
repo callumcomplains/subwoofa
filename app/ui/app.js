@@ -57,6 +57,10 @@ const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage may be unavailable */ } },
 };
+const toolPaths = { ffmpeg: "", mas: "" };
+let lastMode = "encode";
+const TIP_BASE = {};
+const TIP_EXTRA = {};
 
 function fill(sel, items, want) {
   sel.innerHTML = "";
@@ -242,11 +246,15 @@ function renderBitrate(from) {
   if (!hi && coreBox.disabled) coreBox.checked = coreBox.dataset.was !== "0";
   coreBox.disabled = hi;
   if (hi) coreBox.checked = false;
-  $("coreWrap").querySelector("span").textContent = hi ? (nhk ? "No DTS core above 8 channels: the stream is the lossless data alone" : "No DTS core above 96 kHz with more than 6 channels: the stream is the lossless data alone") : "Backward-compatible core (turn off for lossless data only)";
+  const coreLabel = $("coreWrap").querySelector("span");
+  coreLabel.firstChild.textContent = hi ? "No DTS core here" : "Backward-compatible core";
+  setTip("#coreOn", hi ? (nhk ? "Above 8 channels there is no DTS core: the stream is the lossless data alone." : "Above 96 kHz with more than 6 channels there is no DTS core: the stream is the lossless data alone.") : "");
   syncX96();
   if (!ma) coreBox.checked = true;
   br.disabled = (lossless && !unlocked) || coreOff();
-  $("brange").textContent = lossless ? (unlocked ? "free entry" : "lossless / variable") : unlocked ? `spec ${o.bitrate_min}–${o.bitrate_max}` : `${o.bitrate_min}–${o.bitrate_max}`;
+  const range = lossless ? (unlocked ? "Free entry here." : "Lossless and variable, so there is nothing to set.") : `This format takes ${o.bitrate_min} to ${o.bitrate_max} kbps${unlocked ? " by the spec; anything goes while limits are off" : ""}.`;
+  $("brange").textContent = "";
+  setTip("#bitrate", range);
   if (lossless && !unlocked) br.value = "";
   else if (from === "dest" || from === "stream" || !br.value) {
     br.value = lossless ? "" : (DEFAULT_BITRATE[$("stream").value] ?? o.bitrate_max);
@@ -273,7 +281,7 @@ function syncDtsOpts() {
   $("dtsOpts").hidden = !dts;
   $("esShiftWrap").hidden = st !== "dts-es";
   if (!dts) { $("rear3").checked = false; $("esShift").checked = false; }
-  $("esNote").textContent = st === "dts-es" ? "Phase shift is recommended for 6.x Discrete, not for Matrix layouts." : "";
+  setTip("#dtsOpts", st === "dts-es" ? "On 6.x Discrete the phase shift is recommended. On Matrix layouts, leave it be." : "");
 }
 
 /** One plain sentence about what the chosen stream type puts in the file, so the options are not a mystery. */
@@ -303,7 +311,8 @@ function describeStream() {
   } else if (st === "dts") {
     t = "A plain DTS core: lossy, plays everywhere.";
   }
-  $("streamNote").textContent = t;
+  setTip("#stream", t);
+  updatePlate();
 }
 
 /** Audio files (WAV, AIFF, CAF, FLAC) have a sample format instead of a bit rate and a dialnorm. */
@@ -319,7 +328,7 @@ function syncPcmFormat() {
   const allowed = (v) => dsd ? v.startsWith("dsd") : v.startsWith("dsd") ? false : flac ? ["s16", "s24"].includes(v) : true;
   for (const o of $("pcmFormat").options) o.disabled = !allowed(o.value);
   if ($("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = dsd ? "dsd64" : "s24";
-  $("pcmNote").textContent = dsd
+  setTip("#pcmFormat", dsd
     ? "One-bit DSD made with a fifth-order sigma-delta modulator at half scale (-6 dB), the filters keeping the band up to about 20 kHz (40 kHz from 88.2 kHz sources). Audio only: no disc image."
     : st === "tta"
     ? "TTA stores 16 or 24 bit integers."
@@ -331,7 +340,7 @@ function syncPcmFormat() {
       ? "AIFF files are limited to 4 GB; floating point makes it an AIFF-C file."
       : st === "wav"
         ? "Files over 4 GB are written as RF64. The channel mask is set where the layout has standard speaker positions."
-        : "CAF has no 4 GB limit and labels every channel.";
+        : "CAF has no 4 GB limit and labels every channel.");
 }
 
 function coreOff() {
@@ -643,7 +652,6 @@ function syncDownmix() {
   const stereoOk = (ma && five && ch.length <= 8) || coreLevels;
   $("dmxStereoWrap").hidden = !stereoOk;
   $("dmxEmbedWrap").hidden = !(ma && stereoOk && curRate() <= 96000);
-  $("dmxEmbedNote").hidden = $("dmxEmbedWrap").hidden;
   $("dmxMatrixWrap").hidden = !(stereoOk && !esMatrix);
   $("dmxLtRtWrap").hidden = $("dmxMatrixWrap").hidden;
   $("dmx51Wrap").hidden = !((ma || hra) && pair);
@@ -699,19 +707,124 @@ const THEMES = [
   ["amber", "Studio Amber"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["ocean", "Ocean"], ["moss", "Moss"],
   ["rose", "Rose Dusk"], ["terminal", "Terminal"], ["paper", "Paper"], ["daylight", "Daylight"], ["contrast", "High Contrast"],
 ];
+const CUSTOM_KEYS = ["ground", "panel", "rule", "ink", "dim", "lamp"];
+
+/** The six colours a theme block gives, read back from the stylesheet. */
+function themeColours(name) {
+  const probe = document.createElement("div");
+  probe.dataset.theme = name;
+  probe.style.display = "none";
+  document.body.append(probe);
+  const cs = getComputedStyle(probe);
+  const out = {};
+  for (const k of CUSTOM_KEYS) out[k] = cs.getPropertyValue("--" + k).trim();
+  probe.remove();
+  return out;
+}
+
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+/** Everything else a theme needs, worked out from the six colours. */
+function customVars(c) {
+  const light = luminance(c.ground) > 0.4;
+  return {
+    "--ground": c.ground, "--panel": c.panel, "--rule": c.rule, "--ink": c.ink, "--dim": c.dim, "--lamp": c.lamp,
+    "--hi": "color-mix(in srgb, var(--panel) 90%, var(--ink))",
+    "--screen": light ? "color-mix(in srgb, var(--panel) 55%, #fff)" : "color-mix(in srgb, var(--ground) 65%, #000)",
+    "--rule-hi": "color-mix(in srgb, var(--rule) 65%, var(--ink))",
+    "--lamp-ink": luminance(c.lamp) > 0.35 ? "#14110a" : "#ffffff",
+    "color-scheme": light ? "light" : "dark",
+  };
+}
+
+function loadCustom() {
+  try { const c = JSON.parse(store.get("customTheme") || "null"); if (c && c.colors) return c; } catch { /* fall through */ }
+  return { base: "amber", colors: themeColours("amber") };
+}
+
+function saveCustom(c) {
+  c.vars = customVars(c.colors);
+  store.set("customTheme", JSON.stringify(c));
+  return c;
+}
+
+function clearInlineTheme() {
+  const s = document.documentElement.style;
+  for (const k of ["--ground", "--panel", "--rule", "--ink", "--dim", "--lamp", "--hi", "--screen", "--rule-hi", "--lamp-ink", "color-scheme"]) s.removeProperty(k);
+}
 
 function applyTheme(name) {
-  if (!THEMES.some((t) => t[0] === name)) name = "amber";
+  if (name !== "custom" && !THEMES.some((t) => t[0] === name)) name = "amber";
+  clearInlineTheme();
   document.documentElement.dataset.theme = name;
+  if (name === "custom") for (const [k, v] of Object.entries(saveCustom(loadCustom()).vars)) document.documentElement.style.setProperty(k, v);
   store.set("theme", name);
   for (const b of $("themeGrid").children) b.setAttribute("aria-checked", String(b.dataset.theme === name));
+  $("customEditor").hidden = name !== "custom";
+}
+
+function paintCustomCard() {
+  const card = $("themeGrid").querySelector('[data-theme="custom"]');
+  if (!card) return;
+  const c = loadCustom();
+  for (const [k, v] of Object.entries(customVars(c.colors))) card.style.setProperty(k, v);
 }
 
 function buildThemeGrid() {
-  $("themeGrid").innerHTML = THEMES.map(([id, label]) =>
+  const all = [...THEMES, ["custom", "Custom"]];
+  $("themeGrid").innerHTML = all.map(([id, label]) =>
     `<button type="button" role="radio" class="theme" data-theme="${id}" aria-checked="false"><span class="sw"><i></i><b></b><u></u><s></s></span><span class="n">${label}</span></button>`).join("");
-  $("themeGrid").onclick = (e) => { const b = e.target.closest(".theme"); if (b) applyTheme(b.dataset.theme); };
+  $("themeGrid").onclick = (e) => { const b = e.target.closest(".theme"); if (b) { applyTheme(b.dataset.theme); syncCustomEditor(); } };
+  fill($("customBase"), THEMES.map(([id, label]) => [id, label]), loadCustom().base);
+  paintCustomCard();
   applyTheme(document.documentElement.dataset.theme);
+  syncCustomEditor();
+  for (const input of $("customEditor").querySelectorAll("input[type=color]")) {
+    input.oninput = () => {
+      const c = loadCustom();
+      c.colors[input.dataset.var] = input.value;
+      saveCustom(c);
+      applyTheme("custom");
+      paintCustomCard();
+    };
+  }
+  $("customBase").onchange = () => resetCustom($("customBase").value);
+  $("customReset").onclick = () => resetCustom($("customBase").value);
+  $("customCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(loadCustom().colors)); flash($("customCopy"), "Copied"); } catch { flash($("customCopy"), "Blocked"); }
+  };
+  $("customPaste").onclick = async () => {
+    try {
+      const t = JSON.parse(await navigator.clipboard.readText());
+      const c = loadCustom();
+      for (const k of CUSTOM_KEYS) if (/^#[0-9a-f]{6}$/i.test(t[k] || "")) c.colors[k] = t[k];
+      saveCustom(c); applyTheme("custom"); syncCustomEditor(); paintCustomCard();
+      flash($("customPaste"), "Pasted");
+    } catch { flash($("customPaste"), "No theme text"); }
+  };
+}
+
+function resetCustom(base) {
+  const c = { base, colors: themeColours(base) };
+  saveCustom(c);
+  applyTheme("custom");
+  syncCustomEditor();
+  paintCustomCard();
+}
+
+function syncCustomEditor() {
+  const c = loadCustom();
+  for (const input of $("customEditor").querySelectorAll("input[type=color]")) input.value = c.colors[input.dataset.var];
+  $("customBase").value = c.base;
+}
+
+function flash(btn, text) {
+  const was = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = was; }, 1200);
 }
 
 /* ---------- tabs of the main card ---------- */
@@ -732,35 +845,77 @@ function syncTabs() {
 
 /* ---------- (i) marks ---------- */
 
+// [selector, text]. A selector starting with @ names the label itself; any other names a control, and the mark
+// goes after its label. Anything that changes with the choices (what a stream type contains, for one) is added
+// to the end with setTip.
 const INFO = [
-  ["#dest", "Where the file will be used. It decides which formats and limits are offered: Blu-ray, DVD, a streaming or download delivery, a DTS music disc, a generic file, or a plain audio file."],
-  ["#stream", "The audio format. Lossless formats (DTS-HD Master Audio, Dolby TrueHD) keep every bit of your audio; lossy ones (DTS, Dolby Digital, DTS Express) are much smaller. Pick what your player or disc specification asks for."],
-  ["#rate", "Samples per second of the encoded audio. Match your source if you can: 48 kHz is standard for video, 96 kHz and up is high resolution. A source at another rate is converted."],
-  ["#bitrate", "How much data per second the lossy part may use. More means better quality and a bigger file. The range next to it is what this format allows; the buttons are common values."],
-  ["#dialnormOn", "Dialogue normalisation: the average loudness of the speech, stored so players can level different titles to each other. Leave it off unless you know the figure; film mixes are often around -27."],
-  ["#dtsOpts", "Extras for DTS ES (6.1) streams. The phase shift keeps the rear centre channel from cancelling against the other rears; the -3 dB trim lowers the rear channels to match a matrixed surround."],
-  ["#pcmFormat", "How each sample is stored in the audio file: integers or floating point at 16 to 64 bits, or one-bit DSD audio."],
-  ["@.layouts h2", "The speaker arrangement of the encoded audio. Pick a family such as 5.1, then the exact variant; the diagram shows where each channel plays. Input files follow the same layout."],
-  ["@#inputsPanel .inputs-head h2", "One mono file per channel. Drop the left-channel file anywhere and the rest are found next to it, or import a single multichannel file and everything fills itself."],
-  ["#srcLayout", "Use this when your source files have a different layout from the output. NHK 22.2 sources, for example, are mixed down to the layout you picked."],
-  ["#entire", "Untick to encode only a section of the audio: set where it starts and how long it runs, in seconds. Handy for quick tests."],
-  ["#bsInfo", "Free text stored inside the .dtshd file, such as a title or notes for yourself. It is not heard in playback."],
+  ["@.format .dh", "Everything about the stream itself: format, rate, bit rate and the loudness tag."],
+  ["#dest", "Where this file is going. It sets the rules: which formats, rates and layouts are allowed. Blu-ray and DVD are strict, Generic is relaxed, and Audio files will take nearly anything."],
+  ["#stream", "The audio format. Lossless keeps every bit; lossy keeps what you probably won't miss. Pick whatever your disc or player asks for."],
+  ["#rate", "Samples per second. Match your source: 48 kHz for video, 96 kHz and up for the audiophile corner. A source at another rate gets converted."],
+  ["#bitrate", "Kilobits per second for the lossy part. More sounds better and weighs more. The range beside the label is what this format allows; the buttons are the usual suspects."],
+  ["#x96Core", "Adds an extension so a decoder that only reads the core still gets the full 96 kHz band."],
+  ["#coreOn", "The lossy core lets players without DTS-HD decode something. Switch it off for lossless data only: smaller, but picky players may stay silent."],
+  ["#dialnormOn", "Dialogue normalisation: the average loudness of your speech, stored so players can level different titles. Don't know your figure? Leave it off. Film mixes often sit around −27."],
+  ["#dtsOpts", "ES phase shift keeps the rear centre from cancelling against the other rears. The −3 dB option lowers the rears to match a matrixed surround."],
+  ["#pcmFormat", "How each sample is stored in the file: integer or float, 16 to 64 bits, or one-bit DSD for the brave."],
+  ["@.layouts .dh", "The speaker arrangement. Pick a family like 5.1, then the exact variant. The display shows who plays where, and your input files follow the same layout."],
+  ["@#inputsPanel .inputs-head h2", "One mono file per channel. Drop the left file anywhere and Subwoofa finds its siblings, or import one multichannel file and watch every row fill itself."],
+  ["#srcLayout", "For when your files don't match the output layout. NHK 22.2 sources get mixed down to whatever you picked."],
+  ["#entire", "Untick to encode just a slice: choose where it starts and how long it lasts. Good for a quick test before you commit an hour of audio."],
+  ["@#dm summary", "See what a downmix does to your levels before you ship it. Check clipping tells you whether the worst case goes over full scale; Safe trim turns it down just enough."],
+  ["#bsInfo", "Free text stored in the .dtshd file: a title, notes, a message to future you. Nobody hears it."],
   ["#bsFps", "The video frame rate and start time stored in the file, so authoring tools place the audio exactly. The reference time is where the programme was cut from."],
-  ["#bsSeamless", "Seamless branching lets a Blu-ray player jump between versions of a film without a glitch, by making the stream restart cleanly at set points. Use a CSV of timecodes, one per line, for several branch points."],
-  ["#bsWide", "Adds extra information that lets a decoder play wide front channels on a side-rear speaker layout or on a 5.1 system."],
-  ["#bsDialog", "Express dialog mode codes only the lower half of the frequency range, which is enough for speech and saves bits."],
-  ["#bsAtt", "How far the main film audio is turned down, in dB, while this secondary (commentary) track plays."],
-  ["#bsFadeDown", "How many seconds the main audio takes to reach that lower level when the commentary starts."],
-  ["#bsFadeUp", "How many seconds the main audio takes to come back up when the commentary ends."],
-  ["#dmxEmbed", "Adds a ready-made stereo mix inside the file, so a stereo player does not have to fold the surround down itself. The file gets bigger."],
-  ["#dmxMatrix", "Stores your stereo mixing levels in the stream as information. Decoders and players may use them when they downmix."],
-  ["#dmxLtRt", "Labels the stereo mix as Lt/Rt (surround encoded, for a matrix decoder) instead of plain Lo/Ro."],
-  ["@#dmx51Wrap > label", "How a 7.x stream plays as 5.1. The first column is the gain of each 5.1 channel; Extra 1 and Extra 2 say how much of the two extra channels is added to it. Numbers are dB below full level, empty means not mixed in."],
-  ["@#dmx20Wrap > label", "How the stream plays as stereo: how much of each channel goes to the left and to the right output, in dB below full level. Empty means none."],
-  ["#optUnlocked", "For experts: the encoder stops checking your choices against the format rules."],
-  ["#optConc", "How many encodes may run at the same time. More is faster on a big computer."],
-  ["#optOrder", "Some multichannel files list their channels in a different order. Auto uses the film order for 7.1; the others follow the file's speaker mask or the order of the layout."],
+  ["#bsSeamless", "Lets a Blu-ray player hop between versions of a film without a hiccup, by making the stream restart cleanly at chosen points. Several branch points? Give a CSV of timecodes, one per line."],
+  ["#bsWide", "Adds the data that lets a decoder play wide front channels on a side-rear layout or a plain 5.1 system."],
+  ["#bsDialog", "Codes only the lower half of the frequency range. Plenty for speech, and it saves bits."],
+  ["#bsAtt", "How far the main film audio is turned down while this secondary track speaks."],
+  ["#bsFadeDown", "Seconds the main audio takes to sink to that lower level when the commentary starts."],
+  ["#bsFadeUp", "Seconds the main audio takes to come back when the commentary ends."],
+  ["@#bsMapWrap .cap", "Where a mono commentary plays, in dB below full level. Empty means off. Centre at 0 is the sensible default."],
+  ["#dmxEmbed", "Puts a ready-made stereo mix inside the file, so a stereo player doesn't have to fold the surround down itself. The file gets bigger."],
+  ["#dmxMatrix", "Stores your stereo mixing levels in the stream as information. Decoders may use them when they downmix."],
+  ["#dmxLtRt", "Labels the stereo mix as Lt/Rt (surround-encoded, for a matrix decoder) instead of plain Lo/Ro."],
+  ["@#dmx51Wrap > label", "How a 7.x stream plays as 5.1. The first column is the gain of each 5.1 channel; Extra 1 and Extra 2 say how much of the two extra channels joins it. Numbers are dB below full level, and empty means not mixed in."],
+  ["@#dmx20Wrap > label", "How the stream plays as stereo: how much of each channel goes to the left and right outputs, in dB below full level. Empty means none."],
+  ["@.queue-head h2", "Encodes wait here, run in turn and get verified. Close the app and they go away."],
+  ["@.tools-info .dh", "What's inside the stream. Handy for answering \"what even is this file?\""],
+  ["@.op[data-op=trim] .op-title", "Keeps the part between two times, cut on frame boundaries. TrueHD and MLP start at the nearest earlier restart point, because that's how they are."],
+  ["@.op[data-op=split] .op-title", "Cuts the stream at each time and writes numbered files next to the name you choose."],
+  ["@.op[data-op=append] .op-title", "Joins streams of the same format and sample rate end to end. The open stream goes first."],
+  ["@.op[data-op=replace] .op-title", "Swaps a stretch of the open stream for another one (same format, rate and channels) starting at the time you give, or inserts it without removing anything. Cuts land on frames a decoder can start from."],
+  ["@.op[data-op=restripe] .op-title", "Relabels the start time and frame rate in a .dtshd. The audio isn't touched, and the reference time stays put. Needs a timecode chunk, which Subwoofa and the DTS encoder both write."],
+  ["@.op[data-op=silence] .op-title", "Adds whole frames of silence to the start and/or end of a .dtshd, so the length lands within one frame of what you asked. Needs a stored silent frame."],
+  ["@.op[data-op=verify] .op-title", "Checks the open stream: structure and checksums. Deep mode adds a full decode and a look at every header."],
+  ["#vDeep", "Also decodes the whole file, measures the audio, asks DTS's own verifier if it's installed, and lists every header. Slower, more suspicious."],
+  ["@#atmosTitle", "Atmos is encoded by the Dolby Encoding Engine, a copy you're licensed to use; Subwoofa only drives it and checks what comes out. Masters must come from Dolby's tools (DAMF .atmos, or an ADM BWF .wav), because the engine refuses anything else. A plain channel bed (.wav, up to 7.1.4) makes Dolby Digital Plus Atmos."],
+  ["#aDialnorm", "Average speech loudness, −31 to −1. Leave it at 0 and the engine measures it for you."],
+  ["#optUnlocked", "For experts and the curious: switches off the spec checks. Any rate, any layout, any format to any destination. The encoder may say no, and real hardware may too."],
+  ["#optVerify", "After each encode: lossless files are decoded and compared with the source (MD5); lossy ones must decode cleanly; audio files get a structure check and a full decode."],
+  ["#optNative", "Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP, the DTS family), use it instead of FFmpeg. Formats FFmpeg can't make always use ours."],
+  ["#optDownmix", "Native TrueHD only: adds a stereo substream so stereo-only players get a proper downmix. Costs roughly 5 to 8 % more file."],
+  ["#optConc", "How many encodes run at once. More is faster on a big machine and louder on a small one."],
+  ["#optOrder", "Some multichannel files list their channels in an unexpected order. Auto uses film order for 7.1; the others follow the file's speaker mask, or the order of the layout."],
+  ["@.engine:nth-of-type(1) .wordmark", "Reads and converts audio Subwoofa can't read itself, and makes the formats it doesn't encode natively. Leave this on automatic to search your PATH, or point it at ffmpeg.exe (or its folder) to use a particular build."],
+  ["@.engine:nth-of-type(2) .wordmark", "The folder that holds DTSHDVerify.exe. Subwoofa uses DTS's own verifier as a second opinion in deep checks. Automatic looks in the default install folder."],
+  ["@.engine:nth-of-type(3) .wordmark", "dee.exe, the Dolby Encoding Engine, which does the actual Atmos encoding. You supply your own licensed copy."],
+  ["@.spage[data-s=appearance] .sh", "Pick a look, or mix your own under Custom. Your choice is remembered."],
+  ["@#customEditor .sub", "Six colours are enough. The rest (raised panels, screens, outlines, the text on the accent) is worked out from them."],
+  ["@.spage[data-s=presets] .sh", "A preset remembers format, layout, rate, bit rate, dialnorm and every Bitstream and Downmix choice. Not your input files."],
 ];
+
+
+function composeTip(key) {
+  const x = TIP_EXTRA[key];
+  return TIP_BASE[key] + (x ? " " + x : "");
+}
+
+/** Add to the explanation behind a control's (i) (it may change as you pick things). */
+function setTip(key, text) {
+  TIP_EXTRA[key] = text;
+  const icon = document.querySelector(`.info[data-key="${key}"]`);
+  if (icon && TIP_BASE[key] !== undefined) icon.dataset.tip = composeTip(key);
+}
 
 function addInfos() {
   for (const [sel, text] of INFO) {
@@ -768,12 +923,14 @@ function addInfos() {
     if (sel.startsWith("@")) host = document.querySelector(sel.slice(1));
     else {
       const el = document.querySelector(sel);
-      const f = el && el.closest(".f, .chk, .opt, label");
-      host = f && (f.querySelector(":scope > span > b, :scope > b, :scope > span, :scope > label > span, span"));
+      const f = el && el.closest(".f, .chk, .opt, .srow, label");
+      host = f && f.querySelector(":scope > span > b, :scope > b, :scope > span, :scope > label > span, span");
     }
     if (!host || host.querySelector(".info")) continue;
+    TIP_BASE[sel] = text;
     const i = document.createElement("i");
-    i.className = "info"; i.tabIndex = 0; i.textContent = "i"; i.dataset.tip = text; i.setAttribute("aria-label", text);
+    i.className = "info"; i.tabIndex = 0; i.textContent = "i"; i.dataset.key = sel; i.dataset.tip = composeTip(sel);
+    i.setAttribute("aria-label", "More information");
     host.append(i);
   }
 }
@@ -794,6 +951,32 @@ function initTips() {
   document.addEventListener("focusin", (e) => { const el = e.target.closest?.(".info"); if (el) show(el); });
   document.addEventListener("focusout", hide);
   document.addEventListener("scroll", hide, true);
+  // a path box opens its chooser on a double click, as the file rows already do
+  document.addEventListener("dblclick", (e) => {
+    const box = e.target.closest?.("input[data-opens]");
+    if (box) $(box.dataset.opens).click();
+  });
+}
+
+/* ---------- stream logo plate ---------- */
+
+const STREAM_LOGOS = {
+  "dtshd-ma": "dts-hd-ma.jpg", "dtshd-hra": "dts-hd-hra.jpg", dts: "dts-digital-surround.jpg",
+  "dts-es": "dts-es.jpg", "dts-96-24": "dts-9624.jpg", "dts-express": "dts-express.jpg",
+};
+
+function updatePlate() {
+  const st = $("stream").value, plate = $("fmtPlate");
+  if (!st) { plate.innerHTML = ""; return; }
+  if (STREAM_LOGOS[st]) {
+    plate.innerHTML = `<img src="logos/${STREAM_LOGOS[st]}" alt="${$("stream").selectedOptions[0]?.textContent || ""}">`;
+  } else {
+    const label = $("stream").selectedOptions[0]?.textContent || st;
+    const lossless = ["truehd", "mlp", "wav", "aiff", "caf", "flac", "alac", "tta", "dsf", "dff"].includes(st);
+    plate.innerHTML = `<div class="fmt"></div>`;
+    plate.firstChild.textContent = label;
+    plate.firstChild.insertAdjacentHTML("beforeend", `<small>${lossless ? "lossless" : "lossy"}</small>`);
+  }
 }
 
 /* ---------- presets (.swpreset, plain JSON) ---------- */
@@ -874,13 +1057,16 @@ async function init() {
   buildDmxGrids();
   buildThemeGrid();
   initTips();
+  toolPaths.ffmpeg = store.get("ffmpegPath") || "";
+  toolPaths.mas = store.get("masPath") || "";
+  await pushToolPaths();
   cat = await invoke("catalog");
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
   cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c === "Lfe2" ? "LFE2" : c)) }));
 
   const eng = $("engine");
   eng.classList.add(cat.has_ffmpeg ? "ok" : "bad");
-  eng.lastElementChild.textContent = cat.has_ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found on PATH";
+  eng.lastElementChild.textContent = cat.has_ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found";
 
   fill($("dest"), cat.destinations.map((d) => [d.id, d.name]), "generic");
   $("dialnormOn").onchange = () => { $("dialnorm").disabled = !$("dialnormOn").checked; syncDialnorm(); };
@@ -933,7 +1119,7 @@ async function init() {
   $("optVerify").onchange = () => { autoVerify = $("optVerify").checked; store.set("verify", autoVerify ? "1" : "0"); };
   await window.__TAURI__.event.listen("queue", (e) => renderQueue(e.payload));
   renderQueue(await invoke("queue_list"));
-  $("openSettings").onclick = () => $("settings").showModal();
+  initSettings();
   $("presetSave").onclick = async () => {
     const f = await dialog.save({ defaultPath: ($("outname").value || "preset") + ".swpreset", filters: PRESET_FILTER });
     if (!f) return;
@@ -943,7 +1129,7 @@ async function init() {
   $("presetLoad").onclick = async () => {
     const f = await dialog.open({ multiple: false, filters: PRESET_FILTER });
     if (!f) return;
-    try { await applyPreset(JSON.parse(await invoke("read_log", { path: f }))); log(`Loaded preset ${f}`, "ok"); $("settings").close(); }
+    try { await applyPreset(JSON.parse(await invoke("read_log", { path: f }))); log(`Loaded preset ${f}`, "ok"); setMode("encode"); }
     catch (e) { log(String(e), "bad"); }
   };
   $("dmTarget").onchange = () => dmLoad(true);
@@ -1083,11 +1269,14 @@ function needStream() {
 }
 
 function setMode(mode) {
+  if (mode !== "settings") lastMode = mode;
   document.body.classList.toggle("tools-mode", mode !== "encode");
   $("tools").hidden = mode !== "tools";
   $("verify").hidden = mode !== "verify";
   $("atmos").hidden = mode !== "atmos";
+  $("settingsPage").hidden = mode !== "settings";
   for (const [id, m] of [["modeEncode", "encode"], ["modeTools", "tools"], ["modeVerify", "verify"], ["modeAtmos", "atmos"]]) $(id).setAttribute("aria-pressed", String(mode === m));
+  $("openSettings").setAttribute("aria-pressed", String(mode === "settings"));
 }
 
 function initTools() {
@@ -1271,6 +1460,71 @@ initVerify();
 
 
 /* ---------- Atmos (Dolby Encoding Engine) ---------- */
+
+/* ---------- settings page ---------- */
+
+
+async function pushToolPaths() {
+  await invoke("set_tool_paths", { ffmpeg: toolPaths.ffmpeg, masDir: toolPaths.mas });
+}
+
+function setStatus(el, ok, text) {
+  el.className = "status " + (ok ? "ok" : "bad");
+  el.lastElementChild.textContent = text;
+}
+
+async function refreshEngines() {
+  const s = await invoke("tool_status");
+  $("ffPath").value = toolPaths.ffmpeg;
+  setStatus($("ffStatus"), !!s.ffmpeg, s.ffmpeg ? "found" : "not found");
+  const ver = /version (\S+)/.exec(s.ffmpeg_version || "");
+  $("ffVersion").textContent = s.ffmpeg ? `ffmpeg ${ver ? ver[1].split("-")[0] : ""}  ·  ${s.ffmpeg}` : "No ffmpeg on PATH, and none chosen.";
+  $("ffVersion").title = s.ffmpeg_version || "";
+  const eng = $("engine");
+  eng.classList.toggle("ok", !!s.ffmpeg);
+  eng.classList.toggle("bad", !s.ffmpeg);
+  eng.lastElementChild.textContent = s.ffmpeg ? "FFmpeg engine ready" : "FFmpeg not found";
+
+  $("masPath").value = toolPaths.mas;
+  const have = s.mas_files.some(([, ok]) => ok);
+  setStatus($("masStatus"), have, have ? "found" : "not found");
+  $("masFiles").innerHTML = (s.mas_dir ? [[s.mas_dir, null]] : []).concat(s.mas_files).map(([n, ok]) => ok === null ? `<li class="yes"><i></i><span></span></li>` : `<li class="${ok ? "yes" : ""}"><i></i>${n}</li>`).join("") || `<li><i></i>No suite folder found</li>`;
+  if (s.mas_dir) $("masFiles").firstChild.lastChild.textContent = s.mas_dir;
+
+  const dee = store.get("dee") || "";
+  $("deePath").value = dee;
+  const found = await invoke("atmos_locate", { configured: dee || null });
+  setStatus($("deeStatus"), !!found, found ? "found" : "not found");
+  $("deePath").placeholder = found && !dee ? `Automatic: ${found}` : "Not set: Atmos needs dee.exe";
+  $("deePath").title = found || "";
+}
+
+function showSettingsTab(name) {
+  for (const b of $("sTabs").querySelectorAll("button[data-s]")) b.setAttribute("aria-pressed", String(b.dataset.s === name));
+  for (const pg of document.querySelectorAll(".spage")) pg.hidden = pg.dataset.s !== name;
+  if (name === "engines") refreshEngines();
+}
+
+function initSettings() {
+  for (const b of $("sTabs").querySelectorAll("button[data-s]")) b.onclick = () => showSettingsTab(b.dataset.s);
+  $("sBack").onclick = () => setMode(lastMode);
+  $("openSettings").onclick = () => setMode(document.body.classList.contains("tools-mode") && !$("settingsPage").hidden ? lastMode : "settings");
+  $("ffBrowse").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: [{ name: "ffmpeg", extensions: ["exe"] }, { name: "All files", extensions: ["*"] }] });
+    if (f) { toolPaths.ffmpeg = f; store.set("ffmpegPath", f); await pushToolPaths(); await refreshEngines(); }
+  };
+  $("ffReset").onclick = async () => { toolPaths.ffmpeg = ""; store.set("ffmpegPath", ""); await pushToolPaths(); await refreshEngines(); };
+  $("masBrowse").onclick = async () => {
+    const d = await dialog.open({ directory: true });
+    if (d) { toolPaths.mas = d; store.set("masPath", d); await pushToolPaths(); await refreshEngines(); }
+  };
+  $("masReset").onclick = async () => { toolPaths.mas = ""; store.set("masPath", ""); await pushToolPaths(); await refreshEngines(); };
+  $("deeBrowse").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: [{ name: "Dolby Encoding Engine", extensions: ["exe"] }] });
+    if (f) { store.set("dee", f); await refreshEngine(); await refreshEngines(); }
+  };
+  $("deeReset").onclick = async () => { store.set("dee", ""); await refreshEngine(); await refreshEngines(); };
+}
 
 const atm = { path: null, kind: "", dee: "", format: "truehd", running: false };
 
