@@ -992,7 +992,6 @@ function initTips() {
 /* ---------- format and destination plates ---------- */
 
 
-const STREAM_PLATES = { "dtshd-ma": "dts-hd-ma.jpg", "dtshd-hra": "dts-hd-hra.jpg", dts: "dts-digital-surround.jpg", "dts-es": "dts-es.jpg", "dts-96-24": "dts-9624.jpg", "dts-express": "dts-express.jpg" };
 
 function setPlate(el, file, alt) {
   el.innerHTML = file ? `<img src="logos/${file}" alt="">` : "";
@@ -1001,7 +1000,7 @@ function setPlate(el, file, alt) {
 
 function updatePlate() {
   const st = $("stream").value;
-  setPlate($("fmtPlate"), st ? (STREAM_PLATES[st] || `${st}.svg`) : "", $("stream").selectedOptions[0]?.textContent || "");
+  setPlate($("fmtPlate"), st ? `${st}.svg` : "", $("stream").selectedOptions[0]?.textContent || "");
   const d = $("dest").value;
   setPlate($("destPlate"), d ? `dest-${d}.svg` : "", $("dest").selectedOptions[0]?.textContent || "");
 }
