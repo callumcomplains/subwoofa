@@ -557,13 +557,14 @@ fn run() -> Result<(), String> {
                         bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { bitrate.unwrap_or(1509) },
                         x96: stream == StreamType::Dts9624,
                         bitstream: bitstream.clone(),
+                        dvd: dest == Destination::DvdVideo,
                         hra_kbps: if stream == StreamType::DtsHdHra { Some(bitrate.unwrap_or(3018)) } else { None },
                         dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
                         pcm_bits: (stems.bits as u32).clamp(16, 24),
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
-                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.channels.contains(&sw_core::Channel::Cs)), layout, es_phase_shift, rear_3db),
+                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.id.starts_with("6.")), layout, es_phase_shift, rear_3db),
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;

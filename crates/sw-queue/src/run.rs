@@ -187,6 +187,10 @@ fn execute_inner(
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
     }
+    for line in sw_codec_dts::mixmeta::describe(&spec.bitstream, span, stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary) {
+        log.push_str(&line);
+        log.push('\n');
+    }
     // audio files only have a native writer
     let native = spec.engine == "native" || stream.is_audio_file();
     if native && !stream.is_native() {
@@ -300,13 +304,14 @@ fn execute_inner(
             bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { spec.bitrate.unwrap_or(1509) },
             x96: stream == StreamType::Dts9624,
             bitstream: spec.bitstream.clone(),
+            dvd: dest == Destination::DvdVideo,
             hra_kbps: if stream == StreamType::DtsHdHra { Some(spec.bitrate.unwrap_or(3018)) } else { None },
             dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
             pcm_bits: (stems.bits as u32).clamp(16, 24),
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
-            es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.channels.contains(&Channel::Cs)), layout, spec.es_phase_shift, spec.rear_minus_3db),
+            es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (stream == StreamType::DtsHdHra && layout.id.starts_with("6.")), layout, spec.es_phase_shift, spec.rear_minus_3db),
         };
         sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,

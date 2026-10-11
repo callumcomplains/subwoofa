@@ -161,7 +161,7 @@ def parse_frame(data, off, verbose=True):
         if a["coding_mode"] == 0:
             a["ext_mask"] = b.get(12)
             em = a["ext_mask"]
-            if em & 1:
+            if em & 0x10:
                 a["core_size"] = b.get(14) + 1
                 if b.get(1):
                     a["core_sync_dist"] = b.get(2)
@@ -205,3 +205,24 @@ if __name__ == "__main__":
     f, _ = parse_frame(data, frames[n])
     print(sys.argv[1], "frame", n, "at", frames[n], "of", len(frames))
     show(f)
+
+
+def chain_frames(data, core_size=None):
+    """Offsets of the extension substream frames of a stream that interleaves a core frame and an extension frame
+    (find the first core sync, read its FSIZE, then walk core + extension)."""
+    i = data.find(bytes.fromhex("7ffe8001"))
+    out = []
+    while i >= 0 and i + 16 < len(data):
+        # core frame size from the header: bits 46..59 of the header after the sync (FSIZE is 14 bits at bit 46)
+        b = Bits(data, (i + 4) * 8)
+        b.get(1); b.get(5); b.get(1); b.get(7)  # FTYPE, SHORT, CPF, NBLKS(7)
+        fsize = b.get(14) + 1
+        j = i + fsize
+        if data[j:j + 4] != SYNC:
+            break
+        f, _ = parse_frame(data, j)
+        out.append(j)
+        i = j + f["frame_size"]
+        if data[i:i + 4] != bytes.fromhex("7ffe8001"):
+            break
+    return out

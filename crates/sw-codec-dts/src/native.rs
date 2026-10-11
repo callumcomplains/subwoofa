@@ -88,11 +88,22 @@ pub struct Request<'a> {
     pub x96: bool,
     /// Bitstream-tab metadata (programme information, seamless branching, wide 7.1 remapping).
     pub bitstream: sw_core::BitstreamOptions,
+    /// DVD-Video: the two legal rates are 754.5 and 1509.75 kbit/s (frames of 1006 and 2013 bytes), not 754 and 1509.
+    pub dvd: bool,
 }
 
 pub struct Stats {
     pub frames: u64,
     pub bytes: u64,
+}
+
+/// The core's bit rate in bit/s for the request: DVD rates are a quarter percent above the nominal ones.
+pub fn core_bitrate(req: &Request) -> u32 {
+    match (req.dvd, req.bitrate_kbps) {
+        (true, 1509) => 1_509_750,
+        (true, 754) => 754_500,
+        (_, k) => k * 1000,
+    }
 }
 
 pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
@@ -131,10 +142,10 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     // A DTS CD packs the stream into 14-bit words (16-bit containers, so a player that does not know DTS plays
     // quiet noise): 1024-sample frames of 3584 bytes, 1234.8 kbit/s of stream in the 1411.2 kbit/s of the disc.
     let cd14 = wav && rate == 44_100 && req.bitrate_kbps == 1411;
-    let bitrate = if cd14 { 1_234_800 } else { req.bitrate_kbps * 1000 };
+    let bitrate = core_bitrate(req);
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
     let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 { 16 } else { 32 };
-    let make_config = || Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: req.hra_kbps.is_some(), blocks };
+    let make_config = || Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: false, blocks };
     let mut enc = Encoder::new(make_config())?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;

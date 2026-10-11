@@ -114,7 +114,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
     let overhead = exss_frame_lbr(&exss, &[0u8; 4]).len() - 4;
     let bitrate = (req.bitrate_kbps as u64 * 1000).saturating_sub(overhead as u64 * 8 * rate as u64 / n as u64) as u32;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate, dialog_mode: req.secondary && req.bitstream.secondary.dialog_mode })?;
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate, dialog_mode: req.bitstream.secondary.dialog_mode })?;
     let mut info = DtsHdInfo::new(rate, n as u16, want, map.mask, Kind::ExtensionOnly);
     crate::mixmeta::apply_container_options(&mut info, &req.bitstream, want as f64 / rate as f64);
     let mut file = StreamOut::create(req.output, Some(info))?;

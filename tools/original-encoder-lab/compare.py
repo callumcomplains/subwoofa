@@ -5,8 +5,9 @@ compare.py <sweepdir> [filter]   e.g.  compare.py sweep1_max bd_hra
 import json, os, re, subprocess, sys
 
 LAB = os.path.dirname(os.path.abspath(__file__))
-SW = r"E:\FormatProgram\subwoofa\target\release\subwoofa.exe"
+SW = os.environ.get("SW_BIN", r"E:\FormatProgram\subwoofa\target\release\subwoofa.exe")
 
+REAR = os.environ.get("LAB_REAR", "")
 STREAM_ID = {"express": "dts-express", "core": "dts", "core96": "dts-96-24", "es": "dts-es", "hra": "dtshd-hra", "ma": "dtshd-ma"}
 DEST_ID = {"bd": "bluray-primary", "bd2": "bluray-secondary", "dvd": "dvd", "cd": "dts-music-disc", "dece": "digital-delivery"}
 LAYOUT_ID = {"1.0": "1.0", "1.1": "1.1", "2.0lt": "2.0-ltrt", "2.0": "2.0", "2.1": "2.1", "3.0s": "3.0-lrs", "3.0": "3.0",
@@ -18,15 +19,16 @@ LAYOUT_ID = {"1.0": "1.0", "1.1": "1.1", "2.0lt": "2.0-ltrt", "2.0": "2.0", "2.1
 LAYOUT_CH = {  # channel names Subwoofa wants for each layout id
     "1.0": "C", "1.1": "C LFE", "2.0-ltrt": "Lt Rt", "2.0": "L R", "2.1": "L R LFE", "3.0-lrs": "L R S", "3.0": "L C R",
     "3.1-lrs": "L R S LFE", "3.1": "L C R LFE", "4.0-lcrs": "L C R S", "4.0-quad": "L R Ls Rs", "4.1-lcrs": "L C R S LFE",
-    "4.1-quad": "L R Ls Rs LFE", "5.0": "L R C Ls Rs", "5.1": "L R C LFE Ls Rs", "6.0-matrix": "L R C Ls Rs Cs",
+    "4.1-quad": "L R Ls Rs LFE", "6.0-matrix-premixed": "L R C Ls Rs", "6.1-matrix-premixed": "L R C LFE Ls Rs", "5.0": "L R C Ls Rs", "5.1": "L R C LFE Ls Rs", "6.0-matrix": "L R C Ls Rs Cs",
     "6.1-matrix": "L R C LFE Ls Rs Cs", "6.0-discrete": "L R C Ls Rs Cs", "6.1-discrete": "L R C LFE Ls Rs Cs",
     "7.0-side-rear": "L R C Lss Rss Lsr Rsr", "7.1-wide": "L R C LFE Ls Rs Lw Rw", "7.1-cs-oh": "L R C LFE Ls Rs Cs Oh",
     "7.1-cs-ch": "L R C LFE Ls Rs Cs Ch", "7.1-ls-rs-lsr-rsr": "L R C LFE Ls Rs Lsr Rsr",
     "7.1-height-side": "L R C LFE Ls Rs Lhs Rhs", "7.1-height": "L R C LFE Ls Rs Lh Rh", "7.1-side-rear": "L R C LFE Lss Rss Lsr Rsr",
 }
-STEM = {"L": "L", "R": "R", "C": "C", "LFE": "LFE", "Ls": "Lss", "Rs": "Rss", "Lss": "Lss", "Rss": "Rss", "Lsr": "Lsr",
-        "Rsr": "Rsr", "Cs": "Cs", "S": "Cs", "Lw": "Lsr", "Rw": "Rsr", "Lh": "Lsr", "Rh": "Rsr", "Lhs": "Lsr", "Rhs": "Rsr",
+STEM = {"L": "L", "R": "R", "C": "C", "LFE": "LFE", "Ls": "Lss", "Rs": "Rss", "Lss": "Lss", "Rss": "Rss", "Lsr": "Lsr" + REAR,
+        "Rsr": "Rsr" + REAR, "Cs": "Cs", "S": "Cs", "Lw": "Lsr", "Rw": "Rsr", "Lh": "Lsr", "Rh": "Rsr", "Lhs": "Lsr", "Rhs": "Rsr",
         "Oh": "Rsr", "Ch": "Rsr", "Lt": "L", "Rt": "R"}
+
 
 
 def stems_dir(rate):
@@ -35,6 +37,8 @@ def stems_dir(rate):
 
 def native_encode(spec, outpath, extra=()):
     lid = LAYOUT_ID[spec["layout"]]
+    if spec["stream"] == "ma" and spec["layout"] in ("6.0m", "6.1m"):
+        lid += "-premixed"  # lossless streams take the already matrixed 5.x channels
     args = [SW, "encode", "--stream", STREAM_ID[spec["stream"]], "--layout", lid, "--dest", DEST_ID[spec["dest"]],
             "--sample-rate", str(spec["rate"]), "--bitrate", str(spec["kbps"]), "-o", outpath, "--engine", "native"]
     for ch in LAYOUT_CH[lid].split():
@@ -64,6 +68,7 @@ def sections(text):
     return out
 
 
+SKIP_XLL = ("asset size", "components in this substream", "substream size")
 SKIP = {"Decoded PCM (24-bit) MD5", "Duration", "Access units", "Programme length (container)", "Codec delay (container)",
         "TIMECODE", "BUILDVER", "Silence before the first sound", "Silence after the last sound"}
 
@@ -75,6 +80,8 @@ def diff(a, b, wanted=("Core substream header (first frame)", "Extension substre
         for k in sorted(set(sa) | set(sb)):
             if k in SKIP or k.startswith("channel ") and sec == "Decoded audio":
                 continue
+            if k in SKIP_XLL and "XLL" in str(sa.get("components in this substream", "")) and "XLL" in str(sb.get("components in this substream", "")):
+                continue  # sizes of lossless data depend on the audio coding, not on the layout of the stream
             if sa.get(k) != sb.get(k):
                 out.append("%s | %s: orig=%s native=%s" % (sec.split(" (")[0], k, sa.get(k), sb.get(k)))
     return out

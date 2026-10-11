@@ -312,6 +312,8 @@ pub struct MaConfig {
     pub dialnorm: u32,
     /// Add the speaker remapping sets of a wide 7.1 stream (Bitstream tab).
     pub wide_remap: bool,
+    /// Representation type for matrix-encoded stereo (2) instead of speakers.
+    pub repr_type: Option<u32>,
 }
 
 pub struct MaEncoder {
@@ -361,7 +363,7 @@ impl MaEncoder {
                 dialnorm: self.cfg.dialnorm,
                 frame_duration_code: 0,
                 x96_in_core: false, xch_in_core: false, secondary: false,
-                extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: self.cfg.map.hier.is_some(), wide_remap: self.cfg.wide_remap, ..Default::default() },
+                extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: self.cfg.map.hier.is_some(), wide_remap: self.cfg.wide_remap, repr_type: self.cfg.repr_type, ..Default::default() },
             },
             &data,
         )

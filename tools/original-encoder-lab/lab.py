@@ -131,8 +131,8 @@ def build_xml(spec, outdir, name, files):
         paMetadataFadeDownValue=spec.get("fade_down", "2.0"), paMetadataFadeUpValue=spec.get("fade_up", "2.0"),
         useBDSecondaryAudioMetaData=d == 2,
         isEmbeddedDownmix=spec.get("embed20", False), is2ChDmixLtRt=spec.get("embed20_ltrt", False),
-        use20Downmix=spec.get("use20", False), use51Downmix=spec.get("use51", layout.startswith("7.") or layout in ("6.0d", "6.1d")),
-        useLegacyMatrix=spec.get("legacy_matrix", False),
+        use20Downmix=spec.get("use20", False), use51Downmix=spec.get("use51", layout.startswith("7.")),
+        useLegacyMatrix=spec.get("legacy_matrix", layout in ("6.0d", "6.1d")),
         seamlessbranching_singleclip=spec.get("seamless_single", False),
         downmixSaturationCheck=spec.get("sat_check", False),
     )
@@ -173,7 +173,8 @@ def channel_files(layout, cfg_text, stem_dir):
     names = re.findall(r"^\s*CHANNEL\s+(\w+)\s", cfg_text, re.M)
     out = []
     for n in names:
-        stem = {"l": "L", "r": "R", "c": "C", "lfe": "LFE", "sl": "Lss", "sr": "Rss", "es": "Lsr", "esb": "Rsr", "s": "Cs"}[n]
+        rear = os.environ.get("LAB_REAR", "")
+        stem = {"l": "L", "r": "R", "c": "C", "lfe": "LFE", "sl": "Lss", "sr": "Rss", "es": "Lsr" + rear, "esb": "Rsr" + rear, "s": "Cs"}[n]
         if n == "es" and layout in ("6.0d", "6.1d", "6.0m", "6.1m", "7.1oh", "7.1ch"):
             stem = "Cs"
         if n == "sl" and layout in ("5.0", "5.1", "3.0s", "3.1s", "4.0cs", "4.1cs", "4.0", "4.1"):

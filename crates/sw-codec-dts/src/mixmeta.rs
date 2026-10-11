@@ -204,6 +204,40 @@ pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span
     notes
 }
 
+/// Lines for the encode log: what the Bitstream tab asked for, as the original encoder's log lists it.
+pub fn describe(bs: &BitstreamOptions, span: f64, secondary: bool) -> Vec<String> {
+    let mut v = Vec::new();
+    if !bs.program_info.is_empty() {
+        v.push(format!("Program information: {} characters", bs.program_info.chars().count().min(2000)));
+    }
+    match &bs.seamless {
+        Seamless::Off => {}
+        Seamless::SingleClip => v.push("Seamless branching: single clip".into()),
+        Seamless::Timecodes(list) => {
+            v.push("Seamless branching: branch points".into());
+            let mut used = 0;
+            for tc in list {
+                match timecode_to_secs(tc, crate::dtshd::FPS_24, 0.0) {
+                    Some(t) if t >= 0.0 && t < span => {
+                        used += 1;
+                        v.push(format!("  {tc}"));
+                    }
+                    _ => v.push(format!("  {tc}   (outside the encode, not used)")),
+                }
+            }
+            v.push(format!("  {used} of {} branch points used", list.len()));
+        }
+    }
+    if bs.wide_remap {
+        v.push("Wide 7.1 remapping: on".into());
+    }
+    if secondary {
+        let s = &bs.secondary;
+        v.push(format!("Secondary audio: primary audio attenuation {:.1} dB, fade down {:.1} s, fade up {:.1} s{}", s.attenuation_db, s.fade_down_secs, s.fade_up_secs, if s.dialog_mode { ", dialog mode" } else { "" }));
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

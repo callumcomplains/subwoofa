@@ -53,7 +53,7 @@ fn hra_seven_one_returns_every_channel() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("t.dtshd");
-    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es: None, hra_kbps: Some(2046), x96: false, bitstream: Default::default() };
+    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es: None, hra_kbps: Some(2046), x96: false, bitstream: Default::default(), dvd: false };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&dec.stderr));
@@ -103,7 +103,7 @@ fn hra_seven_one_at_96k_returns_every_channel() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("t.dtshd");
-    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es: None, hra_kbps: Some(5376), x96: false, bitstream: Default::default() };
+    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es: None, hra_kbps: Some(5376), x96: false, bitstream: Default::default(), dvd: false };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&dec.stderr));

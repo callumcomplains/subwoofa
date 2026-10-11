@@ -26,8 +26,8 @@ use sw_pcm::StemSet;
 /// coefficient (dmix table entry 217, 23170 / 32768).
 const SCALE: f64 = 65536.0 / 92682.0;
 const REAR_COEFF: f64 = 23170.0 / 32768.0;
-/// Share of the extension substream's payload the XXCH extension gets in the 7.1 stream (the commercial encoder's split).
-const XXCH_SHARE: f64 = 0.202;
+/// Bytes of the XXCH extension in a 96 kHz 7.x stream until X96 is full (the original encoder's split, measured at every legal rate).
+const XXCH_FIXED_BYTES: usize = 512;
 /// The largest X96 component an extension substream header can describe (a 12-bit size, rounded down to words).
 const MAX_X96_BYTES: usize = 4092;
 /// Gain of the centre surround where it is mixed into the surrounds.
@@ -58,16 +58,22 @@ impl Hra96Kind {
 }
 
 pub struct Hra96Config {
+    /// Core channel layout: DTS channel arrangement code and the number of full-range channels (5 for 5.x and above).
+    pub amode: u8,
+    pub nprim: usize,
     pub has_lfe: bool,
     pub kind: Hra96Kind,
     pub total_kbps: u32,
     pub dialnorm: i32,
     pub pcm_bits: u32,
     pub exss: ExssParams,
+    /// Flag the core as ES also for a layout that is not a 6.x one (side-rear pair carried by the surrounds).
+    pub core_es: bool,
 }
 
 pub struct Hra96Encoder {
     kind: Hra96Kind,
+    nprim: usize,
     core: CoreEncoder,
     /// The encoder of the rear pair (7.x only).
     rear: Option<CoreEncoder>,
@@ -97,18 +103,18 @@ pub struct Hra96Encoder {
     timing: [std::time::Duration; 5],
 }
 
-fn core_config(es: bool, xch: bool, has_lfe: bool, dialnorm: i32, pcm_bits: u32) -> CoreConfig {
-    CoreConfig { sample_rate: 48_000, amode: 9, channels: 5, lfe: has_lfe, bitrate: 1_509_000, dialnorm, pcm_bits, es, xch, perfect: false, blocks: 16 }
+fn core_config(amode: u8, nprim: usize, es: bool, xch: bool, has_lfe: bool, dialnorm: i32, pcm_bits: u32) -> CoreConfig {
+    CoreConfig { sample_rate: 48_000, amode, channels: nprim, lfe: has_lfe, bitrate: 1_509_000, dialnorm, pcm_bits, es, xch, perfect: false, blocks: 16 }
 }
 
 impl Hra96Encoder {
     pub fn new(cfg: Hra96Config) -> Result<Hra96Encoder, Error> {
         let has_lfe = cfg.has_lfe;
-        let es = matches!(cfg.kind, Hra96Kind::Matrix | Hra96Kind::Discrete);
-        let mut core = CoreEncoder::new(core_config(es, cfg.kind == Hra96Kind::Discrete, has_lfe, cfg.dialnorm, cfg.pcm_bits))?;
+        let es = matches!(cfg.kind, Hra96Kind::Matrix | Hra96Kind::Discrete) || cfg.core_es;
+        let mut core = CoreEncoder::new(core_config(cfg.amode, cfg.nprim, es, cfg.kind == Hra96Kind::Discrete, has_lfe, cfg.dialnorm, cfg.pcm_bits))?;
         core.keep_residual = true;
         let rear = if cfg.kind == Hra96Kind::Rear {
-            let mut r = CoreEncoder::new(CoreConfig { amode: 2, channels: 2, lfe: false, bitrate: 1_536_000, es: false, xch: false, ..core_config(false, false, false, cfg.dialnorm, cfg.pcm_bits) })?;
+            let mut r = CoreEncoder::new(CoreConfig { amode: 2, channels: 2, lfe: false, bitrate: 1_536_000, es: false, xch: false, ..core_config(2, 2, false, false, false, cfg.dialnorm, cfg.pcm_bits) })?;
             r.keep_residual = true;
             Some(r)
         } else {
@@ -119,7 +125,8 @@ impl Hra96Encoder {
         let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
         let frac = phase - phase.floor();
         let phase = phase.floor() as usize;
-        let core_ana: Vec<Analysis64> = (0..5).map(|_| Analysis64::new()).collect();
+        let nprim = cfg.nprim;
+        let core_ana: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
         // the rears and the XCH channel each get an X96 channel; the LFE does not
         let extra_ana: Vec<Analysis64> = (0..cfg.kind.extra_channels()).map(|_| Analysis64::new()).collect();
         let ana_delay = core_ana[0].delay();
@@ -131,17 +138,18 @@ impl Hra96Encoder {
             Hra96Kind::Rear => exss_frame_xxch_x96(&cfg.exss, &[0u8; 4], &[0u8; 4]).len() - 8,
             _ => exss_frame_x96(&cfg.exss, &[0u8; 4]).len() - 4,
         };
-        let extra_start = 5 + usize::from(has_lfe);
+        let extra_start = nprim + usize::from(has_lfe);
         // the core takes its five channels, then the XCH channel (if any), then the LFE
-        let mut core_inputs: Vec<usize> = (0..5).collect();
+        let mut core_inputs: Vec<usize> = (0..nprim).collect();
         if cfg.kind == Hra96Kind::Discrete {
             core_inputs.push(extra_start);
         }
         if has_lfe {
-            core_inputs.push(5);
+            core_inputs.push(nprim);
         }
         Ok(Hra96Encoder {
             kind: cfg.kind,
+            nprim,
             core,
             rear,
             core_ana,
@@ -266,7 +274,8 @@ impl Hra96Encoder {
         let total = (upto(f as u64 + 1) - upto(f as u64)) as usize;
         let rest = total.saturating_sub(data.len() + self.overhead);
         let (xxch_bytes, x96_bytes) = if self.kind == Hra96Kind::Rear {
-            let x96 = ((rest as f64 * (1.0 - XXCH_SHARE)) as usize & !3).clamp(64, MAX_X96_BYTES);
+            // the rear pair gets a fixed 512 bytes; X96 takes the rest up to its limit and XXCH what is beyond it
+            let x96 = ((rest.saturating_sub(XXCH_FIXED_BYTES)) & !3).clamp(64, MAX_X96_BYTES);
             ((rest.saturating_sub(x96) & !3).clamp(64, 16_000), x96)
         } else {
             (0, (rest & !3).clamp(64, MAX_X96_BYTES))
@@ -326,7 +335,9 @@ impl Hra96Encoder {
 pub struct Hra96Map {
     pub kind: Hra96Kind,
     /// Layout index of C, L, R, Ls, Rs.
-    pub core: [usize; 5],
+    pub core: Vec<usize>,
+    /// DTS channel arrangement of the core.
+    pub amode: u8,
     pub lfe: Option<usize>,
     /// Layout index of the centre surround (6.x) or of the rear pair (7.x).
     pub extra: Vec<usize>,
@@ -336,21 +347,26 @@ pub struct Hra96Map {
 pub fn hra96_map(layout: &ChannelLayout) -> Option<Hra96Map> {
     use sw_core::layout::LayoutKind;
     if let Some(m) = crate::native_xxch::xxch_map(layout) {
-        return Some(Hra96Map { kind: Hra96Kind::Rear, core: m.core, lfe: m.lfe, extra: m.rear.to_vec() });
+        return Some(Hra96Map { kind: Hra96Kind::Rear, core: m.core.to_vec(), amode: 9, lfe: m.lfe, extra: m.rear.to_vec() });
     }
     let pos = |list: &[Channel]| layout.channels.iter().position(|c| list.contains(c));
-    let core = [pos(&[Channel::C])?, pos(&[Channel::L])?, pos(&[Channel::R])?, pos(&[Channel::Ls, Channel::Lss])?, pos(&[Channel::Rs, Channel::Rss])?];
     let lfe = pos(&[Channel::Lfe]);
     let cs = pos(&[Channel::Cs]);
-    if layout.channels.len() != 5 + usize::from(lfe.is_some()) + usize::from(cs.is_some()) {
-        return None;
+    let five = (|| Some([pos(&[Channel::C])?, pos(&[Channel::L])?, pos(&[Channel::R])?, pos(&[Channel::Ls, Channel::Lss])?, pos(&[Channel::Rs, Channel::Rss])?]))();
+    if let Some(core) = five {
+        if layout.channels.len() != 5 + usize::from(lfe.is_some()) + usize::from(cs.is_some()) {
+            return None;
+        }
+        let kind = match cs {
+            None => Hra96Kind::Plain,
+            Some(_) if layout.kind == LayoutKind::Discrete => Hra96Kind::Discrete,
+            Some(_) => Hra96Kind::Matrix,
+        };
+        return Some(Hra96Map { kind, core: core.to_vec(), amode: 9, lfe, extra: cs.into_iter().collect() });
     }
-    let kind = match cs {
-        None => Hra96Kind::Plain,
-        Some(_) if layout.kind == LayoutKind::Discrete => Hra96Kind::Discrete,
-        Some(_) => Hra96Kind::Matrix,
-    };
-    Some(Hra96Map { kind, core, lfe, extra: cs.into_iter().collect() })
+    // fewer channels: the core carries them as they are
+    let lm = crate::native::map_layout(layout).ok()?;
+    Some(Hra96Map { kind: Hra96Kind::Plain, core: lm.order, amode: lm.amode, lfe: lm.lfe, extra: Vec::new() })
 }
 
 /// File-level driver: 96 kHz stems in, `.dtshd` (or raw) out.
@@ -367,10 +383,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let kind = map.kind;
     // the channels the extension header describes: the core channels, and what is coded beside them
     let coded_extra = if kind == Hra96Kind::Matrix { 0 } else { map.extra.len() };
-    let nch_total = 5 + usize::from(has_lfe) + coded_extra;
+    let nprim = map.core.len();
+    let nch_total = nprim + usize::from(has_lfe) + coded_extra;
     let exss_mask: u32 = req.layout.channels.iter().enumerate().filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i))).map(|(_, c)| crate::ma::exss_bit(*c)).fold(0, |m, b| m | b);
-    let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
-    let make_encoder = || Hra96Encoder::new(Hra96Config { has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss() });
+    let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
+    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr" });
     let mut enc = make_encoder()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
@@ -420,14 +437,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
         Ok(())
     };
     let extra_channels = kind.extra_channels();
-    let buffers = 5 + usize::from(has_lfe) + extra_channels;
+    let buffers = nprim + usize::from(has_lfe) + extra_channels;
     if lead > 0 {
         let silence = vec![vec![0.0f64; lead]; buffers];
         let fr = enc.push(&silence);
         write(&mut out, fr, &mut frames, &mut bytes)?;
     }
-    let lfe_slot = 5;
-    let extra_start = 5 + usize::from(has_lfe);
+    let lfe_slot = nprim;
+    let extra_start = nprim + usize::from(has_lfe);
     let chunk = n * 4;
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {

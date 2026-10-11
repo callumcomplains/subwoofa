@@ -78,6 +78,47 @@
   </div>
 </section>
 
+<details id="bs" class="bs" hidden>
+  <summary>Bitstream</summary>
+  <div class="bs-grid">
+    <label class="f wide" id="bsInfoWrap"><span>Program information</span>
+      <textarea id="bsInfo" rows="2" maxlength="2000" placeholder="Text stored in the .dtshd file (up to 2000 characters, plain Latin-1)"></textarea></label>
+    <div class="f" id="bsSeamlessWrap">
+      <label for="bsSeamless"><span>Seamless branching</span></label>
+      <div class="combo">
+        <select id="bsSeamless"><option value="off">Off</option><option value="single">Single clip</option><option value="csv">Use CSV branch points</option></select>
+        <button id="bsCsv" class="plain" hidden>Choose CSV…</button>
+      </div>
+      <small id="bsCsvNote"></small>
+    </div>
+    <div class="f" id="bsWideWrap" hidden>
+      <label class="chk tight"><input type="checkbox" id="bsWide"><span>Enable Wide 7.1 remapping</span></label>
+      <small>Adds the speaker remapping sets that let a decoder play the wide channels on a side-rear layout or a 5.1 system.</small>
+    </div>
+    <div class="f" id="bsDialogWrap" hidden>
+      <label class="chk tight"><input type="checkbox" id="bsDialog"><span>Express dialog mode</span></label>
+      <small>Codes only the lower half of the band (speech).</small>
+    </div>
+    <div class="f wide" id="bsSecWrap" hidden>
+      <label><span>Blu-ray secondary audio</span></label>
+      <div class="bs-sec">
+        <label class="f small"><span>Primary audio attenuation (dB)</span><input id="bsAtt" type="number" min="0" max="60" step="0.5" value="6"></label>
+        <label class="f small"><span>Fade down (s)</span><input id="bsFadeDown" type="number" min="0" max="9" step="0.5" value="0"></label>
+        <label class="f small"><span>Fade up (s)</span><input id="bsFadeUp" type="number" min="0" max="9" step="0.5" value="0"></label>
+      </div>
+      <div class="bs-map" id="bsMapWrap">
+        <span class="hint">Where a mono secondary goes (dB below full level, empty = off)</span>
+        <label class="f small"><span>C</span><input id="bsMapC" type="number" min="0" max="60" step="0.5" value="0"></label>
+        <label class="f small"><span>L</span><input id="bsMapL" type="number" min="0" max="60" step="0.5"></label>
+        <label class="f small"><span>R</span><input id="bsMapR" type="number" min="0" max="60" step="0.5"></label>
+        <label class="f small"><span>Ls</span><input id="bsMapLs" type="number" min="0" max="60" step="0.5"></label>
+        <label class="f small"><span>Rs</span><input id="bsMapRs" type="number" min="0" max="60" step="0.5"></label>
+        <label class="f small"><span>LFE</span><input id="bsMapLfe" type="number" min="0" max="60" step="0.5"></label>
+      </div>
+    </div>
+  </div>
+</details>
+
 <div class="work">
   <section class="layouts" aria-label="Channel layout">
     <h2>Channel layout</h2>

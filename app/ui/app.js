@@ -368,6 +368,7 @@ async function cascade(from, wantLayout) {
   if (curLayoutId() !== (keepLayout || "")) o = await loadOptions();
   renderBitrate(from);
   $("ext").textContent = "." + o.extension;
+  syncBitstream();
   drawSpeakers();
   renderFiles();
   update();
@@ -477,6 +478,7 @@ function jobSpec(inputsFor, name) {
     pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "dsf", "dff"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
+    bitstream: bitstreamSpec(),
   };
 }
 
@@ -552,6 +554,64 @@ function renderQueue(jobs) {
   }
 }
 
+
+/* ---------- Bitstream tab ---------- */
+
+let bsCsvPath = "";
+let bsCsvPoints = [];
+
+/** Which parts of the Bitstream tab make sense for the chosen format and layout. */
+function syncBitstream() {
+  const st = $("stream").value, dest = $("dest").value, lay = curLayoutId();
+  const dts = ["dts", "dts-es", "dts-96-24", "dtshd-hra", "dtshd-ma", "dts-express"].includes(st);
+  const container = $("ext").textContent === ".dtshd";
+  const secondary = st === "dts-express" && dest === "bluray-secondary";
+  const express = st === "dts-express";
+  $("bsInfoWrap").hidden = !container || !dts;
+  $("bsSeamlessWrap").hidden = !container || !dts || express;
+  $("bsWideWrap").hidden = !(lay === "7.1-wide" && ["dtshd-ma", "dtshd-hra"].includes(st));
+  $("bsDialogWrap").hidden = !express;
+  $("bsSecWrap").hidden = !secondary;
+  $("bsMapWrap").hidden = !(secondary && (curLayout() ? curLayout().channels.length : 0) === 1);
+  $("bs").hidden = [...$("bs").querySelectorAll(".bs-grid > .f")].every((n) => n.hidden);
+  $("bsCsv").hidden = $("bsSeamless").value !== "csv";
+  $("bsCsvNote").textContent = $("bsSeamless").value === "csv" ? (bsCsvPath ? `${bsCsvPoints.length} branch point${bsCsvPoints.length === 1 ? "" : "s"} from ${bsCsvPath.split(/[\\/]/).pop()}` : "no CSV file chosen") : "";
+}
+
+/** Dropdown level (dB below full) of a speaker box; empty means off. */
+function bsLevel(id) {
+  const v = $(id).value.trim();
+  return v === "" ? null : Math.max(0, Math.min(60, Number(v)));
+}
+
+/** The Bitstream settings in the shape the encoder takes them. */
+function bitstreamSpec() {
+  const seam = $("bsSeamless").value;
+  return {
+    program_info: $("bsInfoWrap").hidden ? "" : $("bsInfo").value,
+    seamless: $("bsSeamlessWrap").hidden || seam === "off" ? "Off" : seam === "single" ? "SingleClip" : { Timecodes: bsCsvPoints },
+    wide_remap: !$("bsWideWrap").hidden && $("bsWide").checked,
+    secondary: {
+      attenuation_db: Math.max(0, Math.min(60, Number($("bsAtt").value) || 0)),
+      fade_down_secs: Math.max(0, Math.min(9, Number($("bsFadeDown").value) || 0)),
+      fade_up_secs: Math.max(0, Math.min(9, Number($("bsFadeUp").value) || 0)),
+      dialog_mode: !$("bsDialogWrap").hidden && $("bsDialog").checked,
+      mono_map: { c: bsLevel("bsMapC"), l: bsLevel("bsMapL"), r: bsLevel("bsMapR"), ls: bsLevel("bsMapLs"), rs: bsLevel("bsMapRs"), lfe: bsLevel("bsMapLfe") },
+    },
+  };
+}
+
+async function chooseBranchCsv() {
+  const path = await dialog.open({ multiple: false, filters: [{ name: "CSV branch points", extensions: ["csv", "txt"] }] });
+  if (!path) return;
+  try {
+    const text = await invoke("read_log", { path });
+    bsCsvPoints = text.split(/\r?\n/).map((l) => l.split(",")[0].trim()).filter(Boolean);
+    bsCsvPath = path;
+  } catch (e) { log(String(e), "bad"); }
+  syncBitstream();
+}
+
 /* ---------- presets (.swpreset, plain JSON) ---------- */
 
 const PRESET_FILTER = [{ name: "Subwoofa preset", extensions: ["swpreset"] }];
@@ -563,6 +623,9 @@ function presetState() {
     bitrate: $("bitrate").value === "" ? null : Number($("bitrate").value),
     pcm_format: $("pcmFormat").value, core_on: $("coreOn").checked, dialnorm_on: $("dialnormOn").checked, dialnorm: Number($("dialnorm").value),
     es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
+    bitstream: { info: $("bsInfo").value, seamless: $("bsSeamless").value, csv_path: bsCsvPath, wide: $("bsWide").checked, dialog: $("bsDialog").checked,
+      att: $("bsAtt").value, fade_down: $("bsFadeDown").value, fade_up: $("bsFadeUp").value,
+      map: { c: $("bsMapC").value, l: $("bsMapL").value, r: $("bsMapR").value, ls: $("bsMapLs").value, rs: $("bsMapRs").value, lfe: $("bsMapLfe").value } },
     unlocked, outname: $("outname").value, output_dir: outDir,
   };
 }
@@ -582,6 +645,23 @@ async function applyPreset(p) {
   $("coreOn").checked = p.core_on !== false;
   $("esShift").checked = !!p.es_phase_shift;
   $("rear3").checked = !!p.rear_minus_3db;
+  const bs = p.bitstream || {};
+  $("bsInfo").value = bs.info || "";
+  $("bsSeamless").value = ["off", "single", "csv"].includes(bs.seamless) ? bs.seamless : "off";
+  $("bsWide").checked = !!bs.wide;
+  $("bsDialog").checked = !!bs.dialog;
+  $("bsAtt").value = bs.att ?? 6; $("bsFadeDown").value = bs.fade_down ?? 0; $("bsFadeUp").value = bs.fade_up ?? 0;
+  const m = bs.map || { c: "0" };
+  for (const [k, id] of [["c", "bsMapC"], ["l", "bsMapL"], ["r", "bsMapR"], ["ls", "bsMapLs"], ["rs", "bsMapRs"], ["lfe", "bsMapLfe"]]) $(id).value = m[k] ?? "";
+  bsCsvPath = ""; bsCsvPoints = [];
+  if (bs.seamless === "csv" && bs.csv_path) {
+    try {
+      const text = await invoke("read_log", { path: bs.csv_path });
+      bsCsvPoints = text.split(/\r?\n/).map((l) => l.split(",")[0].trim()).filter(Boolean);
+      bsCsvPath = bs.csv_path;
+    } catch (e) { /* the file moved: the note says no file is chosen */ }
+  }
+  syncBitstream();
   if (p.pcm_format) $("pcmFormat").value = p.pcm_format;
   $("dialnormOn").checked = !!p.dialnorm_on;
   $("dialnorm").disabled = !$("dialnormOn").checked;
@@ -627,6 +707,8 @@ async function init() {
   $("pcmFormat").onchange = () => update();
   $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncX96(); syncChips(); update(); };
   $("x96Core").onchange = () => update();
+  $("bsSeamless").onchange = syncBitstream;
+  $("bsCsv").onclick = chooseBranchCsv;
   $("outname").oninput = update;
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("importMc").onclick = async () => {

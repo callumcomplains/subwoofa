@@ -86,7 +86,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
             Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap })?),
-            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0, wide_remap })),
+            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0, wide_remap, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2) })),
         })
     };
     let mut enc = make()?;

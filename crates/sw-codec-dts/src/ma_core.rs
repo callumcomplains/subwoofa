@@ -142,7 +142,8 @@ impl MaCoreEncoder {
             bitrate: cfg.core_bitrate,
             dialnorm: cfg.dialnorm,
             pcm_bits: cfg.bit_res,
-            es: false,
+            // the commercial encoder flags the core of a 6.x or Ls/Rs + Lsr/Rsr stream as ES (its surrounds carry more)
+            es: cfg.layout.id.starts_with("6.") || cfg.layout.id == "7.1-ls-rs-lsr-rsr",
             xch: false,
             perfect: false,
             blocks: 16,
@@ -169,7 +170,7 @@ impl MaCoreEncoder {
             })
             .collect();
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, ..Default::default() } };
+        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {

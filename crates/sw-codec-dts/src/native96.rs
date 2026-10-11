@@ -12,7 +12,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let map = map_layout(req.layout)?;
     let nprim = map.order.len();
-    let bitrate = req.bitrate_kbps * 1000;
+    let bitrate = crate::native::core_bitrate(req);
     // a fifth of the frame for the extension, at least 96 bytes
     let frame_bytes = (bitrate as usize * 512 / 48_000 / 8) & !3;
     let x96_bytes = ((frame_bytes / 5).max(96)) & !3;
@@ -30,7 +30,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         enc.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
     }
     let container = req.hra_kbps.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
-    let core_payload = (req.bitrate_kbps * 1000 * 512 / 48_000 / 8) & !3;
+    let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);

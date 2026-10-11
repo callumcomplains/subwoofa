@@ -17,7 +17,7 @@ pub struct HraStage {
 impl HraStage {
     /// `total_kbps` is core plus extension; `exss` describes the asset.
     pub fn new(total_kbps: u32, sample_rate: u32, frame_samples: usize, blocks: usize, exss: ExssParams) -> HraStage {
-        let overhead = exss_frame_ext(&exss, Some(&[0u8]), None).len() - 1;
+        let overhead = exss_frame_ext(&exss, Some(&[0u8; 4]), None).len() - 4;
         HraStage { xbr: XbrEncoder::new(blocks), exss, bits_num: total_kbps as u64 * 1000 * frame_samples as u64, bits_den: sample_rate as u64, frames: 0, overhead }
     }
 

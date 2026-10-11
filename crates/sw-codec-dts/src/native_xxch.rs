@@ -56,9 +56,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         bitrate,
         dialnorm: req.dialnorm,
         pcm_bits: req.pcm_bits,
-        es: false,
+        es: req.layout.id == "7.1-ls-rs-lsr-rsr",
         xch: false,
-        perfect: true,
+        perfect: false,
         blocks,
     };
     let mut core = Encoder::new(mk(9, 5, has_lfe, core_kbps * 1000))?;
@@ -79,8 +79,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     // speakers: core C L R LFE Lss Rss, extension Lsr Rsr
     let core_mask = 0x1 | 0x2 | 0x4 | (if has_lfe { 0x20 } else { 0 }) | (1 << 9) | (1 << 10);
     let params = XxchParams { core_mask, spk_mask: (1 << 7) | (1 << 8), mask_bits: 11, dmix: Some((55, vec![vec![(9, 119)], vec![(10, 119)]])) };
-    let overhead = exss_frame_xxch(&exss, &[0u8]).len() - 1;
-    let overhead_both = exss_frame_xbr_xxch(&exss, &[0u8], &[0u8]).len() - 2;
+    let overhead = exss_frame_xxch(&exss, &[0u8; 4]).len() - 4;
+    let overhead_both = exss_frame_xbr_xxch(&exss, &[0u8; 4], &[0u8; 4]).len() - 8;
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);
     let upto = |k: u64| (k * bits_num) / (bits_den * 8);
 
@@ -123,12 +123,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
         // the rate beyond what the extra pair needs at the core's per-channel rate goes to XBR for the core
         // channels and XXCH in the ratio of their channel counts (a commercial 5376 kbps stream splits it that way)
         let rest = total.saturating_sub(data.len());
-        let per_channel = (data.len() / (5 + usize::from(has_lfe))).max(64);
-        let want_xxch = 2 * per_channel;
-        let (xbr_bytes, xxch_bytes) = if rest > overhead + want_xxch + 600 {
-            let extra = rest - overhead_both - want_xxch;
-            let xxch = want_xxch + extra * 2 / 7;
-            (rest - overhead_both - xxch, xxch)
+        // the original encoder's split, measured at every legal rate with real rear content: the pair's mean size grows linearly with the
+        // stream's rate (to the multiple of four); below 2304 kbps nothing is left for XBR and the pair takes it all
+        let want_xxch = ((0.2702 * total_kbps as f64 + 58.5) / 4.0).round() as usize * 4;
+        let (xbr_bytes, xxch_bytes) = if rest > overhead_both + want_xxch + 64 {
+            (rest - overhead_both - want_xxch, want_xxch)
         } else {
             (0, rest.saturating_sub(overhead).clamp(64, 16_000))
         };

@@ -44,6 +44,8 @@ pub struct ExssExtras {
     pub emb_5_1: bool,
     /// Add the six speaker remapping sets of a wide 7.1 stream.
     pub wide_remap: bool,
+    /// Describe the channels by a representation type instead of speakers (2 for Lt/Rt matrix-encoded stereo).
+    pub repr_type: Option<u32>,
 }
 
 /// Speaker remapping sets of a wide 7.1 stream (L R C LFE Ls Rs Lw Rw), as the original encoder writes them: for
@@ -127,9 +129,9 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     a.put(p.channels as u32 - 1, 8);
     // a mono secondary stream is not tied to a speaker: its mixing matrix says where it goes
     let mono_secondary = lbr.is_some() && p.secondary && p.channels == 1 && p.extras.mix.is_some();
-    if mono_secondary {
+    if mono_secondary || p.extras.repr_type.is_some() {
         a.put(0, 1); // representation type instead of a speaker mapping
-        a.put(0, 3);
+        a.put(p.extras.repr_type.unwrap_or(0), 3);
     } else {
         a.put(1, 1); // channels are speaker feeds
         if p.channels > 2 {
