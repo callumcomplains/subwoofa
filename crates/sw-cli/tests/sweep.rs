@@ -104,7 +104,9 @@ fn native_dts_sweep() {
             cmd.args(["--bitrate", &b.to_string()]);
         }
         cmd.args(c.extra);
-        let out = dir.join(format!("case{i}.dtshd"));
+        // the core-only streams are bare `.dts` streams; the rest are `.dtshd` containers
+        let ext = if matches!(c.stream, "dts" | "dts-es" | "dts-96-24") { "dts" } else { "dtshd" };
+        let out = dir.join(format!("case{i}.{ext}"));
         cmd.arg("-o").arg(&out);
         let enc = cmd.output().unwrap();
         if !enc.status.success() {

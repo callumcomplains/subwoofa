@@ -274,8 +274,9 @@ enum Cmd {
         /// Native TrueHD only: leave out the stereo downmix substream (channels coded directly).
         #[arg(long)]
         no_downmix: bool,
-        /// Encoder engine: `ffmpeg` (default) or `native` (Subwoofa's own, AC-3 only for now).
-        #[arg(long, default_value = "ffmpeg")]
+        /// Encoder engine: `native` (Subwoofa's own, the default) or `ffmpeg` (only for AC-3, E-AC-3, DTS core,
+        /// TrueHD and MLP).
+        #[arg(long, default_value = "native")]
         engine: String,
         /// Native DTS-ES: rotate the surrounds by +/-45 degrees before the centre surround is added.
         #[arg(long)]

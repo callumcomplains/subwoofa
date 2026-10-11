@@ -253,7 +253,11 @@ impl Destination {
                 StreamType::TrueHd | StreamType::Mlp => "thd",
                 _ => "dts",
             },
-            _ => "dtshd",
+            // the core-only DTS streams are written as bare streams, not in a DTS-HD container
+            _ => match stream {
+                StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::Dts9624 => "dts",
+                _ => "dtshd",
+            },
         }
     }
 }
@@ -467,6 +471,15 @@ mod tests {
         assert!(validate(Destination::Files, StreamType::Flac, l("7.1-side-rear"), 192_000).is_ok());
         assert_eq!(Destination::Files.extension(StreamType::PcmAiff), "aif");
         assert!(StreamType::Flac.is_lossless() && !StreamType::Flac.is_dts());
+    }
+
+    #[test]
+    fn core_only_dts_is_a_bare_dts_stream_and_the_rest_a_container() {
+        assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsDigitalSurround), "dts");
+        assert_eq!(Destination::DigitalDelivery.extension(StreamType::DtsEs), "dts");
+        assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsHdMa), "dtshd");
+        assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsHdHra), "dtshd");
+        assert_eq!(Destination::DigitalDelivery.extension(StreamType::DtsExpress), "dtshd");
     }
 
     #[test]
