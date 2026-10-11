@@ -127,3 +127,49 @@ fn bext(time_reference: u64) -> Vec<u8> {
     b.extend_from_slice(&[0u8; 180]); // reserved
     b
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SampleFormat;
+
+    fn params(frames: u64) -> Params {
+        Params { rate: 48_000, format: SampleFormat::Int24, total_frames: frames, order: (0..6).collect(), mask: 0x3F, labels: Vec::new(), time_reference: None }
+    }
+
+    #[test]
+    fn short_files_are_plain_riff() {
+        let h = header(&params(48_000), 48_000 * 6 * 3);
+        assert_eq!(&h[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()) as usize, h.len() - 8 + 48_000 * 6 * 3);
+    }
+
+    #[test]
+    fn long_files_are_rf64_with_the_real_sizes_in_ds64() {
+        // 6 channels of 24-bit audio for 3 hours at 96 kHz is about 18.7 GB
+        let frames = 96_000u64 * 3 * 3600;
+        let data = frames * 6 * 3;
+        let h = header(&params(frames), data);
+        assert_eq!(&h[..4], b"RF64");
+        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()), u32::MAX);
+        assert_eq!(&h[12..16], b"ds64");
+        let riff_size = u64::from_le_bytes(h[20..28].try_into().unwrap());
+        let data_size = u64::from_le_bytes(h[28..36].try_into().unwrap());
+        let samples = u64::from_le_bytes(h[36..44].try_into().unwrap());
+        assert_eq!(data_size, data);
+        assert_eq!(samples, frames);
+        assert_eq!(riff_size, h.len() as u64 - 8 + data);
+    }
+
+    #[test]
+    fn time_reference_goes_into_a_bext_chunk() {
+        let mut p = params(10);
+        p.time_reference = Some(0x1_0000_0002);
+        let h = header(&p, 10 * 6 * 3);
+        let at = h.windows(4).position(|w| w == b"bext").unwrap();
+        // the reference sits 338 bytes into the body (after description, originator, reference, date and time)
+        let body = at + 8;
+        assert_eq!(u32::from_le_bytes(h[body + 338..body + 342].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(h[body + 342..body + 346].try_into().unwrap()), 1);
+    }
+}

@@ -7,8 +7,8 @@ Estimates are focused working time for the work itself (writing, testing, docume
 ### Now (no outside input needed)
 | # | Item | Estimate |
 |---|---|---|
-| 1 | Quality of life: speed pass on HRA 96 kHz and MA 192 kHz; a one-command regression sweep over every native DTS path (encode, verify, FFmpeg decode); clearer format notes and an HRA bit split readout in the GUI | 3 h |
-| 2 | PCM outputs: WAV/BWF (extensible, 16/24/32-bit integer, 32/64-bit float), RF64 for files over 4 GB, AIFF, CAF, multichannel FLAC | 4 h |
+| 1 | ~~Quality of life: speed pass, regression sweep, format notes in the GUI~~ **done** | done |
+| 2 | ~~PCM outputs: WAV/BWF, RF64, AIFF, CAF, multichannel FLAC~~ **done** | done |
 | 3 | Probe the Dolby Encoding Engine for AC-4 job types (decides how AC-4 is done) | 0.5 h |
 | 4 | Lossless size work: MA band 1 (reuse of previous segment parameters, common parameters); TrueHD stereo matrix with LSB bypass | 5 h |
 | 5 | Reference checklist: exactly which encodes unlock each blocked item, with the settings to use | 0.5 h |
