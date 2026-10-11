@@ -17,18 +17,40 @@ pub struct XxchMap {
     /// Layout index of C, L, R, Ls (side), Rs (side) in core order.
     pub core: [usize; 5],
     pub lfe: Option<usize>,
-    /// Layout index of the rear pair, in XXCH coding order.
+    /// Layout index of the extra pair, in XXCH coding order.
     pub rear: [usize; 2],
+    /// XXCH channel-mask bits of the extra pair (ascending), of the core's side surrounds, and whether there is an LFE.
+    pub rear_bits: [u32; 2],
+    pub side_bits: [u32; 2],
+    pub has_lfe: bool,
 }
 
-/// `Some` for the 7.1 / 7.0 layouts with side and rear surround pairs.
+impl XxchMap {
+    /// The XXCH header: the core's speakers, the speakers coded here, and the embedded downmix (each extra channel
+    /// was added to the core's surround on its side, at -3 dB, and the whole core pre-scaled).
+    pub fn params(&self) -> XxchParams {
+        let core_mask: u32 = 0x1 | 0x2 | 0x4 | (if self.has_lfe { 0x20 } else { 0 }) | (1 << self.side_bits[0]) | (1 << self.side_bits[1]);
+        let spk_mask: u32 = (1 << self.rear_bits[0]) | (1 << self.rear_bits[1]);
+        let top = 32 - (core_mask | spk_mask).leading_zeros();
+        XxchParams { core_mask, spk_mask, mask_bits: top.max(9), dmix: Some((55, vec![vec![(self.side_bits[0], 119)], vec![(self.side_bits[1], 119)]])) }
+    }
+}
+
+/// `Some` for the 7.1 / 7.0 layouts: a 5.x base and a pair of extra channels (rears, wides, heights, height sides,
+/// or the centre surround with a centre height or overhead).
 pub fn xxch_map(layout: &sw_core::ChannelLayout) -> Option<XxchMap> {
     use Channel::*;
     let pos = |list: &[Channel]| layout.channels.iter().position(|c| list.contains(c));
+    // (channels, their bits in the XXCH channel mask) in the order the original encoder codes them
+    let pairs: [([Channel; 2], [u32; 2]); 6] = [([Lsr, Rsr], [7, 8]), ([Lw, Rw], [17, 18]), ([Lh, Rh], [13, 15]), ([Lhs, Rhs], [20, 21]), ([Cs, Ch], [6, 14]), ([Cs, Oh], [6, 19])];
+    let (pair, rear_bits) = pairs.iter().find(|(p, _)| p.iter().all(|c| layout.channels.contains(c)))?;
     let map = XxchMap {
         core: [pos(&[C])?, pos(&[L])?, pos(&[R])?, pos(&[Ls, Lss])?, pos(&[Rs, Rss])?],
         lfe: pos(&[Lfe]),
-        rear: [pos(&[Lsr])?, pos(&[Rsr])?],
+        rear: [pos(&[pair[0]])?, pos(&[pair[1]])?],
+        rear_bits: *rear_bits,
+        side_bits: if layout.channels.contains(&Lss) { [9, 10] } else { [3, 4] },
+        has_lfe: layout.channels.contains(&Lfe),
     };
     (layout.channel_count() == 7 + usize::from(map.lfe.is_some())).then_some(map)
 }
@@ -76,9 +98,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let nch_total = 7 + usize::from(has_lfe);
     let spk = crate::ma::map_layout(req.layout).exss_mask;
     let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
-    // speakers: core C L R LFE Lss Rss, extension Lsr Rsr
-    let core_mask = 0x1 | 0x2 | 0x4 | (if has_lfe { 0x20 } else { 0 }) | (1 << 9) | (1 << 10);
-    let params = XxchParams { core_mask, spk_mask: (1 << 7) | (1 << 8), mask_bits: 11, dmix: Some((55, vec![vec![(9, 119)], vec![(10, 119)]])) };
+    let params = map.params();
     let overhead = exss_frame_xxch(&exss, &[0u8; 4]).len() - 4;
     let overhead_both = exss_frame_xbr_xxch(&exss, &[0u8; 4], &[0u8; 4]).len() - 8;
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);

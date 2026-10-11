@@ -165,7 +165,8 @@ pub struct Encoder {
 
 /// An XXCH extension (DTS-HD HRA 6.1/7.1): channels beyond the core's five, coded like core channels in the
 /// extension substream. All masks use the DTS loudspeaker bit positions (C 0, L 1, R 2, Ls 3, Rs 4, LFE 5, Cs 6,
-/// Lsr 7, Rsr 8, Lss 9, Rss 10).
+/// Lsr 7, Rsr 8, Lss 9, Rss 10, then Lc 11, Rc 12, Lh 13, Ch 14, Rh 15, LFE2 16, Lw 17, Rw 18, Oh 19, Lhs 20, Rhs 21).
+#[derive(Debug, Clone)]
 pub struct XxchParams {
     /// Speakers of the core (with Ls/Rs written as Lss/Rss when the core carries the sides).
     pub core_mask: u32,
