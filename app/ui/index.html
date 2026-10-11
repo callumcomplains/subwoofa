@@ -35,7 +35,7 @@ try {
     <button id="modeAtmos" aria-pressed="false">Atmos</button>
   </nav>
   <div class="bar-right">
-    <span id="unlockedTag" class="tag" hidden>UNLOCKED</span>
+    <span id="unlockedTag" class="tag danger" hidden>UNLOCKED · ADVANCED USERS ONLY</span>
     <span id="engine" class="status"><i class="lamp"></i><span>checking engine</span></span>
     <button id="openSettings" class="icon-btn" aria-label="Settings" aria-pressed="false"><svg><use href="#i-gear"/></svg></button>
   </div>
@@ -46,6 +46,7 @@ try {
     <h2 class="dh">Format</h2>
     <div class="db">
       <label class="f"><span>Destination</span><select id="dest"></select></label>
+      <div id="destPlate" class="plate small" aria-hidden="true"></div>
       <label class="f"><span>Stream type</span><select id="stream"></select></label>
       <div id="fmtPlate" class="plate" aria-hidden="true"></div>
       <div class="row2">
@@ -393,7 +394,7 @@ try {
   <div class="spane">
     <div class="spage" data-s="general">
       <h2 class="sh">General</h2>
-      <label class="srow"><input type="checkbox" id="optUnlocked"><span><b>Unlocked mode</b></span></label>
+      <label class="srow danger"><input type="checkbox" id="optUnlocked"><span><b>Unlocked mode</b> <em class="warn">FOR ADVANCED USERS ONLY</em></span></label>
       <label class="srow"><input type="checkbox" id="optVerify" checked><span><b>Verify after encoding</b></span></label>
       <label class="srow"><input type="checkbox" id="optNative"><span><b>Prefer Subwoofa's own encoders</b></span></label>
       <label class="srow"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b></span></label>

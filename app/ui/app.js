@@ -466,7 +466,38 @@ function syncDialnorm() {
   if ($("variants").dataset.value) update();   // skip during start-up, before a layout exists
 }
 
+const DEST_TAG = { "bluray-primary": "BD", "bluray-secondary": "BD Secondary", dvd: "DVD", "digital-delivery": "Digital", "dts-music-disc": "DTS Disc" };
+const STREAM_TAG = { "dtshd-ma": "DTSHDMA", "dtshd-hra": "DTSHDHRA", "dts-es": "DTSES", "dts-96-24": "DTS9624", dts: "DTS", "dts-express": "DTSExpress", ac3: "AC3", eac3: "EAC3", truehd: "TrueHD", mlp: "MLP", wav: "WAV", aiff: "AIFF", caf: "CAF", flac: "FLAC", oggflac: "OggFLAC", alac: "ALAC", tta: "TTA", dsf: "DSD", dff: "DSD" };
+let nameAuto = true;   // false once the user types their own name
+
+/** 5.1, 7.1, 5.1.4 ... from a layout's channel names. */
+function layoutLabel(ch) {
+  const lfe = ch.filter((c) => /^LFE/i.test(c)).length;
+  const hi = ch.filter((c) => /^(Lh|Rh|Ch|Lhs|Rhs|Lhr|Rhr|Chr|Oh|Lts|Rts|Ts|Vhc)/.test(c)).length;
+  const bed = ch.length - lfe - hi;
+  return `${bed}.${lfe}${hi ? "." + hi : ""}`;
+}
+
+/** "SUBWOOFA - BD DTSHDMA 7.1 96kHz 24FPS": the first input's name (or SUBWOOFA) plus what the stream is. */
+function autoName() {
+  const first = Object.values(inputs).find(Boolean);
+  const stem = first ? base(first).replace(/\.[^.]*$/, "").replace(/[ ._-](L|R|C|LFE|Ls|Rs|Lss|Rss|Lsr|Rsr|Cs|FL|FR|FC|SL|SR|BL|BR)$/i, "") : "";
+  const parts = [DEST_TAG[$("dest").value], STREAM_TAG[$("stream").value] || $("stream").value, layoutLabel(curLayout().channels)];
+  const r = curRate();
+  if (r > 0) parts.push(`${r / 1000}kHz`);
+  const st = curStream();
+  if (st && !st.lossless && $("bitrate").value) parts.push(`${$("bitrate").value}kbps`);
+  if (!$("bsTcWrap").hidden) parts.push(`${($("bsFps").value || "24").replace(" drop", "d")}FPS`);
+  return `${stem || "SUBWOOFA"} - ${parts.filter(Boolean).join(" ")}`;
+}
+
+function syncName() {
+  if (!nameAuto || !$("variants").dataset.value || !curStream()) return;
+  $("outname").value = autoName();
+}
+
 function update() {
+  syncName();
   const need = inLayout().channels;
   const dnOk = !$("dialnorm").classList.contains("bad");
   const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && cat.has_ffmpeg && curRate() > 0;
@@ -890,7 +921,7 @@ const INFO = [
   ["#vDeep", "Also decodes the whole file, measures the audio, asks DTS's own verifier if it's installed, and lists every header. Slower, more suspicious."],
   ["@#atmosTitle", "Atmos is encoded by the Dolby Encoding Engine, a copy you're licensed to use; Subwoofa only drives it and checks what comes out. Masters must come from Dolby's tools (DAMF .atmos, or an ADM BWF .wav), because the engine refuses anything else. A plain channel bed (.wav, up to 7.1.4) makes Dolby Digital Plus Atmos."],
   ["#aDialnorm", "Average speech loudness, −31 to −1. Leave it at 0 and the engine measures it for you."],
-  ["#optUnlocked", "For experts and the curious: switches off the spec checks. Any rate, any layout, any format to any destination. The encoder may say no, and real hardware may too."],
+  ["#optUnlocked", "FOR ADVANCED USERS ONLY. Switches off the spec checks. Any rate, any layout, any format to any destination. The encoder may say no, and real hardware may too."],
   ["#optVerify", "After each encode: lossless files are decoded and compared with the source (MD5); lossy ones must decode cleanly; audio files get a structure check and a full decode."],
   ["#optNative", "Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP, the DTS family), use it instead of FFmpeg. Formats FFmpeg can't make always use ours."],
   ["#optDownmix", "Native TrueHD only: adds a stereo substream so stereo-only players get a proper downmix. Costs roughly 5 to 8 % more file."],
@@ -958,25 +989,21 @@ function initTips() {
   });
 }
 
-/* ---------- stream logo plate ---------- */
+/* ---------- format and destination plates ---------- */
 
-const STREAM_LOGOS = {
-  "dtshd-ma": "dts-hd-ma.jpg", "dtshd-hra": "dts-hd-hra.jpg", dts: "dts-digital-surround.jpg",
-  "dts-es": "dts-es.jpg", "dts-96-24": "dts-9624.jpg", "dts-express": "dts-express.jpg",
-};
+
+const STREAM_PLATES = { "dtshd-ma": "dts-hd-ma.jpg", "dtshd-hra": "dts-hd-hra.jpg", dts: "dts-digital-surround.jpg", "dts-es": "dts-es.jpg", "dts-96-24": "dts-9624.jpg", "dts-express": "dts-express.jpg" };
+
+function setPlate(el, file, alt) {
+  el.innerHTML = file ? `<img src="logos/${file}" alt="">` : "";
+  if (file) el.firstChild.alt = alt;
+}
 
 function updatePlate() {
-  const st = $("stream").value, plate = $("fmtPlate");
-  if (!st) { plate.innerHTML = ""; return; }
-  if (STREAM_LOGOS[st]) {
-    plate.innerHTML = `<img src="logos/${STREAM_LOGOS[st]}" alt="${$("stream").selectedOptions[0]?.textContent || ""}">`;
-  } else {
-    const label = $("stream").selectedOptions[0]?.textContent || st;
-    const lossless = ["truehd", "mlp", "wav", "aiff", "caf", "flac", "alac", "tta", "dsf", "dff"].includes(st);
-    plate.innerHTML = `<div class="fmt"></div>`;
-    plate.firstChild.textContent = label;
-    plate.firstChild.insertAdjacentHTML("beforeend", `<small>${lossless ? "lossless" : "lossy"}</small>`);
-  }
+  const st = $("stream").value;
+  setPlate($("fmtPlate"), st ? (STREAM_PLATES[st] || `${st}.svg`) : "", $("stream").selectedOptions[0]?.textContent || "");
+  const d = $("dest").value;
+  setPlate($("destPlate"), d ? `dest-${d}.svg` : "", $("dest").selectedOptions[0]?.textContent || "");
 }
 
 /* ---------- presets (.swpreset, plain JSON) ---------- */
@@ -1039,7 +1066,7 @@ async function applyPreset(p) {
   syncDialnorm();
   renderBitrate("preset");
   if (p.bitrate != null && !$("bitrate").disabled) $("bitrate").value = p.bitrate;
-  if (p.outname) $("outname").value = p.outname;
+  if (p.outname) { $("outname").value = p.outname; nameAuto = false; }
   if (p.output_dir) { outDir = p.output_dir; $("outdir").value = p.output_dir; }
   syncChips();
   update();
@@ -1089,7 +1116,7 @@ async function init() {
   $("mainTabs").onclick = (e) => { const b = e.target.closest("button"); if (b) showTab(b.dataset.tab); };
   addInfos();
   $("bsCsv").onclick = chooseBranchCsv;
-  $("outname").oninput = update;
+  $("outname").oninput = () => { nameAuto = !$("outname").value.trim(); update(); };
   $("entire").onchange = () => { $("start").disabled = $("duration").disabled = $("entire").checked; };
   $("importMc").onclick = async () => {
     const p = await dialog.open({ multiple: false, filters: [{ name: "Audio", extensions: ["wav", "aif", "aiff", "flac", "w64"] }] });
