@@ -1,6 +1,6 @@
 # Subwoofa
 
-*Every channel, every codec.* An open-source multichannel audio encoder with a proper GUI and CLI.
+An **open-source** multichannel audio encoder with a proper GUI and CLI.
 
 > **Public beta.** Subwoofa is young and the format list is large. Please report anything odd.
 
@@ -24,18 +24,25 @@ ALAC, TTA, DSD). It also verifies what it writes, and has StreamTools for trimmi
 
 Every format and its test status: [docs/FORMATS.md](docs/FORMATS.md).
 
+## AI disclaimer (and a Hi from a Human).
+
+Hi, Callum here. 
+I am not actually a coder. I thought of a fun project and ran it through Claude Code's Sonnet 5.5 Medium.
+All of the code base is from Claude. I gave it inputs and test files and verified this program can actually do what it says on the tin the whole time. 
+The "verify" feature is one you should utilize if you use this program.
+You will need DEE (Dolby Encoding Engine or DTSHDMASE (DTS-HD MA Encoder Suite) to use this program. They are unfortunately paid programs, but DTSHDMASE is abandonware, and floats around the internet occasionally. 
+
 ## Install
 
 Windows 10 or 11, 64-bit.
 
-1. Download the installer (or the portable zip) from the [latest release](../../releases).
-2. Check it against `SHA256SUMS.txt` if you like.
+1. Download the installer (or the portable zip) from the [latest release](../../releases). (Check it against `SHA256SUMS.txt`).
 3. Run it. Windows SmartScreen will warn that the app is unsigned, because the project cannot afford a signing
    certificate yet. Choose *More info*, then *Run anyway*.
 4. Open **Settings > Engines** and see what is found. Subwoofa works on its own for most formats; some things
    want a tool you provide. [docs/ENGINES.md](docs/ENGINES.md) explains which and why.
 
-macOS and Linux are not yet tested. The code is portable Rust and may well build, but nobody has tried.
+macOS and Linux are not yet tested -- get in touch if you can test it.
 
 ## Command line
 
@@ -66,9 +73,9 @@ cd app && npm install && npx tauri build
 ## Legal
 
 Subwoofa is independent software. It is **not affiliated with, endorsed by or certified by DTS, Inc. or Dolby
-Laboratories**; "DTS", "Dolby", "TrueHD", "Atmos" and related names are trademarks of their owners. Subwoofa ships no
-third-party programs, logos or media. Some formats are patent-encumbered in some countries, so please read
+Laboratories**; "DTS", "Dolby", "TrueHD", "Atmos" and related names are trademarks of their owners. Read
 [docs/LEGAL.md](docs/LEGAL.md).
 
-Licensed under the **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)). Copyright © Subwoofa
-contributors. Questions and reports: [GitHub issues](../../issues).
+Licensed under the **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)). 
+Copyright © Subwoofa contributors. 
+Questions and reports: [GitHub issues](../../issues).
