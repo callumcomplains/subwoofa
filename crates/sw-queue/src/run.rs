@@ -220,6 +220,7 @@ fn execute_inner(
             StreamType::PcmCaf => sw_codec_pcm::Container::Caf,
             StreamType::OggFlac => sw_codec_pcm::Container::OggFlac,
             StreamType::Alac => sw_codec_pcm::Container::Alac,
+            StreamType::Tta => sw_codec_pcm::Container::Tta,
             _ => sw_codec_pcm::Container::Flac,
         };
         log.push_str(&format!("Sample format: {} ({}-bit {})

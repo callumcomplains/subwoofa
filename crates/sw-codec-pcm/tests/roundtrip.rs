@@ -85,7 +85,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac => channels::wav_order(layout).order,
+        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -246,4 +246,19 @@ fn alac_16_bit_seven_one_wide() {
 #[test]
 fn alac_shorter_than_one_frame() {
     check("alacshort", Alac, "m4a", Int24, "2.0", 48_000, 1_000);
+}
+
+#[test]
+fn tta_16_bit_stereo() {
+    check("tta16", Tta, "tta", Int16, "2.0", 44_100, 100_001);
+}
+
+#[test]
+fn tta_24_bit_five_one() {
+    check("tta51", Tta, "tta", Int24, "5.1", 48_000, 120_000);
+}
+
+#[test]
+fn tta_mono_shorter_than_a_frame() {
+    check("ttashort", Tta, "tta", Int24, "1.0", 48_000, 1_000);
 }

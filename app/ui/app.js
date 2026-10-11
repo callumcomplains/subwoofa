@@ -306,14 +306,16 @@ function describeStream() {
 /** Audio files (WAV, AIFF, CAF, FLAC) have a sample format instead of a bit rate and a dialnorm. */
 function syncPcmFormat() {
   const st = $("stream").value;
-  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac"].includes(st);
+  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta"].includes(st);
   $("pcmWrap").hidden = !file;
   document.querySelector(".f.dialnorm").hidden = file; // no dialogue level in a plain audio file
   if (!file) return;
-  const flac = st === "flac" || st === "oggflac" || st === "alac";
+  const flac = st === "flac" || st === "oggflac" || st === "alac" || st === "tta";
   for (const o of $("pcmFormat").options) o.disabled = flac && !["s16", "s24"].includes(o.value);
   if (flac && $("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = "s24";
-  $("pcmNote").textContent = st === "alac"
+  $("pcmNote").textContent = st === "tta"
+    ? "TTA stores 16 or 24 bit integers."
+    : st === "alac"
     ? "Apple Lossless stores 16 or 24 bit integers, up to 8 channels in Apple's arrangements (7.1 needs the wide layout)."
     : flac
     ? "FLAC stores 16 or 24 bit integers, up to 8 channels."
@@ -464,7 +466,7 @@ function jobSpec(inputsFor, name) {
     sample_rate: curRate(),
     bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
     dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
-    pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
+    pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
   };

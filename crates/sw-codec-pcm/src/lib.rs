@@ -11,6 +11,7 @@ mod caf;
 pub mod channels;
 mod flac;
 mod ogg;
+mod tta;
 mod wav;
 
 use std::io::Write;
@@ -30,6 +31,8 @@ pub enum Container {
     OggFlac,
     /// Apple Lossless in an M4A file.
     Alac,
+    /// True Audio.
+    Tta,
 }
 
 /// How each sample is stored.
@@ -180,7 +183,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         return Err(PcmError::Empty);
     }
     let mask_order = channels::wav_order(req.layout);
-    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac);
+    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac | Container::Tta);
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
     let mut layout_tag = 0;
     let order: Vec<usize> = if req.container == Container::Alac {
@@ -202,6 +205,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::Flac => Box::new(flac::FlacWriter::create(req.output, params, false)?),
         Container::OggFlac => Box::new(flac::FlacWriter::create(req.output, params, true)?),
         Container::Alac => Box::new(alac::AlacWriter::create(req.output, params, layout_tag)?),
+        Container::Tta => Box::new(tta::TtaWriter::create(req.output, params)?),
     };
     let block = 16_384usize;
     let mut planar: Vec<Vec<f32>> = Vec::new();
