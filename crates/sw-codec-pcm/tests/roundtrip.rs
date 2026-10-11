@@ -85,7 +85,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac => channels::wav_order(layout).order,
+        Container::Wav | Container::Flac | Container::OggFlac => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -205,4 +205,15 @@ fn flac_refuses_what_it_cannot_hold() {
     let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out };
     assert!(encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ogg_flac_16_bit_stereo() {
+    check("ogg16", OggFlac, "oga", Int16, "2.0", 44_100, 100_001);
+}
+
+#[test]
+fn ogg_flac_24_bit_seven_one_at_96k() {
+    // 8 channels of noisy 24-bit audio make frames larger than one Ogg page can hold
+    check("ogg71", OggFlac, "oga", Int24, "7.1-side-rear", 96_000, 70_000);
 }

@@ -32,6 +32,8 @@ pub enum StreamType {
     PcmAiff,
     PcmCaf,
     Flac,
+    /// FLAC frames in an Ogg stream.
+    OggFlac,
 }
 
 impl StreamType {
@@ -50,6 +52,7 @@ impl StreamType {
         StreamType::PcmAiff,
         StreamType::PcmCaf,
         StreamType::Flac,
+        StreamType::OggFlac,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -68,6 +71,7 @@ impl StreamType {
             StreamType::PcmAiff => "aiff",
             StreamType::PcmCaf => "caf",
             StreamType::Flac => "flac",
+            StreamType::OggFlac => "oggflac",
         }
     }
 
@@ -91,6 +95,7 @@ impl StreamType {
             StreamType::PcmAiff => "AIFF (PCM)",
             StreamType::PcmCaf => "CAF (PCM)",
             StreamType::Flac => "FLAC",
+            StreamType::OggFlac => "FLAC in Ogg",
         }
     }
 
@@ -105,7 +110,7 @@ impl StreamType {
     /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting
     /// instead of a bit rate.
     pub const fn is_audio_file(self) -> bool {
-        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac)
+        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac)
     }
 
     /// Whether Subwoofa has its own encoder for the stream (every stream type does; the FFmpeg engine is an
@@ -127,6 +132,7 @@ impl StreamType {
                 | StreamType::PcmAiff
                 | StreamType::PcmCaf
                 | StreamType::Flac
+                | StreamType::OggFlac
         )
     }
 
@@ -142,7 +148,7 @@ impl StreamType {
             StreamType::Eac3 => &[32_000, 44_100, 48_000],
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::Mlp => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
-            StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
+            StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
         }
     }
 }
@@ -195,7 +201,7 @@ impl Destination {
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],
-            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac],
+            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac],
         }
     }
 
@@ -208,6 +214,7 @@ impl Destination {
                 StreamType::PcmAiff => "aif",
                 StreamType::PcmCaf => "caf",
                 StreamType::Flac => "flac",
+                StreamType::OggFlac => "oga",
                 _ => "wav",
             },
             Destination::Generic => match stream {
@@ -236,7 +243,7 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::Ac3 => 6,
         StreamType::Eac3 => 8, // up to 7.1 via independent+dependent substreams
         StreamType::TrueHd | StreamType::Mlp => 8,
-        StreamType::Flac => 8,
+        StreamType::Flac | StreamType::OggFlac => 8,
         StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
     if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) { base.min(7) } else { base }
@@ -269,7 +276,7 @@ pub fn bitrate_range_kbps(
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
-        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac => None,
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac => None,
     }
 }
 

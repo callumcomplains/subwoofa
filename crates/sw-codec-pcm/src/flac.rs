@@ -5,6 +5,7 @@
 //! 12). The prediction error is then Rice coded in partitions, each with its own parameter. Stereo blocks also try
 //! mid/side and left/side and right/side pairs and keep the smallest.
 
+use crate::ogg::{build_page, PacketWriter};
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -458,8 +459,17 @@ fn put_utf8_number(w: &mut BitWriter, value: u64) {
 // ---------------------------------------------------------------------------------------------------------------
 // the file
 
+/// Where the frames go: a plain `.flac` file, or packets of an Ogg stream.
+enum Sink {
+    Plain(BufWriter<File>),
+    Ogg(PacketWriter<BufWriter<File>>),
+}
+
 pub struct FlacWriter {
-    out: BufWriter<File>,
+    /// `None` only after `finish` has taken it.
+    sink: Option<Sink>,
+    /// Samples (per channel) written so far (the Ogg granule position).
+    samples_done: u64,
     params: Params,
     bits: u32,
     block_size: usize,
@@ -474,7 +484,7 @@ pub struct FlacWriter {
 }
 
 impl FlacWriter {
-    pub fn create(path: &Path, params: Params) -> std::io::Result<FlacWriter> {
+    pub fn create(path: &Path, params: Params, in_ogg: bool) -> std::io::Result<FlacWriter> {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
@@ -484,37 +494,60 @@ impl FlacWriter {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "FLAC holds at most 8 channels"));
         }
         let (block_size, block_size_code) = if params.rate <= 48_000 { (4096, 12) } else if params.rate <= 96_000 { (8192, 13) } else { (16384, 14) };
-        let mut out = BufWriter::new(File::create(path)?);
-        out.write_all(b"fLaC")?;
+        let out = BufWriter::new(File::create(path)?);
+        let sink = if in_ogg { Sink::Ogg(PacketWriter::new(out, OGG_SERIAL)) } else { Sink::Plain(out) };
         // STREAMINFO is rewritten at the end, when the totals are known
-        let mut writer = FlacWriter { out, bits, block_size, block_size_code, pending: vec![Vec::new(); params.channels()], next_frame: 0, md5: md5::Context::new(), min_frame_bytes: u32::MAX, max_frame_bytes: 0, bytes: 4, params };
-        let comment = writer.channel_mask_comment();
-        writer.out.write_all(&metadata_header(0, comment.is_none(), 34))?;
-        writer.out.write_all(&[0u8; 34])?;
-        writer.bytes += 4 + 34;
-        if let Some(c) = comment {
-            writer.out.write_all(&metadata_header(4, true, c.len() as u32))?;
-            writer.out.write_all(&c)?;
-            writer.bytes += 4 + c.len() as u64;
+        let mut writer = FlacWriter { sink: Some(sink), samples_done: 0, bits, block_size, block_size_code, pending: vec![Vec::new(); params.channels()], next_frame: 0, md5: md5::Context::new(), min_frame_bytes: u32::MAX, max_frame_bytes: 0, bytes: 0, params };
+        let comment = writer.channel_mask_comment(in_ogg);
+        let mut header_bytes = 0u64;
+        match writer.sink.as_mut().unwrap() {
+            Sink::Plain(out) => {
+                out.write_all(b"fLaC")?;
+                out.write_all(&metadata_header(0, comment.is_none(), 34))?;
+                out.write_all(&[0u8; 34])?;
+                header_bytes = 4 + 4 + 34;
+                if let Some(c) = comment {
+                    out.write_all(&metadata_header(4, true, c.len() as u32))?;
+                    out.write_all(&c)?;
+                    header_bytes += 4 + c.len() as u64;
+                }
+            }
+            Sink::Ogg(ogg) => {
+                // packet 1 (alone on the first page): identification header with STREAMINFO; packet 2: the comment
+                ogg.packet(&ogg_first_packet(&[0u8; 34]), 0)?;
+                ogg.flush(false)?;
+                let c = comment.expect("an Ogg FLAC stream always has a comment block");
+                let mut packet = metadata_header(4, true, c.len() as u32).to_vec();
+                packet.extend_from_slice(&c);
+                ogg.packet(&packet, 0)?;
+                ogg.flush(false)?; // audio starts on a fresh page
+            }
         }
+        writer.bytes = header_bytes;
         Ok(writer)
     }
 
-    /// A Vorbis comment carrying the channel mask, unless the channels are in FLAC's default order for their count.
-    fn channel_mask_comment(&self) -> Option<Vec<u8>> {
+    /// A Vorbis comment carrying the channel mask, unless the channels are in the default FLAC order for their count
+    /// (an Ogg stream always has a comment block, so it gets one without entries).
+    fn channel_mask_comment(&self, always: bool) -> Option<Vec<u8>> {
         const DEFAULT_MASKS: [u32; 8] = [0x4, 0x3, 0x7, 0x33, 0x37, 0x3F, 0x70F, 0x63F];
         let mask = self.params.mask;
-        if mask == 0 || mask == DEFAULT_MASKS[self.params.channels() - 1] {
+        let needed = mask != 0 && mask != DEFAULT_MASKS[self.params.channels() - 1];
+        if !needed && !always {
             return None;
         }
         let vendor = b"Subwoofa";
-        let entry = format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x{mask:X}");
         let mut c = Vec::new();
         c.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
         c.extend_from_slice(vendor);
-        c.extend_from_slice(&1u32.to_le_bytes());
-        c.extend_from_slice(&(entry.len() as u32).to_le_bytes());
-        c.extend_from_slice(entry.as_bytes());
+        if needed {
+            let entry = format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x{mask:X}");
+            c.extend_from_slice(&1u32.to_le_bytes());
+            c.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+            c.extend_from_slice(entry.as_bytes());
+        } else {
+            c.extend_from_slice(&0u32.to_le_bytes());
+        }
         Some(c)
     }
 
@@ -526,7 +559,11 @@ impl FlacWriter {
         self.min_frame_bytes = self.min_frame_bytes.min(frame.len() as u32);
         self.max_frame_bytes = self.max_frame_bytes.max(frame.len() as u32);
         self.bytes += frame.len() as u64;
-        self.out.write_all(&frame)
+        self.samples_done += n as u64;
+        match self.sink.as_mut().unwrap() {
+            Sink::Plain(out) => out.write_all(&frame),
+            Sink::Ogg(ogg) => ogg.packet(&frame, self.samples_done),
+        }
     }
 
     /// Feeds the checksum with the samples as a decoder would output them: interleaved little-endian integers.
@@ -562,8 +599,33 @@ impl BlockWriter for FlacWriter {
             self.update_md5(&block);
             self.write_frame(&block)?;
         }
-        self.out.flush()?;
-        // now the totals are known: rewrite STREAMINFO
+        // now the totals are known: STREAMINFO is rewritten
+        let info = self.stream_info();
+        match self.sink.take().unwrap() {
+            Sink::Plain(mut out) => {
+                out.flush()?;
+                out.seek(SeekFrom::Start(8))?; // after "fLaC" and the metadata block header
+                out.write_all(&info)?;
+                out.flush()?;
+                Ok(self.bytes)
+            }
+            Sink::Ogg(ogg) => {
+                let mut out = ogg.finish()?;
+                // the first page again, with the real STREAMINFO (same length, new checksum)
+                let packet = ogg_first_packet(&info);
+                let first = build_page(OGG_SERIAL, 0, 0x02, 0, &[packet.len() as u8], &packet);
+                out.seek(SeekFrom::Start(0))?;
+                out.write_all(&first)?;
+                out.flush()?;
+                Ok(out.get_ref().metadata()?.len())
+            }
+        }
+    }
+}
+
+impl FlacWriter {
+    /// The 34 bytes of STREAMINFO.
+    fn stream_info(&mut self) -> Vec<u8> {
         let mut info = Vec::with_capacity(34);
         // block sizes: the last block is left out of the minimum, so a one-block file reports its own length
         let largest_block = self.block_size.min(self.params.total_frames as usize) as u16;
@@ -575,12 +637,24 @@ impl BlockWriter for FlacWriter {
         info.extend_from_slice(&packed.to_be_bytes());
         let digest = std::mem::replace(&mut self.md5, md5::Context::new()).finalize();
         info.extend_from_slice(&digest.0);
-        let file = self.out.get_mut();
-        file.seek(SeekFrom::Start(8))?; // after "fLaC" and the metadata block header
-        file.write_all(&info)?;
-        file.flush()?;
-        Ok(self.bytes)
+        info
     }
+}
+
+/// Stream serial number of the single logical Ogg stream.
+const OGG_SERIAL: u32 = 0x5357_4F46;
+
+/// The first Ogg packet of a FLAC stream: mapping signature and version, the number of further header packets,
+/// then the native stream marker and the STREAMINFO block.
+fn ogg_first_packet(stream_info: &[u8]) -> Vec<u8> {
+    let mut p = vec![0x7F];
+    p.extend_from_slice(b"FLAC");
+    p.extend_from_slice(&[1, 0]); // mapping version 1.0
+    p.extend_from_slice(&1u16.to_be_bytes()); // one more header packet (the comment)
+    p.extend_from_slice(b"fLaC");
+    p.extend_from_slice(&metadata_header(0, false, 34));
+    p.extend_from_slice(stream_info);
+    p
 }
 
 /// Metadata block header: type, whether it is the last block, and the body length.

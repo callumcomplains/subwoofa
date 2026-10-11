@@ -8,6 +8,7 @@ mod aiff;
 mod caf;
 pub mod channels;
 mod flac;
+mod ogg;
 mod wav;
 
 use std::io::Write;
@@ -23,6 +24,8 @@ pub enum Container {
     Aiff,
     Caf,
     Flac,
+    /// FLAC frames in an Ogg stream (`.oga`).
+    OggFlac,
 }
 
 /// How each sample is stored.
@@ -173,7 +176,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         return Err(PcmError::Empty);
     }
     let mask_order = channels::wav_order(req.layout);
-    let wav_style = matches!(req.container, Container::Wav | Container::Flac);
+    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac);
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
     let order: Vec<usize> = if wav_style { mask_order.order.clone() } else { (0..req.layout.channels.len()).collect() };
     let labels = order.iter().map(|&i| channels::caf_label(req.layout.channels[i], i)).collect();
@@ -183,7 +186,8 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::Wav => Box::new(wav::WavWriter::create(req.output, params)?),
         Container::Aiff => Box::new(aiff::AiffWriter::create(req.output, params)?),
         Container::Caf => Box::new(caf::CafWriter::create(req.output, params)?),
-        Container::Flac => Box::new(flac::FlacWriter::create(req.output, params)?),
+        Container::Flac => Box::new(flac::FlacWriter::create(req.output, params, false)?),
+        Container::OggFlac => Box::new(flac::FlacWriter::create(req.output, params, true)?),
     };
     let block = 16_384usize;
     let mut planar: Vec<Vec<f32>> = Vec::new();
