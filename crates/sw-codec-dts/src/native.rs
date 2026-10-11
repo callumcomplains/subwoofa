@@ -133,9 +133,6 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         _ => None,
     };
     let mix_delay = req.es.map_or(0, |e| e.delay());
-    if req.hra_kbps.is_some() && xch {
-        return Err(Error::Unsupported("DTS-HD High Resolution with a discrete centre surround is not implemented yet".into()).into());
-    }
     let rate = stems.sample_rate;
     let nch = map.order.len();
     let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
@@ -156,12 +153,17 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     let make_hra = |kbps: u32| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()) + usize::from(xch), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask & !(if req.es.map_or(false, |e| e.mix_cs && !e.xch) { crate::ma::exss_bit(sw_core::Channel::Cs) } else { 0 }), with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: xch, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     };
     let mut hra = req.hra_kbps.map(|kbps| {
         enc.keep_residual = true;
-        make_hra(kbps)
+        let mut h = make_hra(kbps);
+        if xch {
+            // the XCH channel's refinement is a channel set of its own
+            h.set_split(vec![nch, 1]);
+        }
+        h
     });
     let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     // The decoder's filter bank delays its output. In a .dtshd file the stream starts with silence so the delay
@@ -210,17 +212,24 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         if got > 0 {
             stems.read_planar(&mut planar, got)?;
         }
+        let consumed = got;
         if let Some(m) = mixer.as_mut() {
             // the mixer works on whole blocks (silence past the end of the programme)
             let block: Vec<Vec<f32>> = (0..req.layout.channels.len())
                 .map(|c| {
-                    let mut v = if got > 0 { planar[c][..got].to_vec() } else { Vec::new() };
+                    // the lead of silence (a container's codec delay) first, then the source
+                    let mut v = vec![0.0f32; zeros];
+                    if got > 0 {
+                        v.extend_from_slice(&planar[c][..got]);
+                    }
                     v.resize(n, 0.0);
                     v
                 })
                 .collect();
             planar = m.process(&block);
         }
+        // with a mixer the block already holds the lead, so nothing is added in front of it
+        let zeros = if mixer.is_some() { 0 } else { zeros };
         let got = if mixer.is_some() { n } else { got };
         for (slot, src) in map.order.iter().copied().chain(cs_slot).chain(map.lfe).enumerate() {
             let dst = &mut pcm[slot];
@@ -229,7 +238,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
                 dst[zeros + i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
             }
         }
-        remaining -= got.min(remaining as usize) as u64;
+        remaining -= consumed.min(remaining as usize) as u64;
         let mut data = enc.encode_frame(&pcm);
         if let Some(h) = hra.as_mut() {
             data = h.wrap(data, &enc.last_residual);

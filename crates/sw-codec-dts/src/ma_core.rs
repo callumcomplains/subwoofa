@@ -107,6 +107,8 @@ pub struct MaCoreEncoder {
     x96: Option<X96State>,
     /// Primary channels of the core (the LFE slot comes after them).
     nprim: usize,
+    /// Lossless channel that also goes into the core's XCH extension (the centre surround of a 6.x discrete stream).
+    xch_x: Option<usize>,
 }
 
 /// The X96 part of a 96/24 core: 64-band analysis of the programme, aligned with the core's subbands.
@@ -128,6 +130,12 @@ impl MaCoreEncoder {
             return Err(crate::Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", cfg.layout.id)));
         }
         let nprim = cmap.order.len();
+        // 6.x discrete: the centre surround also rides in the core as an XCH extension, so ES decoders can play it
+        // from the core alone (the lossless data still carries it as a set of its own)
+        let xch_x = (cfg.layout.id.starts_with("6.") && cfg.layout.kind == sw_core::layout::LayoutKind::Discrete && !cfg.x96)
+            .then(|| xmap.order.iter().position(|&i| cfg.layout.channels[i] == sw_core::Channel::Cs))
+            .flatten()
+            .filter(|&x| x >= base);
         let ratio = match cfg.sample_rate {
             44_100 | 48_000 => 1,
             88_200 | 96_000 => 2,
@@ -144,7 +152,7 @@ impl MaCoreEncoder {
             pcm_bits: cfg.bit_res,
             // the commercial encoder flags the core of a 6.x or Ls/Rs + Lsr/Rsr stream as ES (its surrounds carry more)
             es: cfg.layout.id.starts_with("6.") || cfg.layout.id == "7.1-ls-rs-lsr-rsr",
-            xch: false,
+            xch: xch_x.is_some(),
             perfect: false,
             blocks: 16,
         })?;
@@ -170,7 +178,7 @@ impl MaCoreEncoder {
             })
             .collect();
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: (-cfg.dialnorm) as u32, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
+        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: (-cfg.dialnorm) as u32, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: xch_x.is_some(), secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {
@@ -212,6 +220,7 @@ impl MaCoreEncoder {
             shift: 24 - cfg.bit_res,
             x96,
             nprim,
+            xch_x,
         })
     }
 
@@ -387,6 +396,11 @@ impl MaCoreEncoder {
                 v.iter_mut().for_each(|s| *s *= g);
             }
             core_in[slot] = v;
+        }
+        if let Some(xs) = self.xch_x {
+            // the XCH plane sits between the primaries and the LFE
+            let v = self.core_input(xs, self.emitted);
+            core_in.insert(self.nprim, v);
         }
         let t0 = std::time::Instant::now();
         let mut core_bytes = self.core.encode_frame(&core_in);

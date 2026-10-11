@@ -109,13 +109,19 @@ impl XbrEncoder {
 
     /// Encode `residual[ch][band][sample]` (core primary channels only) within `budget` bytes.
     pub fn encode(&self, residual: &[Vec<Vec<f64>>], budget: usize) -> Vec<u8> {
-        let nch = residual.len();
+        self.encode_sets(residual, &[residual.len()], budget)
+    }
+
+    /// Like `encode`, with the channels split into channel sets of the given sizes (the original encoder gives the
+    /// channel of an XCH extension a set of its own).
+    pub fn encode_sets(&self, residual: &[Vec<Vec<f64>>], sets: &[usize], budget: usize) -> Vec<u8> {
+        assert_eq!(sets.iter().sum::<usize>(), residual.len());
         let cands: Vec<Vec<Vec<Cand>>> = {
             use rayon::prelude::*;
             residual.par_iter().map(|c| c.iter().map(|b| candidates(b)).collect()).collect()
         };
         // Lagrangian search: smallest distortion for at most `budget` bytes
-        let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p) <= budget;
+        let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p, sets) <= budget;
         let mut lo = 1e-9f64;
         let mut hi = 1e15f64;
         let spend_all = self.pick(&cands, lo);
@@ -138,7 +144,7 @@ impl XbrEncoder {
             }
             best
         };
-        self.pack(&cands, &best, nch, budget)
+        self.pack(&cands, &best, sets, budget)
     }
 
     fn pick(&self, cands: &[Vec<Vec<Cand>>], lambda: f64) -> Vec<Vec<usize>> {
@@ -162,36 +168,40 @@ impl XbrEncoder {
     }
 
     /// Exact byte size of the XBR frame for a choice.
-    fn size(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> usize {
-        let (hdr, set) = self.layout(cands, pick);
-        hdr + set
+    fn size(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], sets: &[usize]) -> usize {
+        let (hdr, set_bytes) = self.layout(cands, pick, sets);
+        hdr + set_bytes.iter().sum::<usize>()
     }
 
-    /// (frame header bytes, channel set bytes)
-    fn layout(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> (usize, usize) {
+    /// (frame header bytes, bytes of every channel set)
+    fn layout(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], sets: &[usize]) -> (usize, Vec<usize>) {
         let nch = cands.len();
-        let mut bits = 0usize;
-        let mut active_all = Vec::new();
+        let mut per_ch_bits = Vec::new();
         for ch in 0..nch {
             let chosen: Vec<&Cand> = pick[ch].iter().enumerate().map(|(b, &i)| &cands[ch][b][i]).collect();
             let active = chosen.iter().rposition(|c| c.abits > 0).map_or(1, |p| p + 1);
             let max_a = chosen.iter().map(|c| c.abits).max().unwrap_or(0);
             let max_s = chosen.iter().filter(|c| c.abits > 0).map(|c| c.scale).max().unwrap_or(0);
             let nab = bits_for(max_a).clamp(2, 5) as usize;
-            bits += 2 + nab * active + 3;
+            let mut bits = 2 + nab * active + 3;
             bits += chosen.iter().take(active).filter(|c| c.abits > 0).count() * bits_for(max_s) as usize;
             bits += chosen.iter().take(active).map(|c| c.bits).sum::<usize>();
-            active_all.push(active);
+            per_ch_bits.push(bits);
         }
-        bits += 16; // DSYNC
-        let set = bits.div_ceil(8);
-        // frame header: sync, size, set count, set size, tmode flag, set header, band counts, CRC
-        let hbits = 32 + 6 + 2 + 14 + 1 + 3 + 2 + 5 * nch;
-        let hdr = hbits.div_ceil(8) + 2;
-        (hdr, set)
+        let mut set_bytes = Vec::new();
+        let mut first = 0;
+        for &n in sets {
+            let bits: usize = per_ch_bits[first..first + n].iter().sum::<usize>() + 16; // DSYNC
+            set_bytes.push(bits.div_ceil(8));
+            first += n;
+        }
+        // frame header: sync, size, set count, set sizes, tmode flag, per set its channel count and band counts, CRC
+        let hbits = 32 + 6 + 2 + 14 * sets.len() + 1 + sets.iter().map(|n| 3 + 2 + 5 * n).sum::<usize>();
+        (hbits.div_ceil(8) + 2, set_bytes)
     }
 
-    fn pack(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], nch: usize, _budget: usize) -> Vec<u8> {
+    fn pack(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], sets: &[usize], _budget: usize) -> Vec<u8> {
+        let nch: usize = sets.iter().sum();
         let mut active = Vec::new();
         let mut nab = Vec::new();
         let mut nscale = Vec::new();
@@ -203,77 +213,91 @@ impl XbrEncoder {
             nab.push(bits_for(max_a).clamp(2, 5));
             nscale.push(bits_for(max_s));
         }
-        // ---- channel set data
-        let mut w = BitWriter::new();
-        for ch in 0..nch {
-            w.put(nab[ch] - 2, 2);
-        }
-        for ch in 0..nch {
-            for b in 0..active[ch] {
-                w.put(cands[ch][b][pick[ch][b]].abits as u32, nab[ch]);
+        // ---- channel set data, one block per set
+        let mut set_data: Vec<Vec<u8>> = Vec::new();
+        let mut first = 0;
+        for &n in sets {
+            let chans = first..first + n;
+            first += n;
+            let mut w = BitWriter::new();
+            for ch in chans.clone() {
+                w.put(nab[ch] - 2, 2);
             }
-        }
-        for ch in 0..nch {
-            w.put(nscale[ch], 3);
-        }
-        for ch in 0..nch {
-            for b in 0..active[ch] {
-                let c = &cands[ch][b][pick[ch][b]];
-                if c.abits > 0 {
-                    w.put(c.scale as u32, nscale[ch]);
+            for ch in chans.clone() {
+                for b in 0..active[ch] {
+                    w.put(cands[ch][b][pick[ch][b]].abits as u32, nab[ch]);
                 }
             }
-        }
-        let nssc = self.nsamples / 8;
-        for ss in 0..nssc {
-            for ch in 0..nch {
+            for ch in chans.clone() {
+                w.put(nscale[ch], 3);
+            }
+            for ch in chans.clone() {
                 for b in 0..active[ch] {
                     let c = &cands[ch][b][pick[ch][b]];
-                    if c.abits == 0 {
-                        continue;
+                    if c.abits > 0 {
+                        w.put(c.scale as u32, nscale[ch]);
                     }
-                    let vals = &c.q[ss * 8..ss * 8 + 8];
-                    if c.abits > 7 {
-                        for v in vals {
-                            w.put_signed(*v, c.abits as u32 - 3);
+                }
+            }
+            let nssc = self.nsamples / 8;
+            for ss in 0..nssc {
+                for ch in chans.clone() {
+                    for b in 0..active[ch] {
+                        let c = &cands[ch][b][pick[ch][b]];
+                        if c.abits == 0 {
+                            continue;
                         }
-                    } else {
-                        let levels = QUANT_LEVELS[c.abits] as i32;
-                        let off = (levels - 1) / 2;
-                        for blk in vals.chunks(4) {
-                            let mut code = 0i32;
-                            for v in blk.iter().rev() {
-                                code = code * levels + (*v + off);
+                        let vals = &c.q[ss * 8..ss * 8 + 8];
+                        if c.abits > 7 {
+                            for v in vals {
+                                w.put_signed(*v, c.abits as u32 - 3);
                             }
-                            w.put(code as u32, BLOCK_BITS[c.abits - 1]);
+                        } else {
+                            let levels = QUANT_LEVELS[c.abits] as i32;
+                            let off = (levels - 1) / 2;
+                            for blk in vals.chunks(4) {
+                                let mut code = 0i32;
+                                for v in blk.iter().rev() {
+                                    code = code * levels + (*v + off);
+                                }
+                                w.put(code as u32, BLOCK_BITS[c.abits - 1]);
+                            }
                         }
                     }
                 }
             }
+            w.put(0xFFFF, 16);
+            set_data.push(w.into_bytes());
         }
-        w.put(0xFFFF, 16);
-        let set = w.into_bytes();
 
         // ---- frame header
         let mut h = BitWriter::new();
         h.put(SYNC_XBR, 32);
-        let hbits = 32 + 6 + 2 + 14 + 1 + 3 + 2 + 5 * nch;
+        let hbits = 32 + 6 + 2 + 14 * sets.len() + 1 + sets.iter().map(|n| 3 + 2 + 5 * n).sum::<usize>();
         let hsize = hbits.div_ceil(8) + 2;
         h.put(hsize as u32 - 1, 6);
-        h.put(0, 2); // one channel set
-        h.put(set.len() as u32 - 1, 14);
+        h.put(sets.len() as u32 - 1, 2);
+        for s in &set_data {
+            h.put(s.len() as u32 - 1, 14);
+        }
         h.put(0, 1); // transient modes not used
-        h.put(nch as u32 - 1, 3);
-        h.put(0, 2); // 5-bit active band counts
-        for ch in 0..nch {
-            h.put(active[ch] as u32 - 1, 5);
+        let mut first = 0;
+        for &n in sets {
+            h.put(n as u32 - 1, 3);
+            h.put(0, 2); // 5-bit active band counts
+            for ch in first..first + n {
+                h.put(active[ch] as u32 - 1, 5);
+            }
+            first += n;
         }
         h.align(8);
         let mut hb = h.into_bytes();
         let crc = crc16(&hb[4..]);
         hb.extend_from_slice(&crc.to_be_bytes());
         assert_eq!(hb.len(), hsize);
-        hb.extend_from_slice(&set);
+        for s in &set_data {
+            hb.extend_from_slice(s);
+        }
         hb
     }
 }
