@@ -31,6 +31,9 @@ Estimates are focused working time for the work itself (writing, testing, docume
 | 14 | AAF import (deferred by request) | AAF files from your DAW | 1-2 days |
 | 15 | E-AC-3 enhanced coupling | a reference decoder | open |
 
+### Deferred (planned, not scheduled)
+- **Make the code human-readable and easier to follow.** The codebase is dense: long lines, terse names, few comments on the why. A readability pass would cover, in this order: a short "how it fits together" guide per crate (what each file does, in plain language); module-level comments that explain each encoder's pipeline step by step; descriptive names for the one- and two-letter variables; splitting the very long functions in the DTS encoders and the verifier; and a line-length limit with automatic formatting. Output must stay byte-identical, so the existing tests and the regression sweep are the safety net. Estimate: 2-3 days, best done one crate at a time between feature work.
+
 ### Deferred (no realistic route yet)
 - **Native AC-4 encoder:** a free ETSI standard but months of work, and no open decoder to verify against. Only worthwhile if item 3 finds nothing.
 - **MPEG-H 3D Audio:** the standard is paid; the encoder is commercial.

@@ -399,14 +399,24 @@ fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &mut Collecto
         c.check("DTS reference verifier", Status::Skipped, "DTSHDVerify is not installed; install the DTS-HD encoder suite to add its verdict");
         return;
     };
-    let out = match Command::new(&tool).arg(path).output() {
+    let out = match Command::new(&tool).arg(path).stdin(std::process::Stdio::null()).output() {
         Ok(o) => o,
         Err(e) => {
             c.check("DTS reference verifier", Status::Skipped, format!("could not run {}: {e}", tool.display()));
             return;
         }
     };
-    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    // the verifier reads a `.dtshd` file through its extension substream: a core-only stream has none, so it gets
+    // the bare stream instead
+    if text.contains("number of audio presentations (0)") {
+        if let Some(raw) = extract_stream(path) {
+            if let Ok(o) = Command::new(&tool).arg(&raw).stdin(std::process::Stdio::null()).output() {
+                text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+            }
+            let _ = std::fs::remove_file(&raw);
+        }
+    }
     let summary = text.lines().find(|l| l.contains("frames verified")).map(|l| l.trim().to_string());
     let passed = text.contains("passes verification with no errors");
     c.check("DTS reference verifier (DTSHDVerify)", if passed { Status::Pass } else { Status::Fail }, summary.unwrap_or_else(|| text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output").trim().to_string()));
@@ -503,4 +513,42 @@ mod tests {
         assert_eq!(channels_of("9.1.6"), Some(16));
         assert_eq!(channels_of("7 channels"), Some(7));
     }
+}
+
+/// Copies the stream data of a `.dtshd` file (or a bare stream with that name) to a temporary raw `.dts` file.
+fn extract_stream(path: &Path) -> Option<PathBuf> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut pos = 0u64;
+    let mut magic = [0u8; 8];
+    f.read_exact(&mut magic).ok()?;
+    if &magic != b"DTSHDHDR" {
+        // a bare stream under a `.dtshd` name: the verifier only needs it to have another extension
+        let out = std::env::temp_dir().join(format!("sw_verify_core_{}.dts", std::process::id()));
+        std::fs::copy(path, &out).ok()?;
+        return Some(out);
+    }
+    while pos + 16 <= len {
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        let mut h = [0u8; 16];
+        f.read_exact(&mut h).ok()?;
+        let size = u64::from_be_bytes(h[8..16].try_into().ok()?);
+        if &h[..8] == b"STRMDATA" {
+            let out = std::env::temp_dir().join(format!("sw_verify_core_{}.dts", std::process::id()));
+            let mut w = std::io::BufWriter::new(std::fs::File::create(&out).ok()?);
+            let mut left = size.min(len - pos - 16);
+            let mut buf = vec![0u8; 1 << 20];
+            while left > 0 {
+                let k = left.min(buf.len() as u64) as usize;
+                f.read_exact(&mut buf[..k]).ok()?;
+                w.write_all(&buf[..k]).ok()?;
+                left -= k as u64;
+            }
+            w.flush().ok()?;
+            return Some(out);
+        }
+        pos += 16 + size;
+    }
+    None
 }
