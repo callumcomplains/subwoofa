@@ -13,7 +13,7 @@ fn mono_stream_decodes() {
         return;
     }
     let bitrate = 192_000;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate, dialog_mode: false }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate, dialog_mode: false, payload_bytes: None }).unwrap();
     let frames = 12;
     let total = 4096 * frames;
     let mut seed = 3u32;
@@ -66,7 +66,7 @@ fn lfe_channel_decodes() {
     }
     let frames = 14;
     let total = 4096 * frames;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000, dialog_mode: false }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000, dialog_mode: false, payload_bytes: None }).unwrap();
     let tone = |f: f32, a: f32, i: usize| a * (2.0 * std::f32::consts::PI * f * i as f32 / 48_000.0).sin();
     let chans: Vec<Vec<f32>> = (0..6).map(|c| (0..total).map(|i| if c == 5 { tone(60.0, 0.5, i) } else if c == 4 { tone(440.0, 0.2, i) } else { 0.0 }).collect()).collect();
     let mut payloads = Vec::new();
@@ -120,7 +120,7 @@ fn tonal_components_lift_a_steady_signal() {
     }
     let frames = 14;
     let total = 4096 * frames;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate: 48_000, dialog_mode: false }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate: 48_000, dialog_mode: false, payload_bytes: None }).unwrap();
     let mut seed = 7u32;
     let x: Vec<f32> = (0..total)
         .map(|i| {

@@ -223,6 +223,8 @@ pub struct LbrConfig {
     pub bitrate: u32,
     /// Express Dialog Mode: code only the lower half of the band (the original encoder's `BAND_LIMIT_RATIO = 0.5`).
     pub dialog_mode: bool,
+    /// Exact bytes of every frame's payload (when the container fixes them); otherwise the bit rate decides.
+    pub payload_bytes: Option<usize>,
 }
 
 pub struct LbrEncoder {
@@ -316,7 +318,7 @@ impl LbrEncoder {
             )));
         }
         // whole 16-bit words: the verifier rejects odd frame sizes
-        let frame_bytes = (cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2;
+        let frame_bytes = cfg.payload_bytes.unwrap_or((cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2);
         let n = cfg.channels;
         let per_channel = cfg.bitrate as f64 / 1000.0 / cfg.channels as f64;
         let band_limit = std::env::var("SW_LBR_BL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if cfg.dialog_mode { 1 } else if per_channel >= 128.0 { 0 } else if per_channel >= 56.0 { 1 } else { 2 });

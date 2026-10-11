@@ -394,3 +394,7 @@ The DTS encoder's Express streams carry steady notes as tonal components (a freq
 ## DTS CD
 - **Regression found and fixed:** after the DVD-rate change, DTS CD streams at 1411 kbps were no longer written at the CD's 1234.8 kbps stream rate (the 14-bit packed WAV came out with 1280 kbps cores); fixed, and every DTS CD stream (core and ES, 44.1 kHz) now has the original's header.
 - **DTS 96/24 on a DTS CD is 88.2 kHz stereo** (that is the only 96/24 the original offers there; it calls it "digital surround at 88.2 kHz"): a 44.1 kHz core of 1024-sample frames plus X96, in 14-bit words in a WAV file, 1234.8 kbit/s. Subwoofa wrote a raw stream under a `.wav` name for the old 96 kHz entry, which was not a playable file; the music disc now offers 88.2 kHz with 2.0 / 2.1 only, and the stream matches the original's header (FFmpeg decodes it, DTSHDVerify passes).
+
+## Express frame sizes, 96/24 ES
+- DTS Express frames now total exactly what the original writes (the exact size rounded down to four bytes, e.g. 2728 bytes at 256 kbps, not 2732); DTS 96/24 accepts 6.0 / 6.1 matrix (ES) layouts.
+- Sweep status: 312 of the 339 legal combinations had identical first headers before the last few fixes; what remains differs only in the original's content-dependent XBR/XXCH split of the first frame and in 5.1 Blu-ray secondary audio, which embeds a stereo downmix that Subwoofa does not write yet.
