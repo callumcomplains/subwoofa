@@ -11,6 +11,7 @@ pub mod hra;
 pub mod lbr_fb;
 mod lbr_tables;
 mod lbr_lfe;
+mod lbr_lpc;
 mod lbr_tonal;
 pub mod lbr;
 pub mod lbr_native;

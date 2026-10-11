@@ -82,6 +82,17 @@ Driven with `batch13`-`batch17`, read with `xllhdr.py` / `xllu.py` (XLL channel-
 * **Making the stereo set**: the decoder undoes the sets from the bottom up, so the stereo channels are the original ones plus the 5.1 channels *as transmitted* (extras already folded in), each with the coefficient `D x inverse(set 1 row scale) x inverse(extra set row scale of the row) x (extra set row scale of the column)`. With a decoder's downmix modes (FFmpeg `-downmix stereo` and `5.1(side)`) Subwoofa's streams decode to exactly what the original's do, for every combination tried (random levels included).
 * Not copied: the original sets the common header's "scalable resolution" bit (and adds fields to every channel set header) whenever a stream has downmix information; decoders do not need it and Subwoofa leaves it off. FFmpeg cannot open 7.1 Cs/Ch streams (also not the original's).
 
+
+## DTS Express (LBR) in the original
+
+Tools: `lbrchunks.py` (chunk list of a frame), `lbrts.py` (the time-sample chunk band by band), `lbrq.py` / `qcmp.py` (SNR by band against the sources); the decoder's grammar is FFmpeg's `dca_lbr.c`.
+
+* Frame: 16-byte header, chunk 0x84, then chunks `[id (bit 7 set: 16-bit length)][length][data]`: 0x0A LFE; 0x30+p first grid (scale factors by group, third-grid averages), 0x40+p quantizer profile, LPC codes and the first two bands, 0x50+p bands 2 to 5 and LPC of band 2, 0x60+p the other bands, each as `[band index][third-grid scale factors the first time][samples]`; 0x0E / 0x1B..0x17 tones; 0x0B ECS (embedded channel set).
+* **Bands are coded in a priority order** (the index of every band is in the stream), and the quantizer level belongs to the position, not to the band: the first six bands are fixed, the rest follow by falling energy. The profile byte is `steepness << 6 | overall level << 3 | strongest low band`; the original only ever uses steepness 0, with the overall level rising with the bit rate (mono 64 kbit/s: 3, 96: 4, 128: 4 to 5; stereo 96: 5, 256: 6; 5.1 192: 2 to 3, 510: 3 to 4). The chunk simply ends where the frame is full; samples of a truncated band, and bands that are not coded, are filled with noise by the decoder.
+* Three-level bands use coding method 1 (a flag per sample and a sign for nonzero ones) when it is shorter than five samples in eight bits. Scale factors of a group are coded as points joined by interpolation over 1 to 7 slots (Subwoofa always uses distance 1). The second grid carries 64 attenuation steps (3 dB each, two samples) per group of bands from band 4 (bands 4 to 9, 10 to 17, 18 up), subtracted from the scale factor; a negative result silences the sample pair.
+* The three lowest bands are linear-predicted: eight-tap synthesis `y[n] = r[n] - sum(c[j] y[n-1-j])` on the dequantized residual, reflection coefficients in four bits from `sin((i-8) pi / 17 or 15)`, two sets for bands 0 and 1 (samples 16 to 80 and 80 to 128), one for band 2; the first sixteen samples of a frame use the previous frame's last set. A closed loop over the decoder's output gains up to 7 dB on the lowest band.
+* **5.1 secondary audio with embedded stereo** (not written by Subwoofa): header band byte +0x20, an extra channel pair (chunks 0x33 / 0x43 / 0x53 / 0x63) holding the stereo downmix, and an ECS chunk 0x0B (131 bytes at 192 kbit/s) of unknown content; FFmpeg does not decode it, so it cannot be tested.
+
 ## Still different from the original
 
 Sweep: every legal combination at its top bit rate was encoded by both encoders and the first core and extension
@@ -93,7 +104,6 @@ headers compared (`compare.py`). Over 312 of 339 were identical in the last full
 * Blu-ray secondary audio, 5.1 Express: the original embeds a stereo downmix in the LBR stream (header band byte
   +0x20, EXSS embedded-stereo flag). Not written yet.
 * High Resolution Audio has no embedded stereo downmix in the original either (the setting is ignored there).
-* Express codes the full band with noise-filled high bands; Subwoofa narrows the band, so it is 6 to 9 dB worse at
-  band limit 0 for the same rate.
+* Express: Subwoofa now matches or beats the original's SNR at the same rate (mono 96 kbit/s is 1.6 dB behind) and keeps the narrower band at low rates; see above for what it does not do yet.
 * Master Audio with 96 kHz extension: the EXTSS_MD chunk bit rates depend on content.
 * Core quality differs in detail (Subwoofa has no ADPCM) but its SNR is equal or better in nearly all cases.
