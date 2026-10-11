@@ -289,6 +289,9 @@ enum Cmd {
         /// DTS-HD MA at 96 kHz: give the core an X96 extension (a 96/24 core).
         #[arg(long)]
         core_96_24: bool,
+        /// Audio files (wav, aiff, caf, flac): the sample format: s16, s24 (default), s32, f32 or f64.
+        #[arg(long)]
+        pcm_format: Option<String>,
     },
 }
 
@@ -370,14 +373,17 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24 } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24, pcm_format } => {
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
+            // the audio-file streams live under their own destination: do not make the user say so
+            let dest = if stream.is_audio_file() && dest == Destination::Generic { Destination::Files } else { dest };
             let layout: &'static ChannelLayout =
                 ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
             formats::validate(dest, stream, layout, sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
-            if let Some(src) = source_layout.as_deref().filter(|s| !s.is_empty()) {
+            // audio files go through the job runner (as a mixdown from a richer source layout does)
+            if let Some(src) = source_layout.as_deref().filter(|s| !s.is_empty()).or(stream.is_audio_file().then_some(layout.id)) {
                 let src_layout: &'static ChannelLayout = ChannelLayout::find(src).ok_or(format!("unknown layout '{src}'"))?;
                 let map = collect_inputs(src_layout, auto_import, inputs)?;
                 let spec = sw_queue::run::EncodeSpec {
@@ -397,8 +403,9 @@ fn run() -> Result<(), String> {
                     channel_order: channel_order.clone(),
                     es_phase_shift,
                     rear_minus_3db: rear_3db,
-                    source_layout: Some(src.to_string()),
+                    source_layout: (src != layout.id).then(|| src.to_string()),
                     core_x96: core_96_24,
+                    pcm_format: pcm_format.clone().unwrap_or_default(),
                 };
                 let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).map_err(|e| match e {
                     sw_queue::run::Failure::Canceled => "canceled".to_string(),

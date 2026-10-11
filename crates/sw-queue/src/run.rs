@@ -46,6 +46,9 @@ pub struct EncodeSpec {
     /// DTS-HD MA at 96 kHz: the core carries an X96 extension (a 96/24 core).
     #[serde(default)]
     pub core_x96: bool,
+    /// Audio files (WAV, AIFF, CAF, FLAC): the sample format, one of "s16", "s24" (default), "s32", "f32", "f64".
+    #[serde(default)]
+    pub pcm_format: String,
 }
 
 fn yes() -> bool {
@@ -181,8 +184,9 @@ fn execute_inner(
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
     }
-    let native = spec.engine == "native";
-    if native && !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp | StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624 | StreamType::DtsHdMa | StreamType::DtsExpress) {
+    // audio files only have a native writer
+    let native = spec.engine == "native" || stream.is_audio_file();
+    if native && !stream.is_native() {
         return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
     }
 
@@ -208,7 +212,22 @@ fn execute_inner(
     };
     log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
 
-    if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
+    if stream.is_audio_file() {
+        let format = if spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
+        let container = match stream {
+            StreamType::PcmWav => sw_codec_pcm::Container::Wav,
+            StreamType::PcmAiff => sw_codec_pcm::Container::Aiff,
+            StreamType::PcmCaf => sw_codec_pcm::Container::Caf,
+            _ => sw_codec_pcm::Container::Flac,
+        };
+        log.push_str(&format!("Sample format: {} ({}-bit {})
+", format.id(), format.bits(), if format.is_float() { "floating point" } else { "integer" }));
+        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output) };
+        sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+            sw_codec_pcm::PcmError::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        })?;
+    } else if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
         let req = sw_codec_truehd::native::Request {
             layout,
             start_secs: start,

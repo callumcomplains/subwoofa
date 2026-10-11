@@ -11,5 +11,6 @@ sw-pcm = { path = "../sw-pcm" }
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
 sw-codec-truehd = { path = "../sw-codec-truehd" }
 sw-codec-dts = { path = "../sw-codec-dts" }
+sw-codec-pcm = { path = "../sw-codec-pcm" }
 sw-tools = { path = "../sw-tools" }
 serde.workspace = true

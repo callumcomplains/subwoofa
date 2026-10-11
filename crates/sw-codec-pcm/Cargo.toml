@@ -1,0 +1,11 @@
+[package]
+name = "sw-codec-pcm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+sw-pcm = { path = "../sw-pcm" }
+thiserror.workspace = true
+md5 = "0.8"

@@ -1864,6 +1864,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3146,6 +3152,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sw-codec-pcm"
+version = "0.1.0"
+dependencies = [
+ "md5",
+ "sw-core",
+ "sw-pcm",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "sw-codec-truehd"
 version = "0.1.0"
 dependencies = [
@@ -3180,6 +3196,7 @@ dependencies = [
  "sw-backend-ffmpeg",
  "sw-codec-ac3",
  "sw-codec-dts",
+ "sw-codec-pcm",
  "sw-codec-truehd",
  "sw-core",
  "sw-pcm",

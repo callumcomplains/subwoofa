@@ -1,0 +1,222 @@
+//! Uncompressed and FLAC audio files: WAV (BWF, RF64), AIFF, CAF and FLAC.
+//!
+//! The stems are read as 32-bit floats (exact for anything up to 24 bits), converted to the chosen sample format and
+//! written in blocks. Each container module only knows its own file layout; this file reads the stems, orders the
+//! channels and hands the blocks over.
+
+mod aiff;
+mod caf;
+pub mod channels;
+mod flac;
+mod wav;
+
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use sw_core::ChannelLayout;
+use sw_pcm::StemSet;
+
+/// The file formats this crate writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Container {
+    Wav,
+    Aiff,
+    Caf,
+    Flac,
+}
+
+/// How each sample is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleFormat {
+    Int16,
+    Int24,
+    Int32,
+    Float32,
+    Float64,
+}
+
+impl SampleFormat {
+    pub fn from_id(id: &str) -> Option<SampleFormat> {
+        Some(match id.to_ascii_lowercase().as_str() {
+            "s16" | "16" => SampleFormat::Int16,
+            "s24" | "24" => SampleFormat::Int24,
+            "s32" | "32" => SampleFormat::Int32,
+            "f32" => SampleFormat::Float32,
+            "f64" => SampleFormat::Float64,
+            _ => return None,
+        })
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            SampleFormat::Int16 => "s16",
+            SampleFormat::Int24 => "s24",
+            SampleFormat::Int32 => "s32",
+            SampleFormat::Float32 => "f32",
+            SampleFormat::Float64 => "f64",
+        }
+    }
+
+    pub const fn bits(self) -> u32 {
+        match self {
+            SampleFormat::Int16 => 16,
+            SampleFormat::Int24 => 24,
+            SampleFormat::Int32 | SampleFormat::Float32 => 32,
+            SampleFormat::Float64 => 64,
+        }
+    }
+
+    pub const fn bytes(self) -> usize {
+        self.bits() as usize / 8
+    }
+
+    pub const fn is_float(self) -> bool {
+        matches!(self, SampleFormat::Float32 | SampleFormat::Float64)
+    }
+}
+
+pub struct Request<'a> {
+    pub layout: &'static ChannelLayout,
+    pub container: Container,
+    pub format: SampleFormat,
+    pub start_secs: f64,
+    pub duration_secs: Option<f64>,
+    pub output: &'a Path,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PcmError {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Pcm(#[from] sw_pcm::Error),
+    #[error("{0}")]
+    Unsupported(String),
+    #[error("nothing to encode: the start time is at or past the end of the input")]
+    Empty,
+    #[error("canceled")]
+    Canceled,
+}
+
+pub struct Stats {
+    pub frames: u64,
+    pub bytes: u64,
+}
+
+/// What a container writer needs to know before the first sample.
+pub(crate) struct Params {
+    pub rate: u32,
+    pub format: SampleFormat,
+    pub total_frames: u64,
+    /// Layout channel index for every channel of the file, in file order.
+    pub order: Vec<usize>,
+    /// WAV-style channel mask (0 = unpositioned).
+    pub mask: u32,
+    /// CAF channel labels, in file order.
+    pub labels: Vec<u32>,
+    /// BWF time reference in samples, if the source had one.
+    pub time_reference: Option<u64>,
+}
+
+impl Params {
+    pub fn channels(&self) -> usize {
+        self.order.len()
+    }
+}
+
+/// Sample bytes for `frames` frames of the file's channels, interleaved.
+pub(crate) fn interleave(planar: &[Vec<f32>], order: &[usize], frames: usize, format: SampleFormat, big_endian: bool, out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(frames * order.len() * format.bytes());
+    for i in 0..frames {
+        for &ch in order {
+            let v = planar[ch][i];
+            match format {
+                SampleFormat::Int16 => push(out, (to_int(v, 15) as i16).to_le_bytes().as_slice(), big_endian),
+                SampleFormat::Int24 => push(out, &(to_int(v, 23) as i32).to_le_bytes()[..3], big_endian),
+                SampleFormat::Int32 => push(out, (to_int(v, 31) as i32).to_le_bytes().as_slice(), big_endian),
+                SampleFormat::Float32 => push(out, v.to_le_bytes().as_slice(), big_endian),
+                SampleFormat::Float64 => push(out, (v as f64).to_le_bytes().as_slice(), big_endian),
+            }
+        }
+    }
+}
+
+fn push(out: &mut Vec<u8>, little_endian_bytes: &[u8], big_endian: bool) {
+    if big_endian {
+        out.extend(little_endian_bytes.iter().rev());
+    } else {
+        out.extend_from_slice(little_endian_bytes);
+    }
+}
+
+/// Rounds a sample in -1.0..1.0 to a signed integer with `magnitude_bits` bits besides the sign, clipping at the ends.
+fn to_int(v: f32, magnitude_bits: u32) -> i64 {
+    let scale = (1u64 << magnitude_bits) as f64;
+    let max = scale - 1.0;
+    ((v as f64 * scale).round()).clamp(-scale, max) as i64
+}
+
+/// The channels as integers of `bits` bits (FLAC works on integers).
+pub(crate) fn to_integers(planar: &[Vec<f32>], order: &[usize], frames: usize, bits: u32) -> Vec<Vec<i32>> {
+    order.iter().map(|&ch| planar[ch][..frames].iter().map(|&v| to_int(v, bits - 1) as i32).collect()).collect()
+}
+
+/// Writes the stems as the requested file.
+pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, PcmError> {
+    let rate = stems.sample_rate;
+    let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
+    stems.seek_frame(first)?;
+    let available = stems.frames - first;
+    let wanted = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(available).min(available);
+    if wanted == 0 {
+        return Err(PcmError::Empty);
+    }
+    let mask_order = channels::wav_order(req.layout);
+    let wav_style = matches!(req.container, Container::Wav | Container::Flac);
+    // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
+    let order: Vec<usize> = if wav_style { mask_order.order.clone() } else { (0..req.layout.channels.len()).collect() };
+    let labels = order.iter().map(|&i| channels::caf_label(req.layout.channels[i], i)).collect();
+    let params = Params { rate, format: req.format, total_frames: wanted, order, mask: mask_order.mask, labels, time_reference: stems.time_reference.map(|t| t + first) };
+
+    let mut writer: Box<dyn BlockWriter> = match req.container {
+        Container::Wav => Box::new(wav::WavWriter::create(req.output, params)?),
+        Container::Aiff => Box::new(aiff::AiffWriter::create(req.output, params)?),
+        Container::Caf => Box::new(caf::CafWriter::create(req.output, params)?),
+        Container::Flac => Box::new(flac::FlacWriter::create(req.output, params)?),
+    };
+    let block = 16_384usize;
+    let mut planar: Vec<Vec<f32>> = Vec::new();
+    let mut written = 0u64;
+    while written < wanted {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(PcmError::Canceled);
+        }
+        let got = stems.read_planar(&mut planar, block.min((wanted - written) as usize))?;
+        if got == 0 {
+            break;
+        }
+        writer.write_block(&planar, got)?;
+        written += got as u64;
+        on_progress(written as f32 / wanted as f32);
+    }
+    let bytes = writer.finish()?;
+    on_progress(1.0);
+    Ok(Stats { frames: written, bytes })
+}
+
+/// A container being written, block by block.
+pub(crate) trait BlockWriter {
+    /// Appends `frames` frames; `planar[channel][frame]` holds layout channel `channel`.
+    fn write_block(&mut self, planar: &[Vec<f32>], frames: usize) -> std::io::Result<()>;
+    /// Completes the file and returns its size in bytes.
+    fn finish(self: Box<Self>) -> std::io::Result<u64>;
+}
+
+/// Pads a chunk to an even length, as RIFF, AIFF and the like require.
+pub(crate) fn pad_even<W: Write>(w: &mut W, len: u64) -> std::io::Result<()> {
+    if len % 2 == 1 {
+        w.write_all(&[0])?;
+    }
+    Ok(())
+}

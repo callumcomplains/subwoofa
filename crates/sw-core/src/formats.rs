@@ -10,6 +10,8 @@ pub enum Destination {
     DtsMusicDisc,
     /// No disc constraints (Dolby formats, general conversions).
     Generic,
+    /// Plain audio files: WAV, AIFF, CAF and FLAC.
+    Files,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -25,6 +27,11 @@ pub enum StreamType {
     Eac3,
     TrueHd,
     Mlp,
+    /// Uncompressed audio files (the sample format is a separate setting).
+    PcmWav,
+    PcmAiff,
+    PcmCaf,
+    Flac,
 }
 
 impl StreamType {
@@ -39,6 +46,10 @@ impl StreamType {
         StreamType::Eac3,
         StreamType::TrueHd,
         StreamType::Mlp,
+        StreamType::PcmWav,
+        StreamType::PcmAiff,
+        StreamType::PcmCaf,
+        StreamType::Flac,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -53,6 +64,10 @@ impl StreamType {
             StreamType::Eac3 => "eac3",
             StreamType::TrueHd => "truehd",
             StreamType::Mlp => "mlp",
+            StreamType::PcmWav => "wav",
+            StreamType::PcmAiff => "aiff",
+            StreamType::PcmCaf => "caf",
+            StreamType::Flac => "flac",
         }
     }
 
@@ -72,15 +87,47 @@ impl StreamType {
             StreamType::Eac3 => "Dolby Digital Plus (E-AC-3)",
             StreamType::TrueHd => "Dolby TrueHD",
             StreamType::Mlp => "MLP (Meridian Lossless Packing)",
+            StreamType::PcmWav => "WAV / Broadcast Wave (PCM)",
+            StreamType::PcmAiff => "AIFF (PCM)",
+            StreamType::PcmCaf => "CAF (PCM)",
+            StreamType::Flac => "FLAC",
         }
     }
 
     pub const fn is_dts(self) -> bool {
-        !matches!(self, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd | StreamType::Mlp)
+        matches!(self, StreamType::DtsHdMa | StreamType::DtsHdHra | StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround | StreamType::DtsExpress)
     }
 
     pub const fn is_lossless(self) -> bool {
-        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp)
+        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp) || self.is_audio_file()
+    }
+
+    /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting
+    /// instead of a bit rate.
+    pub const fn is_audio_file(self) -> bool {
+        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac)
+    }
+
+    /// Whether Subwoofa has its own encoder for the stream (every stream type does; the FFmpeg engine is an
+    /// optional alternative for some).
+    pub const fn is_native(self) -> bool {
+        matches!(
+            self,
+            StreamType::DtsHdMa
+                | StreamType::DtsHdHra
+                | StreamType::DtsEs
+                | StreamType::Dts9624
+                | StreamType::DtsDigitalSurround
+                | StreamType::DtsExpress
+                | StreamType::Ac3
+                | StreamType::Eac3
+                | StreamType::TrueHd
+                | StreamType::Mlp
+                | StreamType::PcmWav
+                | StreamType::PcmAiff
+                | StreamType::PcmCaf
+                | StreamType::Flac
+        )
     }
 
     /// Sample rates (Hz) the stream type accepts.
@@ -95,6 +142,7 @@ impl StreamType {
             StreamType::Eac3 => &[32_000, 44_100, 48_000],
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::Mlp => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
+            StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
         }
     }
 }
@@ -107,6 +155,7 @@ impl Destination {
         Destination::DvdVideo,
         Destination::DtsMusicDisc,
         Destination::Generic,
+        Destination::Files,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -117,6 +166,7 @@ impl Destination {
             Destination::DvdVideo => "dvd",
             Destination::DtsMusicDisc => "dts-music-disc",
             Destination::Generic => "generic",
+            Destination::Files => "files",
         }
     }
 
@@ -132,6 +182,7 @@ impl Destination {
             Destination::DvdVideo => "DVD-Video",
             Destination::DtsMusicDisc => "DTS Music Disc",
             Destination::Generic => "Generic",
+            Destination::Files => "Audio files (PCM / FLAC)",
         }
     }
 
@@ -144,6 +195,7 @@ impl Destination {
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],
+            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac],
         }
     }
 
@@ -152,6 +204,12 @@ impl Destination {
         match self {
             Destination::DvdVideo => "cpt",
             Destination::DtsMusicDisc => "wav",
+            Destination::Files => match stream {
+                StreamType::PcmAiff => "aif",
+                StreamType::PcmCaf => "caf",
+                StreamType::Flac => "flac",
+                _ => "wav",
+            },
             Destination::Generic => match stream {
                 StreamType::Ac3 => "ac3",
                 StreamType::Eac3 => "eac3",
@@ -178,6 +236,8 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::Ac3 => 6,
         StreamType::Eac3 => 8, // up to 7.1 via independent+dependent substreams
         StreamType::TrueHd | StreamType::Mlp => 8,
+        StreamType::Flac => 8,
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
     if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) { base.min(7) } else { base }
 }
@@ -209,6 +269,7 @@ pub fn bitrate_range_kbps(
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac => None,
     }
 }
 
@@ -298,7 +359,7 @@ pub fn validate(
         return Err(Invalid::LayoutNotSupported);
     }
     // top-layer speakers (7.1.4, 9.1.6, 22.2...) are carried by the lossless DTS-HD stream only for now
-    if layout.channels.iter().any(|c| c.is_top_layer()) && stream != StreamType::DtsHdMa {
+    if layout.channels.iter().any(|c| c.is_top_layer()) && stream != StreamType::DtsHdMa && !stream.is_audio_file() {
         return Err(Invalid::LayoutNotSupported);
     }
     if stream == StreamType::DtsExpress && !EXPRESS_LAYOUTS.contains(&layout.id) {
@@ -347,6 +408,20 @@ mod tests {
             Err(Invalid::LayoutNotSupported)
         );
         assert!(validate(Destination::Generic, StreamType::Ac3, l("5.1"), 48_000).is_ok());
+    }
+
+    #[test]
+    fn audio_files_take_wide_layouts_but_flac_stops_at_eight_channels() {
+        assert!(validate(Destination::Files, StreamType::PcmWav, l("22.2"), 96_000).is_ok());
+        assert!(validate(Destination::Files, StreamType::Flac, l("7.1.4"), 48_000).is_err());
+        assert!(validate(Destination::Files, StreamType::Flac, l("7.1-side-rear"), 192_000).is_ok());
+        assert_eq!(Destination::Files.extension(StreamType::PcmAiff), "aif");
+        assert!(StreamType::Flac.is_lossless() && !StreamType::Flac.is_dts());
+    }
+
+    #[test]
+    fn every_stream_type_is_native() {
+        assert!(StreamType::ALL.iter().all(|s| s.is_native()));
     }
 
     #[test]

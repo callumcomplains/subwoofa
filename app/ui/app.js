@@ -232,6 +232,7 @@ function renderBitrate(from) {
   syncDtsOpts();
   const ma = $("stream").value === "dtshd-ma";
   $("coreWrap").hidden = !ma;
+  syncPcmFormat();
   // no core above 8 channels, or above 6 channels over 96 kHz: the stream is the lossless extension alone
   const nch = curLayout() ? curLayout().channels.length : 0;
   const nhk = ma && nch > 8;
@@ -275,11 +276,58 @@ function syncDtsOpts() {
   $("esNote").textContent = st === "dts-es" ? "Phase shift is recommended for 6.x Discrete, not for Matrix layouts." : "";
 }
 
+/** One plain sentence about what the chosen stream type puts in the file, so the options are not a mystery. */
+function describeStream() {
+  const st = $("stream").value, lay = curLayout(), rate = curRate();
+  const nch = lay ? lay.channels.length : 0;
+  const total = Number($("bitrate").value);
+  let t = "";
+  if (st === "dtshd-hra") {
+    const rest = Math.max(0, total - 1509);
+    if (nch > 6 && rate > 48000) {
+      t = `A 1509 kbps 48 kHz core (5.1 downmix) for older players, an XXCH part for the rear pair (about ${Math.round(rest * 0.2)} kbps) and an X96 part for the 96 kHz band of every channel (about ${Math.round(rest * 0.8)} kbps).`;
+    } else if (nch > 6) {
+      t = `A 1509 kbps core (5.1 downmix) for older players, plus an XXCH part for the rear pair and an XBR part with extra detail (together about ${rest} kbps).`;
+    } else {
+      t = `A 1509 kbps core, plus an XBR part (about ${rest} kbps) that adds detail the core left out.`;
+    }
+  } else if (st === "dtshd-ma") {
+    t = coreOff() ? "Lossless audio only: players that can't decode DTS-HD MA won't play it." : "Lossless audio, with a lossy core inside it so older DTS players still play the stream.";
+  } else if (st === "dts-96-24") {
+    t = "A 48 kHz core plus an X96 part: core-only decoders play it at 48 kHz, 96/24 decoders get the full band.";
+  } else if (st === "dts-es") {
+    t = "A DTS core with a sixth surround channel, matrixed into the surrounds or sent separately (Discrete).";
+  } else if (st === "dts") {
+    t = "A plain DTS core: lossy, plays everywhere.";
+  }
+  $("streamNote").textContent = t;
+}
+
+/** Audio files (WAV, AIFF, CAF, FLAC) have a sample format instead of a bit rate and a dialnorm. */
+function syncPcmFormat() {
+  const st = $("stream").value;
+  const file = ["wav", "aiff", "caf", "flac"].includes(st);
+  $("pcmWrap").hidden = !file;
+  document.querySelector(".f.dialnorm").hidden = file; // no dialogue level in a plain audio file
+  if (!file) return;
+  const flac = st === "flac";
+  for (const o of $("pcmFormat").options) o.disabled = flac && !["s16", "s24"].includes(o.value);
+  if (flac && $("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = "s24";
+  $("pcmNote").textContent = flac
+    ? "FLAC stores 16 or 24 bit integers, up to 8 channels."
+    : st === "aiff"
+      ? "AIFF files are limited to 4 GB; floating point makes it an AIFF-C file."
+      : st === "wav"
+        ? "Files over 4 GB are written as RF64. The channel mask is set where the layout has standard speaker positions."
+        : "CAF has no 4 GB limit and labels every channel.";
+}
+
 function coreOff() {
   return $("stream").value === "dtshd-ma" && !$("coreOn").checked;
 }
 
 function syncChips() {
+  describeStream();
   const v = Number($("bitrate").value);
   for (const b of $("presets").children) b.setAttribute("aria-pressed", String(Number(b.textContent) === v));
   $("bitrate").classList.toggle("bad", !bitrateOk());
@@ -414,7 +462,7 @@ function jobSpec(inputsFor, name) {
     sample_rate: curRate(),
     bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
     dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
-    es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
+    pcm_format: ["wav", "aiff", "caf", "flac"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
   };
@@ -488,7 +536,7 @@ function presetState() {
     app: "subwoofa", version: 1,
     dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(), sample_rate: curRate(),
     bitrate: $("bitrate").value === "" ? null : Number($("bitrate").value),
-    core_on: $("coreOn").checked, dialnorm_on: $("dialnormOn").checked, dialnorm: Number($("dialnorm").value),
+    pcm_format: $("pcmFormat").value, core_on: $("coreOn").checked, dialnorm_on: $("dialnormOn").checked, dialnorm: Number($("dialnorm").value),
     es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked,
     unlocked, outname: $("outname").value, output_dir: outDir,
   };
@@ -509,6 +557,7 @@ async function applyPreset(p) {
   $("coreOn").checked = p.core_on !== false;
   $("esShift").checked = !!p.es_phase_shift;
   $("rear3").checked = !!p.rear_minus_3db;
+  if (p.pcm_format) $("pcmFormat").value = p.pcm_format;
   $("dialnormOn").checked = !!p.dialnorm_on;
   $("dialnorm").disabled = !$("dialnormOn").checked;
   if (Number.isFinite(p.dialnorm)) $("dialnorm").value = p.dialnorm;
@@ -550,6 +599,7 @@ async function init() {
   $("rate").onchange = () => { $("ratecustom").hidden = $("rate").value !== "custom"; cascade("rate"); };
   $("ratecustom").oninput = () => cascade("rate");
   $("bitrate").oninput = () => { syncChips(); update(); };
+  $("pcmFormat").onchange = () => update();
   $("coreOn").onchange = () => { $("bitrate").disabled = coreOff(); syncX96(); syncChips(); update(); };
   $("x96Core").onchange = () => update();
   $("outname").oninput = update;

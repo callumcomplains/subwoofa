@@ -98,6 +98,7 @@ fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), E
         StreamType::DtsHdHra => return Err(Error::Unsupported("DTS-HD High Resolution")),
         StreamType::DtsEs => return Err(Error::Unsupported("DTS-ES")),
         StreamType::Dts9624 => return Err(Error::Unsupported("DTS 96/24")),
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac => return Err(Error::Unsupported("audio files (written by the native engine)")),
         StreamType::DtsExpress => return Err(Error::Unsupported("DTS Express")),
     })
 }

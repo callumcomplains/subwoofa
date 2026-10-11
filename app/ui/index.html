@@ -28,6 +28,7 @@
 <section class="strip" aria-label="Format">
   <label class="f"><span>Destination</span><select id="dest"></select></label>
   <label class="f wide"><span>Stream type</span><select id="stream"></select></label>
+  <div class="f wide"><small id="streamNote"></small></div>
   <div class="f rate">
     <label for="rate"><span>Sample rate</span></label>
     <div class="combo">
@@ -44,6 +45,17 @@
     <div id="presets" class="chips" role="group" aria-label="Bit rate presets"></div>
     <label class="chk tight" id="x96Wrap" hidden><input type="checkbox" id="x96Core"><span>96/24 core (X96 extension: core-only decoders play the full 96 kHz band)</span></label>
     <label class="chk tight" id="coreWrap" hidden><input type="checkbox" id="coreOn" checked><span>Backward-compatible core (turn off for lossless data only)</span></label>
+  </div>
+  <div class="f wide" id="pcmWrap" hidden>
+    <label for="pcmFormat"><span>Sample format</span></label>
+    <select id="pcmFormat">
+      <option value="s16">16-bit integer</option>
+      <option value="s24" selected>24-bit integer</option>
+      <option value="s32">32-bit integer</option>
+      <option value="f32">32-bit float</option>
+      <option value="f64">64-bit float</option>
+    </select>
+    <small id="pcmNote"></small>
   </div>
   <div class="f dialnorm">
     <label for="dialnormOn"><span>Dialnorm</span></label>
