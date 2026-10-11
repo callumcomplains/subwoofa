@@ -69,18 +69,19 @@ The extension substream header is padded with zero bytes before its CRC to a fix
 multiple of four if the content needs more: 32 bytes for Master Audio, 28 for High Resolution and Express (checked on
 241 streams, no exception).
 
-## Still different from the original (found by the sweep, to be worked through)
+## Still different from the original
 
-Sweep: every legal combination at its top bit rate was encoded by the original and by Subwoofa, and the first core
-and extension headers were compared (`compare.py`). 80 of 339 are identical; the rest fall into these groups:
+Sweep: every legal combination at its top bit rate was encoded by both encoders and the first core and extension
+headers compared (`compare.py`). Over 312 of 339 were identical in the last full run, and the fixes since then
+(Express frame sizes, 96/24 ES, 6.x XCH, CD at 88.2 kHz) closed more. What is left:
 
-* layouts Subwoofa does not write yet: HRA 6.x discrete at 48 kHz (XCH plus XBR), HRA and 96/24 with 7.1 Cs/Ch,
-  Cs/Oh, Lh/Rh, Lhs/Rhs and Lw/Rw, 96/24 core with 6.x, DTS CD at 88.2 kHz;
-* DVD streams use 1509.75 kbps (frame 2013 bytes), not 1509;
-* HRA at 96 kHz below 5.1 channels uses the same plain-core layout as 5.1; HRA at 48 kHz below 5.0 uses a
-  non-perfect-reconstruction filter bank (FILTS 0) in the core;
-* lossless-only (no core) Master Audio starts with two silent frames as the cored streams do;
-* the 5.1 downmix flag of the asset descriptor is set in lossless 7.x streams;
-* Express: the original codes the full band at every rate (header band byte 0x15) and fills the high bands
-  parametrically; Subwoofa narrows the band instead (its waveform match is closer at low frequencies, the original's
-  bandwidth is far larger); 5.1 secondary audio embeds a stereo downmix.
+* HRA 48 kHz 7.x: the original's XBR/XXCH split changes from frame to frame (a leaky reservoir); Subwoofa uses a
+  fixed split fitted to its mean (about 0.27 x kbps + 58 bytes for XXCH).
+* Blu-ray secondary audio, 5.1 Express: the original embeds a stereo downmix in the LBR stream (header band byte
+  +0x20, EXSS embedded-stereo flag). Not written yet.
+* Embedded stereo downmix in Master Audio / HRA cores and custom Downmix-tab coefficients (the code mapping is
+  known: primary scale = level code, coefficient = 64 + level code) are not written yet.
+* Express codes the full band with noise-filled high bands; Subwoofa narrows the band, so it is 6 to 9 dB worse at
+  band limit 0 for the same rate.
+* Master Audio with 96 kHz extension: the EXTSS_MD chunk bit rates depend on content.
+* Core quality differs in detail (Subwoofa has no ADPCM) but its SNR is equal or better in nearly all cases.
