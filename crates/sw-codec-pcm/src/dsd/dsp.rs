@@ -130,6 +130,7 @@ impl Modulator {
     }
 
     /// Times the loop had to be reset because the input overloaded it.
+    #[cfg(test)]
     pub fn overloads(&self) -> u64 {
         self.overloads
     }

@@ -94,7 +94,8 @@ enum ToolsCmd {
     },
     /// Same as `subwoofa verify`.
     Verify {
-        file: PathBuf,
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
         #[arg(long)]
         deep: bool,
         #[arg(long)]
@@ -172,9 +173,11 @@ enum Cmd {
         #[command(subcommand)]
         op: AtmosCmd,
     },
-    /// Check a stream file: structure, checksums and (with --deep) a full decode, statistics and header dumps.
+    /// Check stream or audio files: structure, checksums and (with --deep) a full decode, statistics and header dumps.
+    /// Several files may be given; a summary follows when there is more than one.
     Verify {
-        file: PathBuf,
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
         /// Also decode the audio and dump every header
         #[arg(long)]
         deep: bool,
@@ -340,7 +343,7 @@ fn run() -> Result<(), String> {
             }
         }
         Cmd::Tools { op } => run_tools(op)?,
-        Cmd::Verify { file, deep, json, ffmpeg } => verify_cmd(&file, deep, json, ffmpeg)?,
+        Cmd::Verify { files, deep, json, ffmpeg } => verify_cmd(&files, deep, json, ffmpeg)?,
         Cmd::Atmos { op } => run_atmos(op)?,
         Cmd::StreamInfo { path, count, first } => {
             let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -375,6 +378,7 @@ fn run() -> Result<(), String> {
             }
         }
         Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24, pcm_format } => {
+            let mut progress = Progress::new();
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
@@ -408,7 +412,7 @@ fn run() -> Result<(), String> {
                     core_x96: core_96_24,
                     pcm_format: pcm_format.clone().unwrap_or_default(),
                 };
-                let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).map_err(|e| match e {
+                let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |p, _| progress.tick(p)).map_err(|e| match e {
                     sw_queue::run::Failure::Canceled => "canceled".to_string(),
                     sw_queue::run::Failure::Error(m) => m,
                 })?;
@@ -423,7 +427,7 @@ fn run() -> Result<(), String> {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output, secondary: dest == Destination::BluRaySecondary };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 4096) as f64 / stems.sample_rate as f64;
                     println!("wrote {} ({} frames, {:.2} MB, average {:.0} kbps) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
                     return Ok(());
@@ -439,7 +443,7 @@ fn run() -> Result<(), String> {
                         mlp: stream == StreamType::Mlp,
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))
+                    let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false))
                         .map_err(|e| e.to_string())?;
                     let secs = stats.frames as f64 / stems.sample_rate as f64;
                     let pcm = stats.frames as f64 * layout.channel_count() as f64 * 3.0;
@@ -462,7 +466,7 @@ fn run() -> Result<(), String> {
                         x96: core_96_24,
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
                     let spf = if stems.sample_rate > 96_000 { 2048 } else if stems.sample_rate > 48_000 { 1024 } else { 512 };
                     let secs = (stats.frames * spf) as f64 / stems.sample_rate as f64;
                     println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
@@ -483,7 +487,7 @@ fn run() -> Result<(), String> {
                         es: sw_codec_dts::es_options(stream == StreamType::DtsEs, layout, es_phase_shift, rear_3db),
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 512) as f64 / stems.sample_rate as f64;
                     println!("wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
                     return Ok(());
@@ -502,7 +506,7 @@ fn run() -> Result<(), String> {
                     eac3: stream == StreamType::Eac3,
                 };
                 let t0 = std::time::Instant::now();
-                let stats = sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false))
+                let stats = sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false))
                     .map_err(|e| e.to_string())?;
                 let secs = stats.input_frames as f64 / stems.sample_rate as f64;
                 println!("wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
@@ -611,18 +615,99 @@ fn run_atmos(op: AtmosCmd) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_cmd(file: &std::path::Path, deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
+fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
     let opt = sw_verify::Options { deep, ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg), reference_verifier: None };
-    let report = sw_verify::verify(file, &opt).map_err(|e| e.to_string())?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
-    } else {
-        print!("{}", report.to_text());
+    let mut reports = Vec::new();
+    for file in files {
+        match sw_verify::verify(file, &opt) {
+            Ok(r) => reports.push(r),
+            Err(e) => {
+                // a file that cannot even be opened is reported like a failed check, and the others still run
+                eprintln!("{}: {e}", file.display());
+                let mut r = sw_verify::Report::default();
+                r.file = file.display().to_string();
+                r.format = "unreadable".into();
+                reports.push(r);
+            }
+        }
     }
-    if report.passed {
-        Ok(())
+    if json {
+        // one file: the report itself, as before; several: a list
+        let text = if reports.len() == 1 { serde_json::to_string_pretty(&reports[0]) } else { serde_json::to_string_pretty(&reports) };
+        println!("{}", text.map_err(|e| e.to_string())?);
     } else {
+        for r in &reports {
+            print!("{}", r.to_text());
+        }
+        if reports.len() > 1 {
+            println!("\nSummary of {} files", reports.len());
+            for r in &reports {
+                let failed = r.checks.iter().filter(|c| c.status == sw_verify::Status::Fail).count();
+                let warned = r.checks.iter().filter(|c| c.status == sw_verify::Status::Warn).count();
+                let verdict = if r.passed { "passed".to_string() } else if failed > 0 { format!("FAILED ({failed} check{} failed)", if failed == 1 { "" } else { "s" }) } else { "FAILED".to_string() };
+                println!("  {verdict:<26} {}{}", r.file, if warned > 0 { format!("  [{warned} warning{}]", if warned == 1 { "" } else { "s" }) } else { String::new() });
+            }
+        }
+    }
+    let bad = reports.iter().filter(|r| !r.passed).count();
+    if bad == 0 {
+        Ok(())
+    } else if reports.len() == 1 {
         Err("verification failed".into())
+    } else {
+        Err(format!("{bad} of {} files failed verification", reports.len()))
+    }
+}
+
+/// Progress on the terminal: percentage, time spent and time left, redrawn a few times a second. Prints nothing when
+/// the output is not a terminal (a log file, a pipe).
+struct Progress {
+    started: std::time::Instant,
+    last_drawn: std::time::Instant,
+    drawn_anything: bool,
+    enabled: bool,
+}
+
+impl Progress {
+    fn new() -> Progress {
+        use std::io::IsTerminal;
+        let now = std::time::Instant::now();
+        Progress { started: now, last_drawn: now, drawn_anything: false, enabled: std::io::stderr().is_terminal() }
+    }
+
+    /// `fraction` of the work done, 0.0 to 1.0.
+    fn tick(&mut self, fraction: f32) {
+        if fraction >= 0.999 {
+            // finished: leave a clean line for what the command prints next
+            self.clear();
+            return;
+        }
+        if !self.enabled || self.last_drawn.elapsed().as_millis() < 250 || fraction <= 0.0 {
+            return;
+        }
+        self.last_drawn = std::time::Instant::now();
+        let spent = self.started.elapsed().as_secs_f32();
+        let left = spent * (1.0 - fraction) / fraction;
+        eprint!("\r  {:3.0}%   {} spent, about {} left   ", fraction * 100.0, clock(spent), clock(left));
+        self.drawn_anything = true;
+    }
+
+    /// Wipes the progress line.
+    fn clear(&mut self) {
+        if self.drawn_anything {
+            eprint!("\r{:60}\r", "");
+            self.drawn_anything = false;
+        }
+    }
+}
+
+/// Seconds as `m:ss` (or `h:mm:ss`).
+fn clock(seconds: f32) -> String {
+    let total = seconds.round() as u64;
+    if total >= 3600 {
+        format!("{}:{:02}:{:02}", total / 3600, total / 60 % 60, total % 60)
+    } else {
+        format!("{}:{:02}", total / 60, total % 60)
     }
 }
 
@@ -677,7 +762,19 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
             let (h, t) = sw_tools::add_silence(&file, &output, head, tail).map_err(e)?;
             println!("wrote {} ({} silent frames at the head, {} at the tail)", output.display(), h, t);
         }
-        ToolsCmd::Verify { file, deep, ffmpeg } => return verify_cmd(&file, deep, false, ffmpeg),
+        ToolsCmd::Verify { files, deep, ffmpeg } => return verify_cmd(&files, deep, false, ffmpeg),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clock;
+
+    #[test]
+    fn clock_shows_minutes_and_hours() {
+        assert_eq!(clock(0.0), "0:00");
+        assert_eq!(clock(75.4), "1:15");
+        assert_eq!(clock(3725.0), "1:02:05");
+    }
 }

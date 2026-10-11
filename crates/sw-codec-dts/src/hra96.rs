@@ -295,7 +295,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let to24 = |v: f32| v as f64 * 8_388_608.0;
     let clamp = |v: f64| v.clamp(-8_388_608.0, 8_388_607.0);
     let (mut frames, mut bytes) = (0u64, 0u64);
-    let mut write = |out: &mut crate::dtshd::StreamOut, fr: Vec<Vec<u8>>, frames: &mut u64, bytes: &mut u64| -> Result<(), NativeError> {
+    let write = |out: &mut crate::dtshd::StreamOut, fr: Vec<Vec<u8>>, frames: &mut u64, bytes: &mut u64| -> Result<(), NativeError> {
         for f in fr {
             out.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
             *frames += 1;

@@ -513,7 +513,20 @@ const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padS
 function renderQueue(jobs) {
   $("queue").hidden = jobs.length === 0;
   const active = jobs.filter((j) => !["passed", "completed", "failed", "canceled"].includes(j.state)).length;
-  $("qCount").textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}${active ? `, ${active} active` : ""}`;
+  if (active || jobs.length === 0) {
+    $("qCount").textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}${active ? `, ${active} active` : ""}`;
+  } else {
+    // the batch is over: say how it went
+    const count = (...states) => jobs.filter((j) => states.includes(j.state)).length;
+    const parts = [];
+    if (count("passed")) parts.push(`${count("passed")} passed`);
+    if (count("completed")) parts.push(`${count("completed")} done`);
+    if (count("failed")) parts.push(`${count("failed")} FAILED`);
+    if (count("canceled")) parts.push(`${count("canceled")} canceled`);
+    const total = jobs.reduce((t, j) => t + (j.elapsed_secs || 0), 0);
+    $("qCount").textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}: ${parts.join(", ")} - ${fmtClock(total)} in all`;
+    $("qCount").classList.toggle("bad", count("failed") > 0);
+  }
   const ul = $("qList");
   ul.innerHTML = "";
   for (const j of jobs) {
@@ -525,7 +538,7 @@ function renderQueue(jobs) {
     li.innerHTML = `<span class="qstate ${j.state}">${label}</span>
       <span class="qname" title="${j.output.replace(/"/g, "&quot;")}">${j.name}${j.message ? `<small class="${j.state === "failed" ? "bad" : ""}" title="${j.message.replace(/"/g, "&quot;")}">${j.message.split(String.fromCharCode(10))[0]}</small>` : ""}</span>
       <span class="bar-track"><span class="bar-fill ${done ? "done" : fail ? "fail" : ""}" style="display:block;width:${Math.round(j.progress * 100)}%"></span></span>
-      <span class="qtime">${live || done || fail ? fmtClock(j.elapsed_secs) : ""}</span>
+      <span class="qtime">${live || done || fail ? fmtClock(j.elapsed_secs) : ""}${j.state === "running" && j.progress > 0.03 ? `<small> ~${fmtClock(j.elapsed_secs * (1 - j.progress) / j.progress)} left</small>` : ""}</span>
       <span class="qbtns"></span>`;
     const btns = li.querySelector(".qbtns");
     const add = (txt, title, fn) => { const b = document.createElement("button"); b.textContent = txt; b.title = title; b.className = "plain"; b.onclick = fn; btns.append(b); };

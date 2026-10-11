@@ -353,7 +353,6 @@ impl Encoder {
 
     /// Encode one frame from ready-made subband samples `sub[ch][band][block]` (bypasses the analysis bank).
     pub fn encode_subbands(&mut self, sub: &[Vec<Vec<f64>>], lfe: Option<(Vec<i32>, u8)>) -> Vec<u8> {
-        let blocks = self.cfg.blocks;
         let best = self.search_plan(sub);
         let t_b = std::time::Instant::now();
         let bytes = self.pack(&best, lfe.as_ref());

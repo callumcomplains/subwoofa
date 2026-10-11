@@ -400,7 +400,7 @@ impl MaCoreEncoder {
                 .xll_to_core
                 .iter()
                 .enumerate()
-                .map(|(x, slot)| match *slot {
+                .map(|(_, slot)| match *slot {
                     None => vec![0; half],
                     Some(slot) => {
                         let c = &self.core.last_core_pcm[slot];

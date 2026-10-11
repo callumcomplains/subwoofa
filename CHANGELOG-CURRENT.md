@@ -345,3 +345,9 @@ The DTS encoder's Express streams carry steady notes as tonal components (a freq
 - **Quality-of-life pass, small fixes (done).**
   - The CLI now defaults to Subwoofa's own encoders (`--engine native`); before, `--stream dtshd-ma` failed with "not supported by the FFmpeg backend" unless `--engine native` was added. `--engine ffmpeg` still selects FFmpeg for the formats it can encode (AC-3, E-AC-3, DTS core, TrueHD, MLP).
   - Core-only DTS streams (DTS, DTS-ES, DTS 96/24) are bare streams, not DTS-HD containers, so their default file extension is now `.dts` instead of `.dtshd` (DTS-HD MA, HRA and Express keep `.dtshd`). A bare stream under a `.dtshd` name is what DTSHDVerify refused earlier.
+
+- **Quality-of-life pass, round two (done).**
+  - `subwoofa verify` takes several files: each report, then a one-line-per-file summary, a non-zero exit code if any failed, and `--json` gives a list; a file that cannot be opened is reported as failed and the others still run.
+  - Encodes on the command line show progress on a terminal (percentage, time spent, time left), and nothing when the output is a pipe or a log.
+  - GUI queue: running jobs show an estimated time left; when a batch finishes the header says how it went ("3 jobs: 2 passed, 1 FAILED - 2:02 in all", in red if anything failed).
+  - Compiler warnings cleared (unused variables, an unreachable pattern, unused fields); tables kept as published carry an explanatory allow.

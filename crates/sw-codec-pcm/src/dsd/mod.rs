@@ -125,7 +125,6 @@ pub struct DsdWriter {
     chains: Vec<ChannelChain>,
     /// Bits waiting to be packed, per file channel.
     queues: Vec<Vec<u8>>,
-    total_bits: usize,
     bytes_written: u64,
     header_len: u64,
 }
@@ -144,7 +143,7 @@ impl DsdWriter {
         };
         out.write_all(&header)?;
         let channels = params.channels();
-        Ok(DsdWriter { out, file, params, chains, queues: vec![Vec::new(); channels], total_bits, bytes_written: 0, header_len: header.len() as u64 })
+        Ok(DsdWriter { out, file, params, chains, queues: vec![Vec::new(); channels], bytes_written: 0, header_len: header.len() as u64 })
     }
 
     /// Writes whatever whole blocks (DSF) or bytes (DSDIFF) the queues hold; with `last`, pads the rest with idle bits

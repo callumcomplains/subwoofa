@@ -66,6 +66,7 @@ subwoofa verify Film.dtshd              # structure, checksums, headers and the 
 subwoofa verify Film.dtshd --deep       # also decodes everything, measures the audio, lists every header
 subwoofa verify Film.ac3 --json         # the report as JSON (the exit code is 0 only if it passed)
 subwoofa verify mix.flac --deep         # audio files too: WAV, AIFF, CAF, FLAC (also in Ogg), M4A/ALAC, TTA, DSF, DSDIFF
+subwoofa verify a.dtshd b.thd c.flac    # several files: every report, then a summary; exit code 1 if any failed
 ```
 
 ```

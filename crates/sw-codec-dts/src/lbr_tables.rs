@@ -1,5 +1,7 @@
 //! Tables of the DTS Express (LBR) extension, ETSI TS 102 114 clause 9.9 (values as published; the
-//! Huffman tables are (symbol, length) lists in canonical order).
+//! Huffman tables are (symbol, length) lists in canonical order). Some tables are kept as published although the
+//! encoder does not use them yet.
+#![allow(dead_code)]
 
 pub const AVG_G3_FREQS: [u16; 3] = [16000, 18000, 24000];
 

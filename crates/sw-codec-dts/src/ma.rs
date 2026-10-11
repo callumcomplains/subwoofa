@@ -41,7 +41,6 @@ fn xll_bit(c: Channel) -> u32 {
         Bfc => 25,
         Bfl => 26,
         Bfr => 27,
-        _ => 31,
     }
 }
 
