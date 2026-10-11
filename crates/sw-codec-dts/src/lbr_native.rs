@@ -1,7 +1,7 @@
 //! File-level driver for DTS Express: stems in, `.dtshd` out (extension substream frames only).
 
 use crate::dtshd::{DtsHdInfo, Kind, StreamOut};
-use crate::exss::{exss_frame_lbr, ExssParams};
+use crate::exss::{exss_frame_lbr, ExssExtras, ExssParams};
 use crate::lbr::{LbrConfig, LbrEncoder};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +30,8 @@ pub struct LbrRequest<'a> {
     pub output: &'a Path,
     /// Blu-ray secondary audio: extension substream 2, mixing metadata, 24-bit asset.
     pub secondary: bool,
+    /// Bitstream-tab metadata: the mixing metadata of secondary audio, Express dialog mode.
+    pub bitstream: sw_core::BitstreamOptions,
 }
 
 pub struct LbrStats {
@@ -95,23 +97,27 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     }
     let n = 4096usize; // samples per Express frame
     let total_channels = nch + usize::from(map.lfe.is_some());
-    let exss = ExssParams {
+    let frames_total = want.div_ceil(n as u64) as usize;
+    // the mixing metadata of every frame: the primary audio's attenuation (with its fades) and the mono mapping
+    let plan = req.secondary.then(|| crate::mixmeta::SecondaryPlan::new(&req.bitstream.secondary, n as f64 / rate as f64, want as f64 / rate as f64, frames_total + 1));
+    let mut exss = ExssParams {
         sample_rate: rate,
         channels: total_channels,
-        bit_res: if req.secondary { 24 } else { 16 },
+        bit_res: (stems.bits as u32).clamp(16, 24),
         spk_mask: map.mask as u32,
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
         x96_in_core: false, xch_in_core: false, secondary: req.secondary,
+        extras: ExssExtras { min_header: 28, emb_stereo: false, mix: plan.as_ref().map(|p| p.frames[0].clone()), ..Default::default() },
     };
     // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
     let overhead = exss_frame_lbr(&exss, &[0u8; 4]).len() - 4;
     let bitrate = (req.bitrate_kbps as u64 * 1000).saturating_sub(overhead as u64 * 8 * rate as u64 / n as u64) as u32;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate })?;
-    let frames_total = want.div_ceil(n as u64);
-    let _ = frames_total;
-    let mut file = StreamOut::create(req.output, Some(DtsHdInfo::new(rate, n as u16, want, map.mask, Kind::ExtensionOnly)))?;
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate, dialog_mode: req.secondary && req.bitstream.secondary.dialog_mode })?;
+    let mut info = DtsHdInfo::new(rate, n as u16, want, map.mask, Kind::ExtensionOnly);
+    crate::mixmeta::apply_container_options(&mut info, &req.bitstream, want as f64 / rate as f64);
+    let mut file = StreamOut::create(req.output, Some(info))?;
     let slots: Vec<usize> = map.order.iter().copied().chain(map.lfe).collect();
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
@@ -126,6 +132,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         let block: Vec<Vec<f32>> = slots.iter().map(|&s| planar[s][..got].to_vec()).collect();
         remaining -= got as u64;
         for p in enc.push(&block) {
+            exss.extras.mix = plan.as_ref().map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
             let f = exss_frame_lbr(&exss, &p);
             file.write_frame(&f, f.len())?;
             bytes += f.len() as u64;
@@ -134,6 +141,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     for p in enc.finish() {
+        exss.extras.mix = plan.as_ref().map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
         let f = exss_frame_lbr(&exss, &p);
         file.write_frame(&f, f.len())?;
         bytes += f.len() as u64;

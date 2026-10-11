@@ -14,6 +14,7 @@ mod lbr_lfe;
 mod lbr_tonal;
 pub mod lbr;
 pub mod lbr_native;
+pub mod mixmeta;
 pub mod exss;
 pub mod ma;
 pub mod ma_core;

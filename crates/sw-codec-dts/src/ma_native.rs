@@ -36,6 +36,8 @@ pub struct MaRequest<'a> {
     pub container: bool,
     /// 96 kHz: give the core an X96 extension (a 96/24 core).
     pub x96: bool,
+    /// Bitstream-tab metadata (programme information, seamless branching, wide 7.1 remapping).
+    pub bitstream: sw_core::BitstreamOptions,
 }
 
 pub struct MaStats {
@@ -79,10 +81,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     }
     // a core under 176.4 / 192 kHz lossless data sits under band 0 (up to 5.1); wider streams stand alone
     let core_bitrate_kbps = if nch > 8 || (rate > 96_000 && nch > 6) { None } else { req.core_bitrate_kbps };
+    // the remapping sets describe a wide 7.1 layout: the switch does nothing for any other
+    let wide_remap = req.bitstream.wide_remap && req.layout.channels.contains(&sw_core::Channel::Lw);
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
-            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96 })?),
-            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0 })),
+            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap })?),
+            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: 0, wide_remap })),
         })
     };
     let mut enc = make()?;
@@ -106,6 +110,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let lead = if req.container && core_bitrate_kbps.is_some() { 2 * n } else { 0 };
     let info = req.container.then(|| {
         let mut i = DtsHdInfo::new(rate, n as u16, want, map.exss_mask as u16, if core_bitrate_kbps.is_some() { Kind::CoreAndExtension } else { Kind::ExtensionOnly });
+        crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.vbr = true;
         i.core_kbps = core_bitrate_kbps.unwrap_or(0);
         i.core_payload = core_payload;

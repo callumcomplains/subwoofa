@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<job>
+  <isLosslessSelected>true</isLosslessSelected>
+  <isPrimaryAudioSelected>false</isPrimaryAudioSelected>
+  <isSecondaryAudioSelected>false</isSecondaryAudioSelected>
+  <isLBRSelected>false</isLBRSelected>
+  <isDVDSelected>false</isDVDSelected>
+  <isDECESelected>true</isDECESelected>
+  <isMediaTypeSelectedCD>false</isMediaTypeSelectedCD>
+  <isMediaTypeSelectedDVD>false</isMediaTypeSelectedDVD>
+  <isMediaTypeSelectedBD>false</isMediaTypeSelectedBD>
+  <isMediaTypeSelectedBDSecondaryAudio>false</isMediaTypeSelectedBDSecondaryAudio>
+  <isMediaTypeSelectedDECEAudio>true</isMediaTypeSelectedDECEAudio>
+  <isCDSelected>false</isCDSelected>
+  <bitrate>1509000</bitrate>
+  <channellayout>5.1 - L, R, C, LFE, Ls, Rs</channellayout>
+  <mainChannelCount>5</mainChannelCount>
+  <producttype>DTS_MasterAudio.jpg</producttype>
+  <productvalue>DTS_MasterAudio.jpg</productvalue>
+  <mediatype>Digital Delivery (.dtshd)</mediatype>
+  <bitwidth>24</bitwidth>
+  <dialognormalization>-31 dBFS (No Attenuation)</dialognormalization>
+  <usedialognormalization>true</usedialognormalization>
+  <dialognormalizationnounits>-31</dialognormalizationnounits>
+  <samplerate>48000</samplerate>
+  <attenuation>false</attenuation>
+  <esphaseshift>false</esphaseshift>
+  <is51ES>false</is51ES>
+  <isPremixed>false</isPremixed>
+  <useLFE>true</useLFE>
+  <encodetype>Lossless and Core</encodetype>
+  <filetype>.dtshd</filetype>
+  <coretype>5.1</coretype>
+  <isDropRateSelected>false</isDropRateSelected>
+  <framerate>24</framerate>
+  <encodeEntireFile>true</encodeEntireFile>
+  <timecodestarttime>00:00:00:00</timecodestarttime>
+  <timecodeendtime>02:09:55:01</timecodeendtime>
+  <timecodeencodefrom>00:00:00:00</timecodeencodefrom>
+  <timecodeencodeto>02:09:55:01</timecodeencodeto>
+  <useTimecodeReferenceTime>false</useTimecodeReferenceTime>
+  <timecodereferencetime>00:00:00:00</timecodereferencetime>
+  <savetodirectory>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\</savetodirectory>
+  <savetofilename>CITY OF GOD DTS-HD-MA 1509 TC 24 5.1 DIGITAL DELIVERY</savetofilename>
+  <leftinputfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_L.wav</leftinputfile>
+  <rightinputfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_R.wav</rightinputfile>
+  <centerinputfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_C.wav</centerinputfile>
+  <lfeinputfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_LFE.wav</lfeinputfile>
+  <leftsurroundfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_Ls.wav</leftsurroundfile>
+  <rightsurroundfile>O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_Rs.wav</rightsurroundfile>
+  <xch1file></xch1file>
+  <xch2file></xch2file>
+  <isESProductSelected>false</isESProductSelected>
+  <left51primaryvalue>3.0</left51primaryvalue>
+  <left51xchavalue>INF</left51xchavalue>
+  <left51xchbvalue>INF</left51xchbvalue>
+  <right51primaryvalue>3.0</right51primaryvalue>
+  <right51xchavalue>INF</right51xchavalue>
+  <right51xchbvalue>INF</right51xchbvalue>
+  <center51primaryvalue>3.0</center51primaryvalue>
+  <center51xchavalue>INF</center51xchavalue>
+  <center51xchbvalue>INF</center51xchbvalue>
+  <lfe51primaryvalue>3.0</lfe51primaryvalue>
+  <lfe51xchavalue>INF</lfe51xchavalue>
+  <lfe51xchbvalue>INF</lfe51xchbvalue>
+  <ls51primaryvalue>3.0</ls51primaryvalue>
+  <ls51xchavalue>3.0</ls51xchavalue>
+  <ls51xchbvalue>INF</ls51xchbvalue>
+  <rs51primaryvalue>3.0</rs51primaryvalue>
+  <rs51xchavalue>INF</rs51xchavalue>
+  <rs51xchbvalue>3.0</rs51xchbvalue>
+  <downmixSaturationCheck>false</downmixSaturationCheck>
+  <useLegacyMatrix>false</useLegacyMatrix>
+  <use51Downmix>false</use51Downmix>
+  <useCurrent>true</useCurrent>
+  <left20xchavalue>3.0</left20xchavalue>
+  <left20xchbvalue>INF</left20xchbvalue>
+  <right20xchavalue>INF</right20xchavalue>
+  <right20xchbvalue>3.0</right20xchbvalue>
+  <center20xchavalue>6.0</center20xchavalue>
+  <center20xchbvalue>6.0</center20xchbvalue>
+  <lfe20xchavalue>INF</lfe20xchavalue>
+  <lfe20xchbvalue>INF</lfe20xchbvalue>
+  <ls20xchavalue>6.0</ls20xchavalue>
+  <ls20xchbvalue>INF</ls20xchbvalue>
+  <rs20xchavalue>INF</rs20xchavalue>
+  <rs20xchbvalue>6.0</rs20xchbvalue>
+  <use20Downmix>false</use20Downmix>
+  <isEmbeddedDownmix>false</isEmbeddedDownmix>
+  <is2ChDmixLoRo>false</is2ChDmixLoRo>
+  <is2ChDmixLtRt>false</is2ChDmixLtRt>
+  <inputfileorder> "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_L.wav"  "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_R.wav"  "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_Ls.wav"  "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_Rs.wav"  "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_C.wav"  "O:\MEDIA\Unsorted\CITY OF GOD REMUX\AUDIO-FOR-ENCODE\CityOfGod_JPN_LFE.wav" </inputfileorder>
+  <residualdata>-r1</residualdata>
+  <use9624>false</use9624>
+  <useBDSecondaryAudioMetaData>false</useBDSecondaryAudioMetaData>
+  <programinfo></programinfo>
+  <paMetadataPrimaryValue>6.0</paMetadataPrimaryValue>
+  <usePrimaryAudioAttenuation>false</usePrimaryAudioAttenuation>
+  <paMetadataFadeDownValue>2.0</paMetadataFadeDownValue>
+  <paMetadataFadeUpValue>2.0</paMetadataFadeUpValue>
+  <monoMetadataLValue>INF</monoMetadataLValue>
+  <monoMetadataRValue>INF</monoMetadataRValue>
+  <monoMetadataCValue>0.0</monoMetadataCValue>
+  <monoMetadataLFEValue>INF</monoMetadataLFEValue>
+  <monoMetadataLsValue>INF</monoMetadataLsValue>
+  <monoMetadataRsValue>INF</monoMetadataRsValue>
+  <useaaf>false</useaaf>
+  <useAAFPanningMetadata>false</useAAFPanningMetadata>
+  <aaffilename></aaffilename>
+  <useexpressdialogmode>false</useexpressdialogmode>
+  <usewideremapping>false</usewideremapping>
+  <seamlessbranching-singleclip>false</seamlessbranching-singleclip>
+  <seamlessbranching-csvbranchpoints>false</seamlessbranching-csvbranchpoints>
+  <seamlessbranching-csvfilename></seamlessbranching-csvfilename>
+  <autoverify>false</autoverify>
+  
+  <usingAAFMetadata>false</usingAAFMetadata>
+  <isAAFPanningActive>false</isAAFPanningActive>
+  <AAFAttenuationKind>UNISON</AAFAttenuationKind>
+  <AAFAttenuationUnison>-2147483648</AAFAttenuationUnison>
+  <AAFAttenuationLF>-2147483648</AAFAttenuationLF>
+  <AAFAttenuationRF>-2147483648</AAFAttenuationRF>
+  <AAFAttenuationC>-2147483648</AAFAttenuationC>
+  <AAFAttenuationLFE>-2147483648</AAFAttenuationLFE>
+  <AAFAttenuationLS>-2147483648</AAFAttenuationLS>
+  <AAFAttenuationRS>-2147483648</AAFAttenuationRS>
+  <isAAFPanningEnabled>false</isAAFPanningEnabled>
+  <AAFPanningLF>-2147483648</AAFPanningLF>
+  <AAFPanningRF>-2147483648</AAFPanningRF>
+  <AAFPanningC>-2147483648</AAFPanningC>
+  <AAFPanningLS>-2147483648</AAFPanningLS>
+  <AAFPanningRS>-2147483648</AAFPanningRS><moduleid>E</moduleid>
+  <modulecommand>E</modulecommand>
+  <jobid>7658_1791060381496</jobid>
+  <configfile>C:\Users\Callum\.DTS\MAS-SAS\Queue\7658_1791060381496\CITY OF GOD DTS-HD-MA 1509 TC 24 5.1 DIGITAL DELIVERY.cfg</configfile>
+</job>

@@ -3202,6 +3202,7 @@ dependencies = [
  "sw-core",
  "sw-pcm",
  "sw-tools",
+ "sw-verify",
 ]
 
 [[package]]
@@ -3219,7 +3220,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sw-codec-ac3",
+ "sw-codec-pcm",
  "sw-codec-truehd",
+ "sw-core",
+ "sw-pcm",
  "thiserror 2.0.21",
 ]
 

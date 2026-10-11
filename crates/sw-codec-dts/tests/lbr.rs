@@ -13,7 +13,7 @@ fn mono_stream_decodes() {
         return;
     }
     let bitrate = 192_000;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate, dialog_mode: false }).unwrap();
     let frames = 12;
     let total = 4096 * frames;
     let mut seed = 3u32;
@@ -31,7 +31,7 @@ fn mono_stream_decodes() {
     }
     payloads.extend(enc.finish());
     assert!(payloads.len() >= frames, "{} frames", payloads.len());
-    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false, extras: Default::default() };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));
@@ -66,7 +66,7 @@ fn lfe_channel_decodes() {
     }
     let frames = 14;
     let total = 4096 * frames;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000 }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000, dialog_mode: false }).unwrap();
     let tone = |f: f32, a: f32, i: usize| a * (2.0 * std::f32::consts::PI * f * i as f32 / 48_000.0).sin();
     let chans: Vec<Vec<f32>> = (0..6).map(|c| (0..total).map(|i| if c == 5 { tone(60.0, 0.5, i) } else if c == 4 { tone(440.0, 0.2, i) } else { 0.0 }).collect()).collect();
     let mut payloads = Vec::new();
@@ -75,7 +75,7 @@ fn lfe_channel_decodes() {
         payloads.extend(enc.push(&block));
     }
     payloads.extend(enc.finish());
-    let exss = ExssParams { sample_rate: 48_000, channels: 6, bit_res: 16, spk_mask: 0xF, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 6, bit_res: 16, spk_mask: 0xF, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false, extras: Default::default() };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));
@@ -120,7 +120,7 @@ fn tonal_components_lift_a_steady_signal() {
     }
     let frames = 14;
     let total = 4096 * frames;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate: 48_000 }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 1, speaker_mask: 1, lfe: false, bitrate: 48_000, dialog_mode: false }).unwrap();
     let mut seed = 7u32;
     let x: Vec<f32> = (0..total)
         .map(|i| {
@@ -136,7 +136,7 @@ fn tonal_components_lift_a_steady_signal() {
         payloads.extend(enc.push(&[chunk.to_vec()]));
     }
     payloads.extend(enc.finish());
-    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels: 1, bit_res: 16, spk_mask: 1, with_core: false, dialnorm: 0, frame_duration_code: 7, x96_in_core: false, xch_in_core: false, secondary: false, extras: Default::default() };
     let mut stream = Vec::new();
     for p in &payloads {
         stream.extend(exss_frame_lbr(&exss, p));

@@ -86,6 +86,8 @@ pub struct Request<'a> {
     pub hra_kbps: Option<u32>,
     /// DTS 96/24: the stems are 96 kHz and an X96 extension follows the core.
     pub x96: bool,
+    /// Bitstream-tab metadata (programme information, seamless branching, wide 7.1 remapping).
+    pub bitstream: sw_core::BitstreamOptions,
 }
 
 pub struct Stats {
@@ -143,7 +145,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     let make_hra = |kbps: u32| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     };
     let mut hra = req.hra_kbps.map(|kbps| {
@@ -161,6 +163,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let mut hd = if container {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = bitrate / 1000;
         i.core_payload = core_payload;
         i.codec_delay = (delay + lead) as u16;

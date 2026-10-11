@@ -369,7 +369,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let coded_extra = if kind == Hra96Kind::Matrix { 0 } else { map.extra.len() };
     let nch_total = 5 + usize::from(has_lfe) + coded_extra;
     let exss_mask: u32 = req.layout.channels.iter().enumerate().filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i))).map(|(_, c)| crate::ma::exss_bit(*c)).fold(0, |m, b| m | b);
-    let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false };
+    let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
     let make_encoder = || Hra96Encoder::new(Hra96Config { has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss() });
     let mut enc = make_encoder()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
@@ -387,6 +387,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let core_mask: u32 = if kind == Hra96Kind::Rear { map.core.iter().map(|&i| crate::ma::exss_bit(req.layout.channels[i])).fold(0, |m, b| m | b) | if has_lfe { 0x8 } else { 0 } } else { exss_mask };
     let info = container.then(|| {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = 1509;
         i.core_payload = core_payload;
         i.codec_delay = codec_delay as u16;

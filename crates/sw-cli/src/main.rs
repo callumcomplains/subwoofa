@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use sw_backend_ffmpeg as ff;
@@ -296,7 +296,82 @@ enum Cmd {
         /// Audio files (wav, aiff, caf, flac): the sample format: s16, s24 (default), s32, f32 or f64.
         #[arg(long)]
         pcm_format: Option<String>,
+        #[command(flatten)]
+        bitstream: BitstreamArgs,
     },
+}
+
+/// The Bitstream tab of the original encoder.
+#[derive(Args, Debug, Clone, Default)]
+struct BitstreamArgs {
+    /// Programme information stored in the .dtshd file (Latin-1, up to 2000 characters).
+    #[arg(long)]
+    program_info: Option<String>,
+    /// Seamless branching:  for a clip with no branch points inside, or a CSV file of branch point timecodes
+    /// (HH:MM:SS:FF, one per line).
+    #[arg(long)]
+    seamless: Option<String>,
+    /// Blu-ray secondary audio: how many dB the primary audio is turned down while this stream plays (default 6).
+    #[arg(long)]
+    primary_attenuation: Option<f64>,
+    /// Blu-ray secondary audio: seconds to reach that attenuation at the start (0 to 9).
+    #[arg(long)]
+    fade_down: Option<f64>,
+    /// Blu-ray secondary audio: seconds to release it again at the end (0 to 9).
+    #[arg(long)]
+    fade_up: Option<f64>,
+    /// DTS Express dialog mode: only the lower half of the band is coded.
+    #[arg(long)]
+    dialog_mode: bool,
+    /// Blu-ray secondary audio, mono: where it goes, as dB of attenuation per speaker, e.g.  (the default) or
+    /// . Speakers: C, L, R, Ls, Rs, LFE.
+    #[arg(long)]
+    mono_map: Option<String>,
+    /// Wide 7.1: add the speaker remapping sets for side-rear and 5.1 playback.
+    #[arg(long)]
+    wide_remap: bool,
+}
+
+impl BitstreamArgs {
+    fn options(&self) -> Result<sw_core::BitstreamOptions, String> {
+        use sw_core::bitstream::{MonoMap, Seamless};
+        let mut o = sw_core::BitstreamOptions::default();
+        o.program_info = self.program_info.clone().unwrap_or_default();
+        o.wide_remap = self.wide_remap;
+        o.secondary.dialog_mode = self.dialog_mode;
+        if let Some(v) = self.primary_attenuation {
+            o.secondary.attenuation_db = v.clamp(0.0, 60.0);
+        }
+        o.secondary.fade_down_secs = self.fade_down.unwrap_or(0.0).clamp(0.0, 9.0);
+        o.secondary.fade_up_secs = self.fade_up.unwrap_or(0.0).clamp(0.0, 9.0);
+        if let Some(m) = &self.mono_map {
+            let mut map = MonoMap::default();
+            for part in m.split(',').filter(|p| !p.trim().is_empty()) {
+                let (name, db) = part.split_once('=').ok_or(format!("--mono-map: '{part}' is not SPEAKER=dB"))?;
+                let db: f64 = db.trim().parse().map_err(|_| format!("--mono-map: '{db}' is not a number"))?;
+                let slot = match name.trim().to_ascii_lowercase().as_str() {
+                    "c" => &mut map.c,
+                    "l" => &mut map.l,
+                    "r" => &mut map.r,
+                    "ls" => &mut map.ls,
+                    "rs" => &mut map.rs,
+                    "lfe" => &mut map.lfe,
+                    other => return Err(format!("--mono-map: unknown speaker '{other}' (C, L, R, Ls, Rs, LFE)")),
+                };
+                *slot = Some(db);
+            }
+            o.secondary.mono_map = map;
+        }
+        o.seamless = match self.seamless.as_deref() {
+            None | Some("") | Some("off") => Seamless::Off,
+            Some("single") => Seamless::SingleClip,
+            Some(path) => {
+                let text = std::fs::read_to_string(path).map_err(|e| format!("--seamless: cannot read {path}: {e}"))?;
+                Seamless::Timecodes(text.lines().map(|l| l.split(',').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect())
+            }
+        };
+        Ok(o)
+    }
 }
 
 fn main() {
@@ -377,7 +452,8 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24, pcm_format } => {
+        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24, pcm_format, bitstream } => {
+            let bitstream = bitstream.options()?;
             let mut progress = Progress::new();
             let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
@@ -411,6 +487,7 @@ fn run() -> Result<(), String> {
                     source_layout: (src != layout.id).then(|| src.to_string()),
                     core_x96: core_96_24,
                     pcm_format: pcm_format.clone().unwrap_or_default(),
+                    bitstream: bitstream.clone(),
                 };
                 let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |p, _| progress.tick(p)).map_err(|e| match e {
                     sw_queue::run::Failure::Canceled => "canceled".to_string(),
@@ -425,7 +502,7 @@ fn run() -> Result<(), String> {
             if engine == "native" {
                 if stream == StreamType::DtsExpress {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output, secondary: dest == Destination::BluRaySecondary };
+                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output, secondary: dest == Destination::BluRaySecondary, bitstream: bitstream.clone() };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 4096) as f64 / stems.sample_rate as f64;
@@ -464,6 +541,7 @@ fn run() -> Result<(), String> {
                         output: &output,
                         container: output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd")),
                         x96: core_96_24,
+                        bitstream: bitstream.clone(),
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
@@ -478,6 +556,7 @@ fn run() -> Result<(), String> {
                         layout,
                         bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { bitrate.unwrap_or(1509) },
                         x96: stream == StreamType::Dts9624,
+                        bitstream: bitstream.clone(),
                         hra_kbps: if stream == StreamType::DtsHdHra { Some(bitrate.unwrap_or(3018)) } else { None },
                         dialnorm: { let n = dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
                         pcm_bits: (stems.bits as u32).clamp(16, 24),

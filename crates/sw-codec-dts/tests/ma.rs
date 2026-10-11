@@ -53,7 +53,7 @@ fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0 });
+    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0, wide_remap: false });
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 99u32;
@@ -131,7 +131,7 @@ fn immersive(layout_id: &str, rate: u32) {
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0 });
+    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0, wide_remap: false });
     let n = enc.frame_samples();
     let nch = map.order.len();
     assert_eq!(nch, layout.channels.len());

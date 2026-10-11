@@ -26,13 +26,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     let n = enc.frame_samples();
     if let Some(kbps) = req.hra_kbps {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false };
+        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
         enc.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
     }
     let container = req.hra_kbps.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (req.bitrate_kbps * 1000 * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
         let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = req.bitrate_kbps;
         i.core_payload = core_payload;
         i
@@ -67,7 +68,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let blackout = if container {
         Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes }).ok().and_then(|mut e| {
             if let Some(kbps) = req.hra_kbps {
-                let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false };
+                let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
                 e.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
             }
             let zeros = vec![vec![0.0f64; n]; slots.len()];

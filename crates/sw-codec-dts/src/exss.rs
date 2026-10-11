@@ -24,6 +24,43 @@ pub struct ExssParams {
     pub xch_in_core: bool,
     /// DTS Express as Blu-ray secondary audio: extension substream index 2, mixed with the primary audio.
     pub secondary: bool,
+    /// Details that only some streams need.
+    pub extras: ExssExtras,
+}
+
+/// Optional parts of an extension substream header, measured on the original encoder's output.
+#[derive(Debug, Clone, Default)]
+pub struct ExssExtras {
+    /// Mixing metadata of this frame (secondary audio): the attenuation of the primary audio, and for a mono
+    /// secondary where it goes in the output speakers.
+    pub mix: Option<crate::mixmeta::FrameMix>,
+    /// Smallest header size in bytes. The original encoder pads its headers with zero bytes to a fixed size
+    /// per stream type (32 for lossless, 28 otherwise) and, beyond that, to a multiple of four. 0 writes the
+    /// header as small as it can be.
+    pub min_header: usize,
+    /// The asset says that it embeds a stereo downmix.
+    pub emb_stereo: bool,
+    /// The asset says that it embeds a 5.1 downmix (XXCH and XCH streams always do).
+    pub emb_5_1: bool,
+    /// Add the six speaker remapping sets of a wide 7.1 stream.
+    pub wide_remap: bool,
+}
+
+/// Speaker remapping sets of a wide 7.1 stream (L R C LFE Ls Rs Lw Rw), as the original encoder writes them: for
+/// each target layout its speaker mask, the number of decoded channels (8), and per target speaker which decoded
+/// channels feed it with which 5-bit remapping code (30 is 0 dB, 12 is -9 dB, ...).
+pub fn wide_remap_sets() -> (Vec<u32>, Vec<Vec<(u32, Vec<u32>)>>) {
+    let masks = vec![2123, 8207, 47, 79, 159, 287];
+    let c = |m: u32, g: u32| (m, vec![g]);
+    let rows: Vec<Vec<(u32, Vec<u32>)>> = vec![
+        vec![c(1, 30), c(2, 30), c(4, 30), c(32, 30), c(8, 30), c(16, 30), c(64, 30), c(128, 30)],
+        vec![c(1, 30), c(2, 30), c(4, 30), c(8, 30), c(16, 30), c(32, 30), c(64, 12), c(128, 12)],
+        vec![c(1, 30), c(2, 30), c(4, 30), c(8, 30), c(16, 30), c(32, 30), (0, vec![]), (0, vec![])],
+        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![24, 18]), (144, vec![24, 18]), c(32, 30), c(8, 24), c(16, 24)],
+        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![30, 18]), (144, vec![30, 18]), c(32, 30), (24, vec![6, 6]), (0, vec![])],
+        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![30, 18]), (144, vec![30, 18]), c(32, 30), (24, vec![6, 6]), (0, vec![])],
+    ];
+    (masks, rows)
 }
 
 fn ref_clock_code(rate: u32) -> u32 {
@@ -88,18 +125,42 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     a.put(p.bit_res - 1, 5);
     a.put(fs_index(p.sample_rate), 4);
     a.put(p.channels as u32 - 1, 8);
-    a.put(1, 1); // channels are speaker feeds
-    if p.channels > 2 {
-        a.put(0, 1); // no embedded stereo downmix
+    // a mono secondary stream is not tied to a speaker: its mixing matrix says where it goes
+    let mono_secondary = lbr.is_some() && p.secondary && p.channels == 1 && p.extras.mix.is_some();
+    if mono_secondary {
+        a.put(0, 1); // representation type instead of a speaker mapping
+        a.put(0, 3);
+    } else {
+        a.put(1, 1); // channels are speaker feeds
+        if p.channels > 2 {
+            a.put(u32::from(p.extras.emb_stereo), 1); // embedded stereo downmix
+        }
+        if p.channels > 6 {
+            a.put(u32::from(xxch.is_some() || p.xch_in_core || p.extras.emb_5_1), 1); // embedded 5.1 downmix (in the XXCH extension, in the 5.1 core of an XCH stream, or in the XLL hierarchy)
+        }
+        let mask_bits: u32 = if p.extras.wide_remap { 16 } else if p.spk_mask <= 0xF { 4 } else if p.spk_mask <= 0xFF { 8 } else if p.spk_mask <= 0xFFF { 12 } else { 16 };
+        a.put(1, 1); // speaker mask enabled
+        a.put(mask_bits / 4 - 1, 2);
+        a.put(p.spk_mask, mask_bits);
+        if p.extras.wide_remap {
+            let (masks, rows) = wide_remap_sets();
+            a.put(masks.len() as u32, 3);
+            for m in &masks {
+                a.put(*m, mask_bits);
+            }
+            for set in &rows {
+                a.put(p.channels as u32 - 1, 5); // decoded channels the sets refer to
+                for (mask, codes) in set {
+                    a.put(*mask, p.channels as u32);
+                    for c in codes {
+                        a.put(*c, 5);
+                    }
+                }
+            }
+        } else {
+            a.put(0, 3); // no remapping sets
+        }
     }
-    if p.channels > 6 {
-        a.put(u32::from(xxch.is_some() || p.xch_in_core), 1); // embedded 5.1 downmix (in the XXCH extension, or the 5.1 core of an XCH stream)
-    }
-    let mask_bits: u32 = if p.spk_mask <= 0xF { 4 } else if p.spk_mask <= 0xFF { 8 } else if p.spk_mask <= 0xFFF { 12 } else { 16 };
-    a.put(1, 1); // speaker mask enabled
-    a.put(mask_bits / 4 - 1, 2);
-    a.put(p.spk_mask, mask_bits);
-    a.put(0, 3); // no remapping sets
     a.put(0, 1); // no dynamic range coefficient
     if p.dialnorm > 0 {
         a.put(1, 1);
@@ -109,7 +170,22 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     }
     let secondary = lbr.is_some() && p.secondary;
     if secondary {
-        a.put(0, 1); // no mixing metadata for this asset
+        match (&p.extras.mix, mono_secondary) {
+            (Some(m), true) => {
+                a.put(1, 1); // mixing metadata present
+                a.put(1, 1); // mixed externally
+                a.put(30, 6); // gain of the secondary audio itself
+                a.put(2, 2); // DRC prior to mixing: limited
+                a.put(7, 3);
+                a.put(0, 1); // one scaling code for all outputs
+                a.put(m.scale as u32, 6); // attenuation of the primary audio
+                a.put(m.speakers as u32, 6); // speakers fed by the mono signal
+                for g in &m.gains {
+                    a.put(*g as u32, 6);
+                }
+            }
+            _ => a.put(0, 1), // no mixing matrix: the channels go to their own speakers
+        }
     }
     let write_xll = |a: &mut BitWriter, x: &[u8]| {
         a.put(x.len() as u32 - 1, nb4f);
@@ -148,11 +224,14 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
         a.put(0, 3); // stream id
     }
     if secondary {
-        // as in the commercial secondary-audio streams: decoded by the secondary decoder, followed by
-        // seven fixed bits whose meaning is not published
-        a.put(1, 1);
+        if !mono_secondary {
+            // channels mapped one to one to speakers carry the attenuation of the primary audio here
+            a.put(1, 1); // one-to-one mixing
+            a.put(0, 1); // one scaling code for all channels
+            a.put(p.extras.mix.as_ref().map_or(49, |m| m.scale as u32), 6);
+        }
+        a.put(1, 1); // decoded by the secondary decoder
         a.put(0, 1); // no revision 2 DRC
-        a.put(0b0100101, 7);
     } else {
         a.put(0, 1); // decode in primary decoder
         if xll.is_some() {
@@ -172,8 +251,9 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     // secondary audio: presentation mask of 3 bits plus two asset masks, then the mixing configuration (10 bits)
     let sel_bits = if secondary { 3 + 16 + 1 + 10 } else { 1 + 8 + 1 };
     let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + nb4f as usize;
-    let bits_total = bits_before_desc + alen * 8 + 1;
-    let hsize = bits_total.div_ceil(8) + 2;
+    let bits_total = bits_before_desc + alen * 8 + if p.with_core { 6 } else { 1 };
+    let natural = bits_total.div_ceil(8) + 2;
+    let hsize = if p.extras.min_header == 0 { natural } else { p.extras.min_header.max(natural.div_ceil(4) * 4) };
     // whole 32-bit words: DTS-HD tools (StreamTools) refuse streams whose frames are not padded to 4 bytes
     let pad = (4 - (hsize + payload) % 4) % 4;
     let frame_size = hsize + payload + pad;
@@ -219,7 +299,8 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
     }
     h.align(8);
     let mut hb = h.into_bytes();
-    assert_eq!(hb.len() + 2, hsize);
+    assert_eq!(hb.len() + 2, natural);
+    hb.resize(hsize - 2, 0); // the original pads its headers up to a fixed size
     let crc = crc16(&hb[5..]);
     hb.extend_from_slice(&crc.to_be_bytes());
     if let Some(x) = xbr {

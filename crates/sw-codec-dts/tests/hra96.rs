@@ -56,7 +56,7 @@ fn check(name: &str, layout_id: &str, expected_channels: usize, cs_is_matrixed: 
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("t.dtshd");
     let es = sw_codec_dts::es_options(layout.channels.contains(&sw_core::Channel::Cs), layout, false, false);
-    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es, hra_kbps: Some(4224), x96: false };
+    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es, hra_kbps: Some(4224), x96: false, bitstream: Default::default() };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));

@@ -23,6 +23,8 @@ pub struct MaCoreConfig {
     /// 96 kHz only: give the core an X96 extension (a 96/24 core), so decoders that play just the core
     /// substream still get the full band. A lossless decoder ignores it.
     pub x96: bool,
+    /// Add the speaker remapping sets of a wide 7.1 stream (Bitstream tab).
+    pub wide_remap: bool,
 }
 
 /// Half-length of the decimator (linear phase, Kaiser window, `2 * half + 1` taps) for a rate ratio of 2 or 4.
@@ -167,7 +169,7 @@ impl MaCoreEncoder {
             })
             .collect();
         let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: false, secondary: false };
+        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.is_some(), wide_remap: cfg.wide_remap, ..Default::default() } };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {

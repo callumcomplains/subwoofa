@@ -28,7 +28,7 @@ fn xbr_improves_on_the_core() {
     let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 2, channels, lfe: false, bitrate, dialnorm: 0, pcm_bits: 24, es: false, xch: false, perfect: true, blocks: 16 }).unwrap();
     enc.keep_residual = true;
     let n = enc.frame_samples();
-    let exss = ExssParams { sample_rate: 48_000, channels, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 48_000, channels, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: Default::default() };
     let mut stage = HraStage::new(2500, 48_000, n, 16, exss);
     let frames = 60;
     let total = n * frames;
@@ -92,7 +92,7 @@ fn hra_at_96_khz_is_core_x96_and_xbr() {
     let frame_bytes = (bitrate as usize * 512 / 48_000 / 8) & !3;
     let mut enc = Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: 0, pcm_bits: 24, x96_bytes: (frame_bytes / 5).max(96) & !3 }).unwrap();
     let n = enc.frame_samples();
-    let exss = ExssParams { sample_rate: 96_000, channels: 2, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false };
+    let exss = ExssParams { sample_rate: 96_000, channels: 2, bit_res: 24, spk_mask: 0x2, with_core: true, dialnorm: 0, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: Default::default() };
     enc.set_hra(HraStage::new(3018, 96_000, n, 16, exss));
     let total = n * 50;
     let sig: Vec<Vec<f64>> = (0..2)

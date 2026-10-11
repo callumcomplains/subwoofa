@@ -57,7 +57,7 @@ fn core_roundtrip_x(name: &str, layout_id: &str, rate: u32, frames: usize, bit_r
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96 }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96, wide_remap: false }).unwrap();
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 7u32;
@@ -125,7 +125,7 @@ fn seven_one_embedded_five_one_downmix() {
     let layout = ChannelLayout::find("7.1-side-rear").unwrap();
     let map = map_layout(layout);
     let frames = 16;
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false}).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false, wide_remap: false }).unwrap();
     let n = enc.frame_samples();
     let mut seed = 5u32;
     let sigs: Vec<Vec<i32>> = (0..8).map(|c| signal(c, n * frames, &mut seed)).collect();

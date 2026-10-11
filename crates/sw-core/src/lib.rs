@@ -5,11 +5,13 @@
 //! built from public information only.
 
 pub mod autoimport;
+pub mod bitstream;
 pub mod channel;
 pub mod downmix;
 pub mod formats;
 pub mod layout;
 
+pub use bitstream::BitstreamOptions;
 pub use channel::Channel;
 pub use formats::{Destination, StreamType};
 pub use layout::{ChannelLayout, LAYOUTS};

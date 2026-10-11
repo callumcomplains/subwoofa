@@ -49,6 +49,9 @@ pub struct EncodeSpec {
     /// Audio files (WAV, AIFF, CAF, FLAC): the sample format, one of "s16", "s24" (default), "s32", "f32", "f64".
     #[serde(default)]
     pub pcm_format: String,
+    /// The Bitstream tab: programme information, seamless branching, secondary-audio mixing metadata, wide 7.1 remapping.
+    #[serde(default)]
+    pub bitstream: sw_core::BitstreamOptions,
 }
 
 fn yes() -> bool {
@@ -265,6 +268,7 @@ fn execute_inner(
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
             secondary: dest == Destination::BluRaySecondary,
+            bitstream: spec.bitstream.clone(),
         };
         sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::lbr_native::LbrError::Canceled => Failure::Canceled,
@@ -284,6 +288,7 @@ fn execute_inner(
             output: std::path::Path::new(&spec.output),
             container: spec.output.to_ascii_lowercase().ends_with(".dtshd"),
             x96: spec.core_x96,
+            bitstream: spec.bitstream.clone(),
         };
         sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
@@ -294,6 +299,7 @@ fn execute_inner(
             layout,
             bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { spec.bitrate.unwrap_or(1509) },
             x96: stream == StreamType::Dts9624,
+            bitstream: spec.bitstream.clone(),
             hra_kbps: if stream == StreamType::DtsHdHra { Some(spec.bitrate.unwrap_or(3018)) } else { None },
             dialnorm: { let n = spec.dialnorm.unwrap_or(31) as i32; if n >= 31 { 0 } else { -n } },
             pcm_bits: (stems.bits as u32).clamp(16, 24),

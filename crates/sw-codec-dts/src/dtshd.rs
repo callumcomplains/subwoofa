@@ -11,8 +11,9 @@
 //! STRMDATA  the stream, every frame a whole number of 32-bit words
 //! NAVI-TBL  start offset of every frame                                    (variable rate streams)
 //! TIMECODE  clock, frame rate, start and reference time
-//! BUILDVER  text, FILEINFO  flags
+//! BUILDVER  text, FILEINFO  the programme information text
 //! BLACKOUT  one silent frame (what StreamTools pastes for "add silence")  (when supplied)
+//! BRANCHPT  seamless-branching access units                                (when branching is on)
 //! ```
 
 use std::io::{Seek, SeekFrom, Write};
@@ -102,11 +103,15 @@ pub struct DtsHdInfo {
     /// speaker activity mask.
     pub core_rate: Option<u32>,
     pub core_mask: Option<u16>,
+    /// Payload of the FILEINFO chunk (see `mixmeta::file_info`): the programme information text.
+    pub file_info: Vec<u8>,
+    /// Payload of the BRANCHPT chunk (see `mixmeta::branch_points`), written after the blackout frame.
+    pub branch_points: Option<Vec<u8>>,
 }
 
 impl DtsHdInfo {
     pub fn new(sample_rate: u32, samples_per_frame: u16, total_samples: u64, ch_mask: u16, kind: Kind) -> DtsHdInfo {
-        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), codec_delay: 0, core_rate: None, core_mask: None }
+        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), codec_delay: 0, core_rate: None, core_mask: None, file_info: vec![0x09, 0x0a, 0, 0], branch_points: None }
     }
 }
 
@@ -243,9 +248,12 @@ REVISION = 0
 ".to_vec();
         build.resize(76, 0);
         chunk(&mut t, b"BUILDVER", &build);
-        chunk(&mut t, b"FILEINFO", &[0x09, 0x0a, 0, 0]);
+        chunk(&mut t, b"FILEINFO", &info.file_info);
         if let Some(b) = blackout {
             chunk(&mut t, b"BLACKOUT", b);
+        }
+        if let Some(b) = &info.branch_points {
+            chunk(&mut t, b"BRANCHPT", b);
         }
         self.out.write_all(&t)?;
         self.out.flush()?;
