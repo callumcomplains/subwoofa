@@ -44,6 +44,8 @@ pub enum StreamType {
     MonkeysAudio,
     /// MPEG-4 Audio Lossless coding.
     MpegAls,
+    /// Digital cinema sound: an MXF track file of 24-bit PCM.
+    DcpAudio,
     /// DSD (the audio of SACD) in a DSF file.
     DsdDsf,
     /// DSD in a DSDIFF file.
@@ -72,6 +74,7 @@ impl StreamType {
         StreamType::WavPack,
         StreamType::MonkeysAudio,
         StreamType::MpegAls,
+        StreamType::DcpAudio,
         StreamType::DsdDsf,
         StreamType::DsdDff,
     ];
@@ -98,6 +101,7 @@ impl StreamType {
             StreamType::WavPack => "wavpack",
             StreamType::MonkeysAudio => "ape",
             StreamType::MpegAls => "als",
+            StreamType::DcpAudio => "dcp-audio",
             StreamType::DsdDsf => "dsf",
             StreamType::DsdDff => "dff",
         }
@@ -129,6 +133,7 @@ impl StreamType {
             StreamType::WavPack => "WavPack",
             StreamType::MonkeysAudio => "Monkey's Audio",
             StreamType::MpegAls => "MPEG-4 ALS",
+            StreamType::DcpAudio => "DCP sound (MXF, 24-bit PCM)",
             StreamType::DsdDsf => "DSD (DSF)",
             StreamType::DsdDff => "DSD (DSDIFF)",
         }
@@ -145,7 +150,7 @@ impl StreamType {
     /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting
     /// instead of a bit rate.
     pub const fn is_audio_file(self) -> bool {
-        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DsdDsf | StreamType::DsdDff)
+        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DcpAudio | StreamType::DsdDsf | StreamType::DsdDff)
     }
 
     /// Whether Subwoofa has its own encoder for the stream (every stream type does; the FFmpeg engine is an
@@ -173,6 +178,7 @@ impl StreamType {
                 | StreamType::WavPack
                 | StreamType::MonkeysAudio
                 | StreamType::MpegAls
+                | StreamType::DcpAudio
                 | StreamType::DsdDsf
                 | StreamType::DsdDff
         )
@@ -191,6 +197,7 @@ impl StreamType {
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::Mlp => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
+            StreamType::DcpAudio => &[48_000, 96_000],
             // the PCM rate of the source: the DSD rate is a separate setting
             StreamType::DsdDsf | StreamType::DsdDff => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
         }
@@ -245,7 +252,7 @@ impl Destination {
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],
-            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac, Alac, Tta, WavPack, MonkeysAudio, MpegAls, DsdDsf, DsdDff],
+            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac, Alac, Tta, WavPack, MonkeysAudio, MpegAls, DcpAudio, DsdDsf, DsdDff],
         }
     }
 
@@ -264,6 +271,7 @@ impl Destination {
                 StreamType::WavPack => "wv",
                 StreamType::MonkeysAudio => "ape",
                 StreamType::MpegAls => "als",
+                StreamType::DcpAudio => "mxf",
                 StreamType::DsdDsf => "dsf",
                 StreamType::DsdDff => "dff",
                 _ => "wav",
@@ -300,6 +308,7 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::TrueHd | StreamType::Mlp => 8,
         StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MpegAls => 8,
         StreamType::MonkeysAudio => 2,
+        StreamType::DcpAudio => 16,
         StreamType::DsdDsf | StreamType::DsdDff => 6,
         StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
@@ -336,7 +345,7 @@ pub fn bitrate_range_kbps(
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
-        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DsdDsf | StreamType::DsdDff => None,
+        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DcpAudio | StreamType::DsdDsf | StreamType::DsdDff => None,
     }
 }
 

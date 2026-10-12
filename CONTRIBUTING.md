@@ -21,7 +21,7 @@ cargo test --workspace --exclude subwoofa-app
 The desktop app lives in `app/` (Tauri, plain HTML/CSS/JS in `app/ui`): `cd app && npm install && npx tauri build --debug --no-bundle`.
 
 Tests that need FFmpeg (most round-trip tests decode the result with it) skip themselves when it is not on `PATH`,
-so install it to run the full suite. Tests that need DTS or Dolby tools skip themselves when those are missing.
+so install it to run the full suite. Tests that need DTS or Dolby tools skip themselves when those are missing. If `SW_ASDCP_DIR` names a folder with `asdcp-info` and `asdcp-test` (built from [asdcplib](https://github.com/cinecert/asdcplib)), the DCP sound tests also check the files against them.
 
 ## How the code is organised
 

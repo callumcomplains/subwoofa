@@ -297,7 +297,8 @@ enum Cmd {
         /// DTS-HD MA at 96 kHz: give the core an X96 extension (a 96/24 core).
         #[arg(long)]
         core_96_24: bool,
-        /// Audio files (wav, aiff, caf, flac): the sample format: s16, s24 (default), s32, f32 or f64.
+        /// Audio files (wav, aiff, caf, flac ...): the sample format: s16, s24 (default), s32, f32 or f64. DSD: dsd64 or dsd128.
+        /// DCP sound: the frame rate (24, 23.976, 25, 30, 48, 50, 60), then `-interop` for MXF Interop labels, e.g. 25-interop.
         #[arg(long)]
         pcm_format: Option<String>,
         #[command(flatten)]

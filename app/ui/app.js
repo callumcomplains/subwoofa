@@ -318,17 +318,21 @@ function describeStream() {
 /** Audio files (WAV, AIFF, CAF, FLAC) have a sample format instead of a bit rate and a dialnorm. */
 function syncPcmFormat() {
   const st = $("stream").value;
-  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "wavpack", "ape", "als", "dsf", "dff"].includes(st);
+  const file = ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "wavpack", "ape", "als", "dcp-audio", "dsf", "dff"].includes(st);
   $("pcmWrap").hidden = !file;
   document.querySelector(".f.dialnorm").hidden = file; // no dialogue level in a plain audio file
   if (!file) return;
   const dsd = st === "dsf" || st === "dff";
+  const dcp = st === "dcp-audio";
+  $("pcmWrap").querySelector("label span").textContent = dcp ? "Frame rate" : "Sample format";
   const flac = ["flac", "oggflac", "alac", "tta", "wavpack", "ape", "als"].includes(st);
   // DSD offers only the DSD rates; the integer-only formats only 16 and 24 bit; the rest no DSD
-  const allowed = (v) => dsd ? v.startsWith("dsd") : v.startsWith("dsd") ? false : flac ? ["s16", "s24"].includes(v) : true;
-  for (const o of $("pcmFormat").options) o.disabled = !allowed(o.value);
-  if ($("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = dsd ? "dsd64" : "s24";
-  setTip("#pcmFormat", dsd
+  const allowed = (o) => dcp ? o.hasAttribute("data-dcp") : o.hasAttribute("data-dcp") ? false : dsd ? o.value.startsWith("dsd") : o.value.startsWith("dsd") ? false : flac ? ["s16", "s24"].includes(o.value) : true;
+  for (const o of $("pcmFormat").options) { o.disabled = !allowed(o); o.hidden = o.disabled; }
+  if ($("pcmFormat").selectedOptions[0].disabled) $("pcmFormat").value = dcp ? "24" : dsd ? "dsd64" : "s24";
+  setTip("#pcmFormat", dcp
+    ? "Cinema sound is always 24-bit PCM at 48 or 96 kHz. Choose the frame rate of the picture it goes with: each frame of sound is one picture frame long. SMPTE is the current standard, MXF Interop the older one some servers still want."
+    : dsd
     ? "One-bit DSD made with a fifth-order sigma-delta modulator at half scale (-6 dB), the filters keeping the band up to about 20 kHz (40 kHz from 88.2 kHz sources). Audio only: no disc image."
     : st === "tta"
     ? "TTA stores 16 or 24 bit integers."
@@ -474,7 +478,7 @@ function syncDialnorm() {
 }
 
 const DEST_TAG = { "bluray-primary": "BD", "bluray-secondary": "BD Secondary", dvd: "DVD", "digital-delivery": "Digital", "dts-music-disc": "DTS Disc" };
-const STREAM_TAG = { "dtshd-ma": "DTSHDMA", "dtshd-hra": "DTSHDHRA", "dts-es": "DTSES", "dts-96-24": "DTS9624", dts: "DTS", "dts-express": "DTSExpress", ac3: "AC3", eac3: "EAC3", truehd: "TrueHD", mlp: "MLP", wav: "WAV", aiff: "AIFF", caf: "CAF", flac: "FLAC", oggflac: "OggFLAC", alac: "ALAC", tta: "TTA", dsf: "DSD", dff: "DSD" };
+const STREAM_TAG = { "dtshd-ma": "DTSHDMA", "dtshd-hra": "DTSHDHRA", "dts-es": "DTSES", "dts-96-24": "DTS9624", dts: "DTS", "dts-express": "DTSExpress", ac3: "AC3", eac3: "EAC3", truehd: "TrueHD", mlp: "MLP", wav: "WAV", aiff: "AIFF", caf: "CAF", flac: "FLAC", oggflac: "OggFLAC", alac: "ALAC", tta: "TTA", dsf: "DSD", dff: "DSD", "dcp-audio": "DCP", wavpack: "WavPack", ape: "APE", als: "ALS" };
 let nameAuto = true;   // false once the user types their own name
 
 /** 5.1, 7.1, 5.1.4 ... from a layout's channel names. */
@@ -1419,7 +1423,7 @@ initTools();
 
 /* ---------- Verify ---------- */
 
-const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "wv", "ape", "als", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
+const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "wv", "ape", "als", "mxf", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
 const verify = { path: null, text: "", running: false };
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const STATUS_TAG = { pass: "OK", fail: "FAIL", warn: "WARN", skipped: "SKIP", info: "INFO" };

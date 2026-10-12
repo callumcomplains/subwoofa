@@ -38,7 +38,7 @@ fn make(dir: &std::path::Path, container: Container, ext: &str, multiplier: u32)
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format: SampleFormat::Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier };
+    let req = Request { layout, container, format: SampleFormat::Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier, dcp: Default::default() };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     out
 }
@@ -55,6 +55,7 @@ const CASES: &[(Container, &str, u32)] = &[
     (Container::MonkeysAudio, "ape", 0),
     (Container::MpegAls, "als", 0),
     (Container::MpegAls, "mp4", 0),
+    (Container::DcpAudio, "mxf", 0),
     (Container::Dsf, "dsf", 64),
     (Container::Dff, "dff", 64),
 ];

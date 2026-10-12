@@ -10,6 +10,7 @@ mod als;
 mod bitwriter;
 mod caf;
 mod crc;
+mod dcp;
 mod le_bits;
 mod monkeys;
 mod mp4_audio;
@@ -24,6 +25,7 @@ mod wavpack;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+pub use dcp::{DcpOptions, FRAME_RATES as DCP_FRAME_RATES};
 use sw_core::ChannelLayout;
 use sw_pcm::StemSet;
 
@@ -46,6 +48,8 @@ pub enum Container {
     MonkeysAudio,
     /// MPEG-4 ALS, lossless (`.als`, or an MP4 file).
     MpegAls,
+    /// Digital cinema sound: an AS-DCP MXF track file of 24-bit PCM.
+    DcpAudio,
     /// DSD in a `.dsf` file.
     Dsf,
     /// DSD in a DSDIFF `.dff` file.
@@ -111,6 +115,8 @@ pub struct Request<'a> {
     pub output: &'a Path,
     /// DSD only: the DSD rate as a multiple of 44.1 kHz (64 = DSD64, 128 = DSD128).
     pub dsd_multiplier: u32,
+    /// DCP sound only: frame rate and label standard.
+    pub dcp: DcpOptions,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -241,6 +247,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::WavPack => Box::new(wavpack::WavPackWriter::create(req.output, params)?),
         Container::MonkeysAudio => Box::new(monkeys::MonkeysWriter::create(req.output, params)?),
         Container::MpegAls => Box::new(als::AlsWriter::create(req.output, params)?),
+        Container::DcpAudio => Box::new(dcp::DcpWriter::create(req.output, params, req.dcp)?),
         Container::Dsf | Container::Dff => {
             let file = if req.container == Container::Dsf { dsd::DsdFile::Dsf } else { dsd::DsdFile::Dff };
             Box::new(dsd::DsdWriter::create(req.output, params, file, dsd_layout.as_ref().unwrap(), req.dsd_multiplier)?)

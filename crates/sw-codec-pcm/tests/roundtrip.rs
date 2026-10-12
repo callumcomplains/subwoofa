@@ -75,7 +75,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0 };
+    let req = Request { layout, container, format, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: Default::default() };
     let stats = encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     assert_eq!(stats.frames, frames as u64, "{name}: frames written");
     assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
@@ -202,7 +202,7 @@ fn flac_refuses_what_it_cannot_hold() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("x.flac");
-    let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0 };
+    let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: Default::default() };
     assert!(encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -308,6 +308,65 @@ fn als_mono_short() {
     check("alsshort", MpegAls, "mp4", Int24, "1.0", 48_000, 1_000);
 }
 
+/// DCP sound: the track file decodes to the samples that went in. When `SW_ASDCP_DIR` names the folder of the
+/// reference toolkit's `asdcp-info` and `asdcp-test`, those must accept the file and extract the same audio.
+fn check_dcp(name: &str, layout_id: &str, rate: u32, frames: usize, options: sw_codec_pcm::DcpOptions) {
+    if !have_ffmpeg() {
+        return;
+    }
+    let layout = ChannelLayout::find(layout_id).unwrap();
+    let dir = std::env::temp_dir().join(format!("sw_pcm_{}_{}", std::process::id(), name));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sources: Vec<Vec<i32>> = (0..layout.channels.len()).map(|k| samples(k, frames)).collect();
+    let mut inputs = HashMap::new();
+    for (k, ch) in layout.channels.iter().enumerate() {
+        let path = dir.join(format!("{}.wav", ch.short()));
+        write_wav(&path, rate, &sources[k]);
+        inputs.insert(*ch, path);
+    }
+    let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
+    let out = dir.join("out.mxf");
+    let req = Request { layout, container: DcpAudio, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: options };
+    let stats = encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
+
+    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "s24le", "-"]).output().unwrap();
+    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
+    let nch = layout.channels.len();
+    assert_eq!(dec.stdout.len(), frames * nch * 3, "{name}: decoded length");
+    for i in 0..frames {
+        for k in 0..nch {
+            let at = (i * nch + k) * 3;
+            assert_eq!(&dec.stdout[at..at + 3], &sources[k][i].to_le_bytes()[..3], "{name}: frame {i} channel {k}");
+        }
+    }
+
+    if let Some(tools) = std::env::var_os("SW_ASDCP_DIR") {
+        let tools = std::path::PathBuf::from(tools);
+        let info = Command::new(tools.join("asdcp-info")).args(["-i", "-d"]).arg(&out).output().unwrap();
+        assert!(info.status.success(), "{name}: asdcp-info: {}{}", String::from_utf8_lossy(&info.stdout), String::from_utf8_lossy(&info.stderr));
+        let prefix = dir.join("ref");
+        let extract = Command::new(tools.join("asdcp-test")).arg("-x").arg(&prefix).arg(&out).output().unwrap();
+        assert!(extract.status.success(), "{name}: asdcp-test: {}", String::from_utf8_lossy(&extract.stderr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dcp_smpte_five_one() {
+    check_dcp("dcp51", "5.1", 48_000, 96_000, sw_codec_pcm::DcpOptions::default());
+}
+
+#[test]
+fn dcp_interop_stereo_at_25_fps() {
+    check_dcp("dcpio", "2.0", 48_000, 96_000, sw_codec_pcm::DcpOptions { frame_rate: (25, 1), smpte: false });
+}
+
+#[test]
+fn dcp_ninety_six_kilohertz() {
+    check_dcp("dcp96", "2.0", 96_000, 192_000, sw_codec_pcm::DcpOptions::default());
+}
+
 /// DSD cannot be compared sample for sample: encode a different tone on every channel and check that FFmpeg's
 /// decode of the file has each tone, at half the level (the modulator runs at half scale), in the right channel only.
 fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate: u32, multiplier: u32) {
@@ -330,7 +389,7 @@ fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate:
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier };
+    let req = Request { layout, container, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier, dcp: Default::default() };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&out).args(["-f", "f32le", "-ar", "352800", "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));

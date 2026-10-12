@@ -5,7 +5,10 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 ## Unreleased
 
 - New audio-file formats, all written natively and checked by decoding with FFmpeg: **WavPack** (`.wv`), **Monkey's Audio** (`.ape`, mono and stereo) and **MPEG-4 ALS** (`.als`, or an MP4 file when the name ends in `.mp4`). The Apple Lossless writer now shares its MP4 code with ALS.
-- Verify understands all three.
+- **DCP sound**: an AS-DCP / SMPTE ST 429-3 track file (`.mxf`) of 24-bit PCM at 48 or 96 kHz, up to 16 channels, SMPTE or MXF Interop. Matches the reference toolkit's header byte for byte apart from identifiers; not tried on a cinema server.
+- Verify understands all of them.
+- DTS Express encodes about 3x faster (profile search runs on all cores), uses the 6-bit LFE coding from 256 kbps.
+- `CONTRIBUTING.md` added.
 
 ## b0.1.0 — first public beta
 

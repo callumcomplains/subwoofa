@@ -228,7 +228,8 @@ fn execute_inner(
         // for DSD the setting is the DSD rate ("dsd64", "dsd128"); for the rest the sample format
         let is_dsd = matches!(stream, StreamType::DsdDsf | StreamType::DsdDff);
         let dsd_multiplier = if is_dsd { match spec.pcm_format.as_str() { "" | "dsd64" => 64, "dsd128" => 128, other => return Err(format!("unknown DSD rate '{other}' (use dsd64 or dsd128)").into()) } } else { 0 };
-        let format = if is_dsd || spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
+        let is_dcp = stream == StreamType::DcpAudio;
+        let format = if is_dsd || is_dcp || spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
         let container = match stream {
             StreamType::PcmWav => sw_codec_pcm::Container::Wav,
             StreamType::PcmAiff => sw_codec_pcm::Container::Aiff,
@@ -239,6 +240,7 @@ fn execute_inner(
             StreamType::WavPack => sw_codec_pcm::Container::WavPack,
             StreamType::MonkeysAudio => sw_codec_pcm::Container::MonkeysAudio,
             StreamType::MpegAls => sw_codec_pcm::Container::MpegAls,
+            StreamType::DcpAudio => sw_codec_pcm::Container::DcpAudio,
             StreamType::DsdDsf => sw_codec_pcm::Container::Dsf,
             StreamType::DsdDff => sw_codec_pcm::Container::Dff,
             _ => sw_codec_pcm::Container::Flac,
@@ -250,7 +252,8 @@ fn execute_inner(
             log.push_str(&format!("Sample format: {} ({}-bit {})
 ", format.id(), format.bits(), if format.is_float() { "floating point" } else { "integer" }));
         }
-        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output), dsd_multiplier };
+        let dcp = if is_dcp { sw_codec_pcm::DcpOptions::parse(&spec.pcm_format)? } else { Default::default() };
+        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output), dsd_multiplier, dcp };
         sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
             sw_codec_pcm::PcmError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
