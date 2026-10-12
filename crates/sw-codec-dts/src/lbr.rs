@@ -321,6 +321,9 @@ impl Geo {
     }
 }
 const AMP_MAX: usize = 56;
+/// From this bit rate on the LFE uses the 6-bit coding (17 bytes a frame more, about 1.6 kbps).
+const LFE_WIDE_FROM: u32 = 256_000;
+
 /// Narrowest coded bandwidth (in bands) the rate control may fall back to.
 const MIN_K: usize = 6;
 
@@ -371,7 +374,7 @@ impl LbrEncoder {
         // coefficients are scaled down by the same factor here
         let gain = if band_limit > 0 { 1.0 / ((1u32 << band_limit) as f64).sqrt() } else { 1.0 };
         let ana: Vec<Analysis> = (0..n).map(|_| { let mut a = Analysis::new(); a.set_gain(gain); a }).collect();
-        Ok(LbrEncoder { t: Tables::new(), ana, buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, min_resid: std::sync::atomic::AtomicUsize::new(0), tonal: std::env::var_os("SW_LBR_NOTONES").is_none(), groups: (0..5).map(crate::lbr_tonal::Group::new).collect(), lpc_state: std::sync::RwLock::new(vec![LpcState::default(); n]), lpc_plan: std::sync::RwLock::new(vec![LpcPlan::default(); n]), cfg })
+        Ok(LbrEncoder { t: Tables::new(), ana, buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate, cfg.bitrate >= LFE_WIDE_FROM)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, min_resid: std::sync::atomic::AtomicUsize::new(0), tonal: std::env::var_os("SW_LBR_NOTONES").is_none(), groups: (0..5).map(crate::lbr_tonal::Group::new).collect(), lpc_state: std::sync::RwLock::new(vec![LpcState::default(); n]), lpc_plan: std::sync::RwLock::new(vec![LpcPlan::default(); n]), cfg })
     }
 
     /// Smallest bit rate (bits per second) the encoder can honour: about 55 kbps per channel pair at its

@@ -59,14 +59,14 @@ fn mono_stream_decodes() {
     assert!(db > 10.0, "SNR {db}");
 }
 
-#[test]
-fn lfe_channel_decodes() {
+/// The LFE comes out in the right channel at the right level, with the narrow (below 256 kbps) and the wide coding.
+fn check_lfe(bitrate: u32) {
     if !have_ffmpeg() {
         return;
     }
     let frames = 14;
     let total = 4096 * frames;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate: 384_000, dialog_mode: false, payload_bytes: None }).unwrap();
+    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: 48_000, channels: 5, speaker_mask: 0xF, lfe: true, bitrate, dialog_mode: false, payload_bytes: None }).unwrap();
     let tone = |f: f32, a: f32, i: usize| a * (2.0 * std::f32::consts::PI * f * i as f32 / 48_000.0).sin();
     let chans: Vec<Vec<f32>> = (0..6).map(|c| (0..total).map(|i| if c == 5 { tone(60.0, 0.5, i) } else if c == 4 { tone(440.0, 0.2, i) } else { 0.0 }).collect()).collect();
     let mut payloads = Vec::new();
@@ -109,6 +109,16 @@ fn lfe_channel_decodes() {
     }
     assert_eq!(best.0, 3, "LFE should be output channel 3");
     assert!((best.1 - 0.5).abs() < 0.1, "LFE amplitude {}", best.1);
+}
+
+#[test]
+fn lfe_channel_decodes_narrow() {
+    check_lfe(192_000);
+}
+
+#[test]
+fn lfe_channel_decodes_wide() {
+    check_lfe(384_000);
 }
 
 /// Steady notes are sent as tonal components: at a low rate a signal of three sines reaches a much higher
