@@ -171,6 +171,7 @@ impl StreamType {
                 | StreamType::Alac
                 | StreamType::Tta
                 | StreamType::WavPack
+                | StreamType::MonkeysAudio
                 | StreamType::DsdDsf
                 | StreamType::DsdDff
         )
@@ -296,7 +297,8 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
         StreamType::Ac3 => 6,
         StreamType::Eac3 => 8, // up to 7.1 via independent+dependent substreams
         StreamType::TrueHd | StreamType::Mlp => 8,
-        StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls => 8,
+        StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MpegAls => 8,
+        StreamType::MonkeysAudio => 2,
         StreamType::DsdDsf | StreamType::DsdDff => 6,
         StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf => 32,
     };
@@ -508,7 +510,7 @@ mod tests {
     #[test]
     fn every_stream_type_is_native() {
         // listed but not written yet; each moves out of this list when its encoder lands
-        let pending = [StreamType::MonkeysAudio, StreamType::MpegAls];
+        let pending = [StreamType::MpegAls];
         assert!(StreamType::ALL.iter().filter(|s| !pending.contains(s)).all(|s| s.is_native()));
     }
 

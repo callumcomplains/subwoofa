@@ -323,7 +323,7 @@ function syncPcmFormat() {
   document.querySelector(".f.dialnorm").hidden = file; // no dialogue level in a plain audio file
   if (!file) return;
   const dsd = st === "dsf" || st === "dff";
-  const flac = ["flac", "oggflac", "alac", "tta", "wavpack"].includes(st);
+  const flac = ["flac", "oggflac", "alac", "tta", "wavpack", "ape"].includes(st);
   // DSD offers only the DSD rates; the integer-only formats only 16 and 24 bit; the rest no DSD
   const allowed = (v) => dsd ? v.startsWith("dsd") : v.startsWith("dsd") ? false : flac ? ["s16", "s24"].includes(v) : true;
   for (const o of $("pcmFormat").options) o.disabled = !allowed(o.value);
@@ -332,6 +332,8 @@ function syncPcmFormat() {
     ? "One-bit DSD made with a fifth-order sigma-delta modulator at half scale (-6 dB), the filters keeping the band up to about 20 kHz (40 kHz from 88.2 kHz sources). Audio only: no disc image."
     : st === "tta"
     ? "TTA stores 16 or 24 bit integers."
+    : st === "ape"
+    ? "Monkey's Audio stores 16 or 24 bit integers, mono or stereo only."
     : st === "wavpack"
     ? "WavPack stores 16 or 24 bit integers, any number of channels (split into pairs, as the format does)."
     : st === "alac"

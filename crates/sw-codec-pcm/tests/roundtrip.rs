@@ -85,7 +85,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta | Container::WavPack => channels::wav_order(layout).order,
+        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta | Container::WavPack | Container::MonkeysAudio => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -276,6 +276,21 @@ fn wavpack_24_bit_five_one() {
 #[test]
 fn wavpack_mono_short() {
     check("wvshort", WavPack, "wv", Int24, "1.0", 48_000, 1_000);
+}
+
+#[test]
+fn monkeys_16_bit_stereo() {
+    check("ape16", MonkeysAudio, "ape", Int16, "2.0", 44_100, 100_001);
+}
+
+#[test]
+fn monkeys_24_bit_stereo() {
+    check("ape24", MonkeysAudio, "ape", Int24, "2.0", 48_000, 120_000);
+}
+
+#[test]
+fn monkeys_mono_short() {
+    check("apeshort", MonkeysAudio, "ape", Int24, "1.0", 48_000, 1_000);
 }
 
 /// DSD cannot be compared sample for sample: encode a different tone on every channel and check that FFmpeg's

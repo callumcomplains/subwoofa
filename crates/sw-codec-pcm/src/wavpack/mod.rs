@@ -18,7 +18,7 @@ mod word_coder;
 
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use log_tables::log2;
-use predictor::{Chain, Term};
+use predictor::Chain;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;

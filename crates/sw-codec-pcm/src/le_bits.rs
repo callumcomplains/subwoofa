@@ -33,6 +33,7 @@ impl LeBitWriter {
     }
 
     /// Number of bits written so far.
+    #[cfg(test)]
     pub fn bit_len(&self) -> usize {
         self.bytes.len() * 8 + self.pending_bits as usize
     }

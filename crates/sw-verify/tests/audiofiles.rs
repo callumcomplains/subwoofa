@@ -52,6 +52,7 @@ const CASES: &[(Container, &str, u32)] = &[
     (Container::Alac, "m4a", 0),
     (Container::Tta, "tta", 0),
     (Container::WavPack, "wv", 0),
+    (Container::MonkeysAudio, "ape", 0),
     (Container::Dsf, "dsf", 64),
     (Container::Dff, "dff", 64),
 ];
