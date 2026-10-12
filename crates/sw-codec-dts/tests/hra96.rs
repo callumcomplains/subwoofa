@@ -7,7 +7,11 @@ use sw_codec_dts::native::{encode_to_file, Request};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// A 24-bit mono WAV: silence for `quiet` seconds, then a tone.
@@ -16,7 +20,11 @@ fn write_wav(path: &std::path::Path, rate: u32, seconds: f64, quiet: f64, freq: 
     let mut data = Vec::with_capacity(n * 3);
     for k in 0..n {
         let t = k as f64 / rate as f64;
-        let v = if t < quiet { 0 } else { (0.3 * (2.0 * std::f64::consts::PI * freq * t).sin() * 8_388_607.0) as i32 };
+        let v = if t < quiet {
+            0
+        } else {
+            (0.3 * (2.0 * std::f64::consts::PI * freq * t).sin() * 8_388_607.0) as i32
+        };
         data.extend_from_slice(&v.to_le_bytes()[..3]);
     }
     let mut f = Vec::new();
@@ -56,11 +64,43 @@ fn check(name: &str, layout_id: &str, expected_channels: usize, cs_is_matrixed: 
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("t.dtshd");
     let es = sw_codec_dts::es_options(layout.channels.contains(&sw_core::Channel::Cs), layout, false, false);
-    let req = Request { layout, bitrate_kbps: 1509, dialnorm: 0, pcm_bits: 24, start_secs: 0.0, duration_secs: None, output: &out, es, hra_kbps: Some(4224), x96: false, bitstream: Default::default(), dvd: false };
-    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
-    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
-    let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let req = Request {
+        layout,
+        bitrate_kbps: 1509,
+        dialnorm: 0,
+        pcm_bits: 24,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        es,
+        hra_kbps: Some(4224),
+        x96: false,
+        bitstream: Default::default(),
+        dvd: false,
+    };
+    encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let dec = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&out)
+        .args(["-f", "f32le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        dec.status.success() && dec.stderr.is_empty(),
+        "{name}: decoder: {}",
+        String::from_utf8_lossy(&dec.stderr)
+    );
+    let y: Vec<f32> = dec
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     let nch = y.len() / 4 / (rate as usize) * 0 + expected_channels;
     let frames = y.len() / nch;
     assert!(frames >= 4 * rate as usize - 100, "{name}: decoded {frames} frames");
@@ -81,7 +121,11 @@ fn check(name: &str, layout_id: &str, expected_channels: usize, cs_is_matrixed: 
         }
         let best = (0..nch).map(|c| amp(c, freqs[i])).fold(0.0, f64::max);
         let tol = if i == 3 { 0.1 } else { 0.04 };
-        assert!((best - 0.3).abs() < tol, "{name}: the tone of {} came out at {best:.3}", ch.short());
+        assert!(
+            (best - 0.3).abs() < tol,
+            "{name}: the tone of {} came out at {best:.3}",
+            ch.short()
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,8 +1,8 @@
 //! DTS-HD Master Audio streams: lossless extension (XLL) in extension substream frames, optionally on
 //! top of a core.
 
-use crate::exss::{exss_frame, ExssParams};
 use crate::dmix_table::{DMIX, DMIX_INV};
+use crate::exss::{exss_frame, ExssParams};
 use crate::xll::{DmixHeader, DmixRow, SetCfg, XllConfig, XllEncoder};
 use sw_core::{Channel, ChannelLayout, Downmix};
 
@@ -168,7 +168,9 @@ impl MaMap {
                     None
                 } else {
                     let h = self.hier.as_ref().expect("hierarchy");
-                    Some(DmixHeader { rows: h.rows[i - 1].clone() })
+                    Some(DmixHeader {
+                        rows: h.rows[i - 1].clone(),
+                    })
                 },
                 matrix: if i == 0 { self.matrix.clone() } else { None },
             })
@@ -183,7 +185,14 @@ impl MaMap {
 
 fn dmix_index(v: f64) -> usize {
     let target = v * 32768.0;
-    (0..DMIX.len()).min_by(|&a, &b| (DMIX[a] as f64 - target).abs().partial_cmp(&(DMIX[b] as f64 - target).abs()).unwrap()).unwrap()
+    (0..DMIX.len())
+        .min_by(|&a, &b| {
+            (DMIX[a] as f64 - target)
+                .abs()
+                .partial_cmp(&(DMIX[b] as f64 - target).abs())
+                .unwrap()
+        })
+        .unwrap()
 }
 
 /// Index of a level in dB (`None` is off) in the downmix table.
@@ -203,7 +212,11 @@ fn level_code(level: sw_core::bitstream::Level) -> u16 {
 
 /// How a channel outside the 5.1 base folds into it: `(base channel, row scale, coefficient)` per target,
 /// scales and coefficients as fractions (the row scale gives headroom for what is added to the row).
-fn fold_targets(c: Channel, side: (Channel, Channel), rear: Option<(Channel, Channel)>) -> Option<Vec<(Channel, f64, f64)>> {
+fn fold_targets(
+    c: Channel,
+    side: (Channel, Channel),
+    rear: Option<(Channel, Channel)>,
+) -> Option<Vec<(Channel, f64, f64)>> {
     use Channel::*;
     let m3 = std::f64::consts::FRAC_1_SQRT_2;
     Some(match c {
@@ -278,7 +291,11 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
     }
     // More than eight channels (immersive layouts, NHK 22.2): the base set is a full 7.1 (the decoder this was
     // checked with reads three sets of at most eight channels each)
-    let rear = if n > 8 && pos(Lsr).is_some() && pos(Rsr).is_some() { Some((Lsr, Rsr)) } else { None };
+    let rear = if n > 8 && pos(Lsr).is_some() && pos(Rsr).is_some() {
+        Some((Lsr, Rsr))
+    } else {
+        None
+    };
     if let Some((a, b)) = rear {
         base_ch.push(a);
         base_ch.push(b);
@@ -361,7 +378,11 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
             }
             let first_cols = extra.len().min(8);
             for (r, &b) in base.iter().enumerate() {
-                let idx = if scale_val[r] >= 1.0 { UNITY } else { dmix_index(scale_val[r]).max(41) };
+                let idx = if scale_val[r] >= 1.0 {
+                    UNITY
+                } else {
+                    dmix_index(scale_val[r]).max(41)
+                };
                 base_scale[coded(b)] = Some(idx);
                 for k in 0..extra.len() {
                     let v = coeff_val[r][k];
@@ -370,7 +391,11 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
                     }
                     // columns of the first extra set (up to 8 channels) carry the scaled coefficients; later sets state
                     // the effective coefficient (coefficient over row scale) with unit scales
-                    let ci = if k < first_cols { dmix_index(v) } else { dmix_index(v / scale_val[r]) };
+                    let ci = if k < first_cols {
+                        dmix_index(v)
+                    } else {
+                        dmix_index(v / scale_val[r])
+                    };
                     extra_terms[k].push((coded(b), ci));
                 }
             }
@@ -398,7 +423,10 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
         let mut rows = Vec::new();
         let l_idx = coded(pos(L)?);
         let r_idx = coded(pos(R)?);
-        let row_scale = [(l_idx, scale_index(dm.stereo_a[1])), (r_idx, scale_index(dm.stereo_b[2]))];
+        let row_scale = [
+            (l_idx, scale_index(dm.stereo_a[1])),
+            (r_idx, scale_index(dm.stereo_b[2])),
+        ];
         for &(row, si) in &row_scale {
             let (_, inv) = scale_of(si);
             let mut coeff_codes = Vec::new();
@@ -413,11 +441,20 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
                     let inv_row = base_scale[row].map_or(65536, |i| scale_of(i).1);
                     let s_col = base_scale[x].map_or(32768, |i| scale_of(i).0);
                     let at_stereo = effective(inv, ci) as i64;
-                    let c = ((((at_stereo * inv_row as i64 + (1 << 15)) >> 16) * s_col as i64 + (1 << 14)) >> 15) as i32;
-                    folds.push(Fold { row, col: x, coef: c, to_5_1: false });
+                    let c =
+                        ((((at_stereo * inv_row as i64 + (1 << 15)) >> 16) * s_col as i64 + (1 << 14)) >> 15) as i32;
+                    folds.push(Fold {
+                        row,
+                        col: x,
+                        coef: c,
+                        to_5_1: false,
+                    });
                 }
             }
-            rows.push(DmixRow { scale_code: 0x100 | si as u16, coeff_codes });
+            rows.push(DmixRow {
+                scale_code: 0x100 | si as u16,
+                coeff_codes,
+            });
         }
         set_rows.push(rows);
     }
@@ -427,23 +464,42 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
         let cols = range.clone();
         let mut rows = Vec::new();
         for j in 0..lower {
-            let scale_idx = if si == first_extra_set { base_scale[j].unwrap_or(UNITY) } else { UNITY };
+            let scale_idx = if si == first_extra_set {
+                base_scale[j].unwrap_or(UNITY)
+            } else {
+                UNITY
+            };
             let (_, inv) = scale_of(scale_idx);
             let mut coeff_codes = Vec::new();
             for x in cols.clone() {
                 let k = x - ranges[first_extra_set].start;
-                let hit = extra_terms.get(k).and_then(|t| t.iter().find(|(row, _)| *row == j)).map(|(_, ci)| *ci);
+                let hit = extra_terms
+                    .get(k)
+                    .and_then(|t| t.iter().find(|(row, _)| *row == j))
+                    .map(|(_, ci)| *ci);
                 match hit {
                     // the first extra set's coefficients are scaled by the row; later ones state the effective value
                     Some(ci) => {
                         coeff_codes.push(0x100 | ci as u16);
-                        let coef = if si == first_extra_set { effective(inv, ci) } else { DMIX[ci] as i32 };
-                        folds.push(Fold { row: j, col: x, coef, to_5_1: true });
+                        let coef = if si == first_extra_set {
+                            effective(inv, ci)
+                        } else {
+                            DMIX[ci] as i32
+                        };
+                        folds.push(Fold {
+                            row: j,
+                            col: x,
+                            coef,
+                            to_5_1: true,
+                        });
                     }
                     None => coeff_codes.push(0x100),
                 }
             }
-            rows.push(DmixRow { scale_code: 0x100 | scale_idx as u16, coeff_codes });
+            rows.push(DmixRow {
+                scale_code: 0x100 | scale_idx as u16,
+                coeff_codes,
+            });
         }
         set_rows.push(rows);
     }
@@ -460,14 +516,32 @@ fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
             }
         }
     }
-    let hier = Hier { sets: ranges, rows: set_rows, folds, scale, inv, stereo, extras: !extra.is_empty() };
-    Some(Plan { order, set_sizes, hier, core_sets: if stereo { 2 } else { 1 }, resid_set: if stereo { 1 } else { 0 } })
+    let hier = Hier {
+        sets: ranges,
+        rows: set_rows,
+        folds,
+        scale,
+        inv,
+        stereo,
+        extras: !extra.is_empty(),
+    };
+    Some(Plan {
+        order,
+        set_sizes,
+        hier,
+        core_sets: if stereo { 2 } else { 1 },
+        resid_set: if stereo { 1 } else { 0 },
+    })
 }
 
 /// Stereo downmix coefficients of the primary set, for layouts whose first set is a plain 5.x group.
 fn stereo_matrix(layout: &ChannelLayout, set0: &[usize], dm: &Downmix) -> Option<(u8, Vec<Vec<u16>>)> {
     use Channel::*;
-    let side = if layout.channels.contains(&Ls) && layout.channels.contains(&Rs) { (Ls, Rs) } else { (Lss, Rss) };
+    let side = if layout.channels.contains(&Ls) && layout.channels.contains(&Rs) {
+        (Ls, Rs)
+    } else {
+        (Lss, Rss)
+    };
     let has = |c: Channel| layout.channels.contains(&c);
     if !(has(C) && has(L) && has(R) && has(side.0) && has(side.1)) {
         return None;
@@ -493,18 +567,33 @@ fn stereo_matrix(layout: &ChannelLayout, set0: &[usize], dm: &Downmix) -> Option
             }
         })
         .collect::<Option<Vec<_>>>()?;
-    Some((if dm.lt_rt { 2 } else { 1 }, vec![ids.iter().map(|&i| level_code(dm.stereo_a[i])).collect(), ids.iter().map(|&i| level_code(dm.stereo_b[i])).collect()]))
+    Some((
+        if dm.lt_rt { 2 } else { 1 },
+        vec![
+            ids.iter().map(|&i| level_code(dm.stereo_a[i])).collect(),
+            ids.iter().map(|&i| level_code(dm.stereo_b[i])).collect(),
+        ],
+    ))
 }
 
 /// The stereo downmix levels as the auxiliary data of a 5.x core: the original writes them into every core frame
 /// when the Downmix tab's stereo levels are included (not for the other core arrangements or for 6.x).
-pub fn core_aux(dm: &Downmix, layout: &ChannelLayout, amode: u8, lfe: bool, xch: bool) -> Option<crate::encoder::AuxDownmix> {
+pub fn core_aux(
+    dm: &Downmix,
+    layout: &ChannelLayout,
+    amode: u8,
+    lfe: bool,
+    xch: bool,
+) -> Option<crate::encoder::AuxDownmix> {
     if !dm.stereo_matrix || amode != 9 || xch || es_matrix(layout) {
         return None;
     }
     let n = 5 + usize::from(lfe);
     let row = |t: &[sw_core::bitstream::Level; 6]| (0..n).map(|i| level_code(t[i])).collect::<Vec<u16>>();
-    Some(crate::encoder::AuxDownmix { kind: if dm.lt_rt { 2 } else { 1 }, rows: vec![row(&dm.stereo_a), row(&dm.stereo_b)] })
+    Some(crate::encoder::AuxDownmix {
+        kind: if dm.lt_rt { 2 } else { 1 },
+        rows: vec![row(&dm.stereo_a), row(&dm.stereo_b)],
+    })
 }
 
 /// 6.x layouts with a centre surround (the ES matrix and discrete forms), whose first set is not a plain 5.x group.
@@ -530,15 +619,36 @@ pub fn map_layout_with(layout: &ChannelLayout, dm: &Downmix) -> MaMap {
         let matrix = (dm.stereo_matrix && !plan.hier.stereo && !es_matrix(layout) && layout.channels.len() <= 8)
             .then(|| stereo_matrix(layout, &plan.order[..plan.set_sizes[0]], dm))
             .flatten();
-        return MaMap { order: plan.order, set_sizes: plan.set_sizes, set_masks, xll_mask, exss_mask, hier: Some(plan.hier), core_sets: plan.core_sets, resid_set: plan.resid_set, matrix };
+        return MaMap {
+            order: plan.order,
+            set_sizes: plan.set_sizes,
+            set_masks,
+            xll_mask,
+            exss_mask,
+            hier: Some(plan.hier),
+            core_sets: plan.core_sets,
+            resid_set: plan.resid_set,
+            matrix,
+        };
     }
     let mut idx: Vec<usize> = (0..layout.channels.len()).collect();
     idx.sort_by_key(|&i| xll_bit(layout.channels[i]));
     let xll_mask = mask_of(&idx);
-    let matrix = (dm.stereo_matrix && !es_matrix(layout) && layout.channels.len() <= 8 && layout.channels.contains(&Channel::C))
-        .then(|| stereo_matrix(layout, &idx, dm))
-        .flatten();
-    MaMap { set_sizes: vec![idx.len()], order: idx, set_masks: vec![xll_mask], xll_mask, exss_mask, hier: None, core_sets: 1, resid_set: 0, matrix }
+    let matrix =
+        (dm.stereo_matrix && !es_matrix(layout) && layout.channels.len() <= 8 && layout.channels.contains(&Channel::C))
+            .then(|| stereo_matrix(layout, &idx, dm))
+            .flatten();
+    MaMap {
+        set_sizes: vec![idx.len()],
+        order: idx,
+        set_masks: vec![xll_mask],
+        xll_mask,
+        exss_mask,
+        hier: None,
+        core_sets: 1,
+        resid_set: 0,
+        matrix,
+    }
 }
 
 pub struct MaConfig {
@@ -569,19 +679,25 @@ impl MaEncoder {
             3..=8 => 2,
             _ => 1,
         };
-        let frame_samples = units * match cfg.sample_rate {
-            44_100 | 48_000 => 512,
-            88_200 | 96_000 => 1024,
-            176_400 | 192_000 => 2048,
-            _ => 512,
-        };
+        let frame_samples = units
+            * match cfg.sample_rate {
+                44_100 | 48_000 => 512,
+                88_200 | 96_000 => 1024,
+                176_400 | 192_000 => 2048,
+                _ => 512,
+            };
         let xll = XllEncoder::new(XllConfig {
             sample_rate: cfg.sample_rate,
             bit_res: cfg.bit_res,
             frame_samples,
             sets: cfg.map.xll_sets(false),
         });
-        MaEncoder { cfg, xll, frame_samples, units }
+        MaEncoder {
+            cfg,
+            xll,
+            frame_samples,
+            units,
+        }
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -607,8 +723,17 @@ impl MaEncoder {
                 with_core: false,
                 dialnorm: self.cfg.dialnorm,
                 frame_duration_code: self.units as u32 - 1,
-                x96_in_core: false, xch_in_core: false, secondary: false,
-                extras: crate::exss::ExssExtras { min_header: 0, emb_5_1: self.cfg.map.hier.as_ref().map_or(false, |h| h.extras), emb_stereo: self.cfg.map.hier.as_ref().map_or(false, |h| h.stereo), wide_remap: self.cfg.wide_remap, repr_type: self.cfg.repr_type, ..Default::default() },
+                x96_in_core: false,
+                xch_in_core: false,
+                secondary: false,
+                extras: crate::exss::ExssExtras {
+                    min_header: 0,
+                    emb_5_1: self.cfg.map.hier.as_ref().map_or(false, |h| h.extras),
+                    emb_stereo: self.cfg.map.hier.as_ref().map_or(false, |h| h.stereo),
+                    wide_remap: self.cfg.wide_remap,
+                    repr_type: self.cfg.repr_type,
+                    ..Default::default()
+                },
             },
             &data,
         )

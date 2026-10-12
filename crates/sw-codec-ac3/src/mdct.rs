@@ -45,8 +45,8 @@ struct C {
 
 pub struct Mdct {
     window: Vec<f64>,
-    fft_tw: Vec<C>,       // e^{-2 pi i k / 128}
-    pre: Vec<C>,          // e^{-i pi (8n+1) / (8M)}
+    fft_tw: Vec<C>, // e^{-2 pi i k / 128}
+    pre: Vec<C>,    // e^{-i pi (8n+1) / (8M)}
     bitrev: Vec<usize>,
     scale: f64,
 }
@@ -55,11 +55,33 @@ impl Mdct {
     /// `scale` multiplies every output coefficient.
     pub fn new(scale: f64) -> Mdct {
         let h = M / 2;
-        let fft_tw = (0..h / 2).map(|k| { let a = -2.0 * PI * k as f64 / h as f64; C { re: a.cos(), im: a.sin() } }).collect();
-        let pre = (0..h).map(|n| { let a = -PI * (8 * n + 1) as f64 / (8 * M) as f64; C { re: a.cos(), im: a.sin() } }).collect();
+        let fft_tw = (0..h / 2)
+            .map(|k| {
+                let a = -2.0 * PI * k as f64 / h as f64;
+                C {
+                    re: a.cos(),
+                    im: a.sin(),
+                }
+            })
+            .collect();
+        let pre = (0..h)
+            .map(|n| {
+                let a = -PI * (8 * n + 1) as f64 / (8 * M) as f64;
+                C {
+                    re: a.cos(),
+                    im: a.sin(),
+                }
+            })
+            .collect();
         let bits = h.trailing_zeros();
         let bitrev = (0..h).map(|i| i.reverse_bits() >> (usize::BITS - bits)).collect();
-        Mdct { window: kbd_window(5.0, N), fft_tw, pre, bitrev, scale }
+        Mdct {
+            window: kbd_window(5.0, N),
+            fft_tw,
+            pre,
+            bitrev,
+            scale,
+        }
     }
 
     pub fn window(&self) -> &[f64] {
@@ -81,9 +103,18 @@ impl Mdct {
                 for k in 0..len / 2 {
                     let w = self.fft_tw[k * step];
                     let (u, v) = (a[start + k], a[start + k + len / 2]);
-                    let t = C { re: v.re * w.re - v.im * w.im, im: v.re * w.im + v.im * w.re };
-                    a[start + k] = C { re: u.re + t.re, im: u.im + t.im };
-                    a[start + k + len / 2] = C { re: u.re - t.re, im: u.im - t.im };
+                    let t = C {
+                        re: v.re * w.re - v.im * w.im,
+                        im: v.re * w.im + v.im * w.re,
+                    };
+                    a[start + k] = C {
+                        re: u.re + t.re,
+                        im: u.im + t.im,
+                    };
+                    a[start + k + len / 2] = C {
+                        re: u.re - t.re,
+                        im: u.im - t.im,
+                    };
                 }
             }
             len *= 2;
@@ -97,13 +128,19 @@ impl Mdct {
             .map(|n| {
                 let (re, im) = (u[2 * n], u[M - 1 - 2 * n]);
                 let t = self.pre[n];
-                C { re: re * t.re - im * t.im, im: re * t.im + im * t.re }
+                C {
+                    re: re * t.re - im * t.im,
+                    im: re * t.im + im * t.re,
+                }
             })
             .collect();
         self.fft(&mut z);
         for k in 0..h {
             let t = self.pre[k];
-            let y = C { re: z[k].re * t.re - z[k].im * t.im, im: z[k].re * t.im + z[k].im * t.re };
+            let y = C {
+                re: z[k].re * t.re - z[k].im * t.im,
+                im: z[k].re * t.im + z[k].im * t.re,
+            };
             out[2 * k] = y.re;
             out[M - 1 - 2 * k] = -y.im;
         }
@@ -133,7 +170,11 @@ pub fn direct_mdct(x: &[f32], window: &[f64]) -> Vec<f64> {
     (0..M)
         .map(|k| {
             (0..N)
-                .map(|n| x[n] as f64 * window[n] * (PI / M as f64 * (n as f64 + 0.5 + M as f64 / 2.0) * (k as f64 + 0.5)).cos())
+                .map(|n| {
+                    x[n] as f64
+                        * window[n]
+                        * (PI / M as f64 * (n as f64 + 0.5 + M as f64 / 2.0) * (k as f64 + 0.5)).cos()
+                })
                 .sum()
         })
         .collect()
@@ -159,7 +200,9 @@ mod tests {
         m.dct4(&u, &mut fast);
         let err = (0..M)
             .map(|k| {
-                let d: f64 = (0..M).map(|n| u[n] * (PI / M as f64 * (n as f64 + 0.5) * (k as f64 + 0.5)).cos()).sum();
+                let d: f64 = (0..M)
+                    .map(|n| u[n] * (PI / M as f64 * (n as f64 + 0.5) * (k as f64 + 0.5)).cos())
+                    .sum();
                 (d - fast[k]).abs()
             })
             .fold(0.0, f64::max);
@@ -169,11 +212,17 @@ mod tests {
     #[test]
     fn fast_mdct_matches_direct() {
         let m = Mdct::new(1.0);
-        let x: Vec<f32> = (0..N).map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0 + (i as f32 * 0.07).sin()).collect();
+        let x: Vec<f32> = (0..N)
+            .map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0 + (i as f32 * 0.07).sin())
+            .collect();
         let mut fast = vec![0f32; M];
         m.forward(&x, &mut fast);
         let direct = direct_mdct(&x, m.window());
-        let err = fast.iter().zip(&direct).map(|(a, b)| (*a as f64 - b).abs()).fold(0.0, f64::max);
+        let err = fast
+            .iter()
+            .zip(&direct)
+            .map(|(a, b)| (*a as f64 - b).abs())
+            .fold(0.0, f64::max);
         assert!(err < 1e-3, "max error {err}");
     }
 }

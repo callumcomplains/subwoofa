@@ -70,7 +70,9 @@ pub(crate) fn sniff(h: &[u8]) -> Option<AudioKind> {
     if h.starts_with(b"TTA1") {
         return Some(AudioKind::Tta);
     }
-    if h.starts_with(&[0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01, 0x02]) {
+    if h.starts_with(&[
+        0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01, 0x02,
+    ]) {
         return Some(AudioKind::Mxf);
     }
     if h.starts_with(b"ALS\0") {
@@ -127,12 +129,25 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, kind: AudioKind) -> Prob
         c.kv("Channels", facts.channels.to_string());
     }
     if facts.bits > 0 {
-        c.kv("Sample format", if kind == AudioKind::Dsf || kind == AudioKind::Dff { "1-bit DSD".to_string() } else { format!("{}-bit", facts.bits) });
+        c.kv(
+            "Sample format",
+            if kind == AudioKind::Dsf || kind == AudioKind::Dff {
+                "1-bit DSD".to_string()
+            } else {
+                format!("{}-bit", facts.bits)
+            },
+        );
     }
     if let Some(f) = facts.frames {
         c.kv("Length", format!("{f} samples per channel ({duration:.3} s)"));
     }
-    Probe { duration_secs: duration, sample_rate: facts.rate, channels: facts.channels, lossless: facts.lossless, ..Default::default() }
+    Probe {
+        duration_secs: duration,
+        sample_rate: facts.rate,
+        channels: facts.channels,
+        lossless: facts.lossless,
+        ..Default::default()
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -162,9 +177,17 @@ fn size_check(c: &mut Collector, name: &str, claimed: u64, actual: u64) {
     if claimed == actual {
         c.check(name, Status::Pass, format!("{actual} bytes, as the header says"));
     } else if claimed < actual {
-        c.check(name, Status::Warn, format!("the header accounts for {claimed} bytes but the file has {actual} (trailing data)"));
+        c.check(
+            name,
+            Status::Warn,
+            format!("the header accounts for {claimed} bytes but the file has {actual} (trailing data)"),
+        );
     } else {
-        c.check(name, Status::Fail, format!("the header says {claimed} bytes but the file has only {actual} (truncated)"));
+        c.check(
+            name,
+            Status::Fail,
+            format!("the header says {claimed} bytes but the file has only {actual} (truncated)"),
+        );
     }
 }
 
@@ -177,11 +200,22 @@ fn wav(w: &mut Window, c: &mut Collector) -> Facts {
     let rf64 = &head[..4] == b"RF64";
     let riff_size = le32(&head[4..8]);
     if rf64 {
-        c.check("RF64 marker", if riff_size == u32::MAX { Status::Pass } else { Status::Warn }, "RF64 files keep the real sizes in the ds64 chunk and 0xFFFFFFFF in the RIFF header");
+        c.check(
+            "RF64 marker",
+            if riff_size == u32::MAX {
+                Status::Pass
+            } else {
+                Status::Warn
+            },
+            "RF64 files keep the real sizes in the ds64 chunk and 0xFFFFFFFF in the RIFF header",
+        );
     } else {
         size_check(c, "RIFF size", riff_size as u64 + 8, len);
     }
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let mut pos = 12u64;
     let (mut fmt_seen, mut data_seen) = (false, false);
     let mut ds64_data: Option<u64> = None;
@@ -221,11 +255,32 @@ fn wav(w: &mut Window, c: &mut Collector) -> Facts {
                     if tag == 0xFFFE && d.len() >= 40 {
                         let mask = le32(&d[20..24]);
                         let sub = le16(&d[24..26]);
-                        format = format!("extensible, {}, channel mask {mask:#x}", if sub == 3 { "float" } else if sub == 1 { "PCM" } else { "other" });
+                        format = format!(
+                            "extensible, {}, channel mask {mask:#x}",
+                            if sub == 3 {
+                                "float"
+                            } else if sub == 1 {
+                                "PCM"
+                            } else {
+                                "other"
+                            }
+                        );
                     }
                     c.kv("Format", format);
-                    let consistent = block_align == facts.channels * facts.bits.div_ceil(8) && byte_rate == facts.rate * block_align;
-                    c.check("Format header", if consistent { Status::Pass } else { Status::Fail }, if consistent { format!("{} channels, {} bits, {} Hz; block size and byte rate agree", facts.channels, facts.bits, facts.rate) } else { "block alignment or byte rate disagree with channels, bits and rate".to_string() });
+                    let consistent =
+                        block_align == facts.channels * facts.bits.div_ceil(8) && byte_rate == facts.rate * block_align;
+                    c.check(
+                        "Format header",
+                        if consistent { Status::Pass } else { Status::Fail },
+                        if consistent {
+                            format!(
+                                "{} channels, {} bits, {} Hz; block size and byte rate agree",
+                                facts.channels, facts.bits, facts.rate
+                            )
+                        } else {
+                            "block alignment or byte rate disagree with channels, bits and rate".to_string()
+                        },
+                    );
                 }
             }
             b"data" => {
@@ -237,14 +292,25 @@ fn wav(w: &mut Window, c: &mut Collector) -> Facts {
                 }
                 let end = body + size;
                 if end > len {
-                    c.check("Audio data size", Status::Fail, format!("the data chunk says {size} bytes but only {} remain (truncated)", len - body));
+                    c.check(
+                        "Audio data size",
+                        Status::Fail,
+                        format!(
+                            "the data chunk says {size} bytes but only {} remain (truncated)",
+                            len - body
+                        ),
+                    );
                 } else {
                     c.check("Audio data size", Status::Pass, format!("{size} bytes of audio"));
                 }
                 if block_align > 0 {
                     facts.frames = Some(size.min(len - body) / block_align as u64);
                     if size % block_align as u64 != 0 {
-                        c.check("Whole frames", Status::Warn, "the audio data is not a whole number of frames");
+                        c.check(
+                            "Whole frames",
+                            Status::Warn,
+                            "the audio data is not a whole number of frames",
+                        );
                     }
                 }
             }
@@ -259,7 +325,19 @@ fn wav(w: &mut Window, c: &mut Collector) -> Facts {
         }
         pos = body + size + size % 2;
     }
-    c.check("Required chunks", if fmt_seen && data_seen { Status::Pass } else { Status::Fail }, if fmt_seen && data_seen { "fmt and data are present".to_string() } else { "the fmt or data chunk is missing".to_string() });
+    c.check(
+        "Required chunks",
+        if fmt_seen && data_seen {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        if fmt_seen && data_seen {
+            "fmt and data are present".to_string()
+        } else {
+            "the fmt or data chunk is missing".to_string()
+        },
+    );
     facts
 }
 
@@ -270,7 +348,10 @@ fn aiff(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let head = w.get(0, 12).to_vec();
     size_check(c, "FORM size", be32(&head[4..8]) as u64 + 8, len);
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let (mut comm, mut ssnd) = (false, false);
     let mut pos = 12u64;
     while pos + 8 <= len {
@@ -290,7 +371,11 @@ fn aiff(w: &mut Window, c: &mut Collector) -> Facts {
                     facts.bits = be16(&d[6..8]) as u32;
                     let exponent = (be16(&d[8..10]) & 0x7FFF) as i32 - 16383;
                     let mantissa = be64(&d[10..18]);
-                    facts.rate = if (0..=63).contains(&exponent) { (mantissa >> (63 - exponent)) as u32 } else { 0 };
+                    facts.rate = if (0..=63).contains(&exponent) {
+                        (mantissa >> (63 - exponent)) as u32
+                    } else {
+                        0
+                    };
                     if d.len() >= 22 {
                         c.kv("Compression", String::from_utf8_lossy(&d[18..22]).to_string());
                     }
@@ -300,14 +385,30 @@ fn aiff(w: &mut Window, c: &mut Collector) -> Facts {
                 ssnd = true;
                 if let (Some(frames), true) = (facts.frames, facts.channels > 0) {
                     let want = frames * facts.channels as u64 * facts.bits.div_ceil(8) as u64 + 8;
-                    c.check("Audio data size", if size >= want { Status::Pass } else { Status::Fail }, format!("the SSND chunk holds {} bytes of audio, the header's frame count needs {}", size.saturating_sub(8), want - 8));
+                    c.check(
+                        "Audio data size",
+                        if size >= want { Status::Pass } else { Status::Fail },
+                        format!(
+                            "the SSND chunk holds {} bytes of audio, the header's frame count needs {}",
+                            size.saturating_sub(8),
+                            want - 8
+                        ),
+                    );
                 }
             }
             _ => {}
         }
         pos = body + size + size % 2;
     }
-    c.check("Required chunks", if comm && ssnd { Status::Pass } else { Status::Fail }, if comm && ssnd { "COMM and SSND are present".to_string() } else { "the COMM or SSND chunk is missing".to_string() });
+    c.check(
+        "Required chunks",
+        if comm && ssnd { Status::Pass } else { Status::Fail },
+        if comm && ssnd {
+            "COMM and SSND are present".to_string()
+        } else {
+            "the COMM or SSND chunk is missing".to_string()
+        },
+    );
     facts
 }
 
@@ -316,7 +417,10 @@ fn aiff(w: &mut Window, c: &mut Collector) -> Facts {
 
 fn caf(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let (mut desc, mut data) = (false, false);
     let mut pos = 8u64;
     let mut bytes_per_frame = 0u32;
@@ -346,7 +450,11 @@ fn caf(w: &mut Window, c: &mut Collector) -> Facts {
                 let audio = if size < 0 { len - body } else { size as u64 };
                 let audio = audio.saturating_sub(4); // edit count
                 if size >= 0 && body + size as u64 > len {
-                    c.check("Audio data size", Status::Fail, "the data chunk runs past the end of the file (truncated)");
+                    c.check(
+                        "Audio data size",
+                        Status::Fail,
+                        "the data chunk runs past the end of the file (truncated)",
+                    );
                 } else {
                     c.check("Audio data size", Status::Pass, format!("{audio} bytes of audio"));
                 }
@@ -361,7 +469,15 @@ fn caf(w: &mut Window, c: &mut Collector) -> Facts {
         }
         pos = body + size as u64;
     }
-    c.check("Required chunks", if desc && data { Status::Pass } else { Status::Fail }, if desc && data { "desc and data are present".to_string() } else { "the desc or data chunk is missing".to_string() });
+    c.check(
+        "Required chunks",
+        if desc && data { Status::Pass } else { Status::Fail },
+        if desc && data {
+            "desc and data are present".to_string()
+        } else {
+            "the desc or data chunk is missing".to_string()
+        },
+    );
     facts
 }
 
@@ -376,14 +492,30 @@ fn streaminfo(c: &mut Collector, d: &[u8]) -> Facts {
     let bits = ((packed >> 36) & 31) as u32 + 1;
     let total = packed & 0xF_FFFF_FFFF;
     let md5: String = d[18..34].iter().map(|b| format!("{b:02x}")).collect();
-    c.kv("Stored audio MD5", if md5.chars().all(|ch| ch == '0') { "not set".to_string() } else { md5 });
-    Facts { rate, channels, bits, frames: if total > 0 { Some(total) } else { None }, lossless: true }
+    c.kv(
+        "Stored audio MD5",
+        if md5.chars().all(|ch| ch == '0') {
+            "not set".to_string()
+        } else {
+            md5
+        },
+    );
+    Facts {
+        rate,
+        channels,
+        bits,
+        frames: if total > 0 { Some(total) } else { None },
+        lossless: true,
+    }
 }
 
 fn flac(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let mut pos = 4u64;
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let mut have_info = false;
     loop {
         let h = w.get(pos, 4).to_vec();
@@ -405,7 +537,13 @@ fn flac(w: &mut Window, c: &mut Collector) -> Facts {
             let d = w.get(pos + 4, size.min(4096) as usize).to_vec();
             let text = String::from_utf8_lossy(&d).to_string();
             if let Some(i) = text.find("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=") {
-                c.kv("Channel mask", text[i + 34..].chars().take_while(|ch| ch.is_ascii_alphanumeric()).collect::<String>());
+                c.kv(
+                    "Channel mask",
+                    text[i + 34..]
+                        .chars()
+                        .take_while(|ch| ch.is_ascii_alphanumeric())
+                        .collect::<String>(),
+                );
             }
         }
         pos += 4 + size;
@@ -413,9 +551,29 @@ fn flac(w: &mut Window, c: &mut Collector) -> Facts {
             break;
         }
     }
-    c.check("Metadata blocks", if have_info { Status::Pass } else { Status::Fail }, if have_info { "STREAMINFO found".to_string() } else { "there is no STREAMINFO block".to_string() });
+    c.check(
+        "Metadata blocks",
+        if have_info { Status::Pass } else { Status::Fail },
+        if have_info {
+            "STREAMINFO found".to_string()
+        } else {
+            "there is no STREAMINFO block".to_string()
+        },
+    );
     let first = w.get(pos, 2).to_vec();
-    c.check("First audio frame", if first.len() == 2 && first[0] == 0xFF && first[1] & 0xFE == 0xF8 { Status::Pass } else { Status::Fail }, if first.len() == 2 && first[0] == 0xFF && first[1] & 0xFE == 0xF8 { format!("frame sync found at byte {pos}") } else { format!("no frame sync at byte {pos}, where the metadata ends") });
+    c.check(
+        "First audio frame",
+        if first.len() == 2 && first[0] == 0xFF && first[1] & 0xFE == 0xF8 {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        if first.len() == 2 && first[0] == 0xFF && first[1] & 0xFE == 0xF8 {
+            format!("frame sync found at byte {pos}")
+        } else {
+            format!("no frame sync at byte {pos}, where the metadata ends")
+        },
+    );
     let _ = len;
     facts
 }
@@ -426,7 +584,11 @@ fn ogg_crc(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= (b as u32) << 24;
         for _ in 0..8 {
-            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04C1_1DB7 } else { crc << 1 };
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04C1_1DB7
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -434,7 +596,10 @@ fn ogg_crc(data: &[u8]) -> u32 {
 
 fn ogg_flac(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let (mut pos, mut pages, mut bad_crc, mut bad_order, mut sequence) = (0u64, 0u64, 0u64, 0u64, 0u32);
     let mut last_flag = false;
     let mut last_granule = 0u64;
@@ -478,11 +643,43 @@ fn ogg_flac(w: &mut Window, c: &mut Collector) -> Facts {
         pages += 1;
         pos += total;
     }
-    c.check("Ogg page checksums", if bad_crc == 0 { Status::Pass } else { Status::Fail }, if bad_crc == 0 { format!("{pages} pages, every CRC is right") } else { format!("{bad_crc} of {pages} pages have a wrong CRC") });
-    c.check("Ogg page order", if bad_order == 0 { Status::Pass } else { Status::Fail }, if bad_order == 0 { "page numbers are consecutive".to_string() } else { format!("{bad_order} pages are out of sequence") });
-    c.check("End of stream", if last_flag { Status::Pass } else { Status::Warn }, if last_flag { "the last page carries the end flag".to_string() } else { "the last page is not marked as the end".to_string() });
+    c.check(
+        "Ogg page checksums",
+        if bad_crc == 0 { Status::Pass } else { Status::Fail },
+        if bad_crc == 0 {
+            format!("{pages} pages, every CRC is right")
+        } else {
+            format!("{bad_crc} of {pages} pages have a wrong CRC")
+        },
+    );
+    c.check(
+        "Ogg page order",
+        if bad_order == 0 { Status::Pass } else { Status::Fail },
+        if bad_order == 0 {
+            "page numbers are consecutive".to_string()
+        } else {
+            format!("{bad_order} pages are out of sequence")
+        },
+    );
+    c.check(
+        "End of stream",
+        if last_flag { Status::Pass } else { Status::Warn },
+        if last_flag {
+            "the last page carries the end flag".to_string()
+        } else {
+            "the last page is not marked as the end".to_string()
+        },
+    );
     if let Some(total) = facts.frames {
-        c.check("Granule position", if last_granule == total { Status::Pass } else { Status::Warn }, format!("last page says {last_granule} samples, STREAMINFO says {total}"));
+        c.check(
+            "Granule position",
+            if last_granule == total {
+                Status::Pass
+            } else {
+                Status::Warn
+            },
+            format!("last page says {last_granule} samples, STREAMINFO says {total}"),
+        );
     }
     facts
 }
@@ -523,7 +720,10 @@ fn find(list: &[([u8; 4], u64, u64)], name: &[u8; 4]) -> Option<(u64, u64)> {
 fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let top = boxes(w, 0, len);
-    let mut facts = Facts { lossless: true, ..Default::default() };
+    let mut facts = Facts {
+        lossless: true,
+        ..Default::default()
+    };
     let names: Vec<String> = top.iter().map(|b| String::from_utf8_lossy(&b.0).to_string()).collect();
     c.check("Top-level boxes", Status::Info, names.join(", "));
     let reached: u64 = top.iter().map(|b| b.1 + b.2).max().unwrap_or(0);
@@ -539,7 +739,9 @@ fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
         return facts;
     };
     let in_trak = boxes(w, trak_start, trak_start + trak_size);
-    let Some((mdia, mdia_size)) = find(&in_trak, b"mdia") else { return facts };
+    let Some((mdia, mdia_size)) = find(&in_trak, b"mdia") else {
+        return facts;
+    };
     let in_mdia = boxes(w, mdia, mdia + mdia_size);
     if let Some((mdhd, _)) = find(&in_mdia, b"mdhd") {
         let d = w.get(mdhd, 36).to_vec();
@@ -551,9 +753,13 @@ fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
             facts.frames = Some(be32(&d[16..20]) as u64);
         }
     }
-    let Some((minf, minf_size)) = find(&in_mdia, b"minf") else { return facts };
+    let Some((minf, minf_size)) = find(&in_mdia, b"minf") else {
+        return facts;
+    };
     let in_minf = boxes(w, minf, minf + minf_size);
-    let Some((stbl, stbl_size)) = find(&in_minf, b"stbl") else { return facts };
+    let Some((stbl, stbl_size)) = find(&in_minf, b"stbl") else {
+        return facts;
+    };
     let table = boxes(w, stbl, stbl + stbl_size);
     if let Some((stsd, size)) = find(&table, b"stsd") {
         let entry = boxes(w, stsd + 8, stsd + size);
@@ -567,7 +773,14 @@ fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
                     facts.bits = d[9] as u32;
                     facts.channels = d[13] as u32;
                     c.kv("Frame length", format!("{} samples", be32(&d[4..8])));
-                    c.check("ALAC description", Status::Pass, format!("{} bits, {} channels, rice parameters {}/{}/{}", d[9], d[13], d[10], d[11], d[12]));
+                    c.check(
+                        "ALAC description",
+                        Status::Pass,
+                        format!(
+                            "{} bits, {} channels, rice parameters {}/{}/{}",
+                            d[9], d[13], d[10], d[11], d[12]
+                        ),
+                    );
                     if facts.rate == 0 {
                         facts.rate = be32(&d[24..28]);
                     }
@@ -583,7 +796,11 @@ fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
             let count = be32(&d[8..12]) as usize;
             let sizes = w.get(stsz + 12, count * 4).to_vec();
             let sum: u64 = sizes.chunks_exact(4).map(|s| be32(s) as u64).sum();
-            c.check("Sample table", if sum <= mdat_size { Status::Pass } else { Status::Fail }, format!("{count} frames totalling {sum} bytes; the mdat box holds {mdat_size}"));
+            c.check(
+                "Sample table",
+                if sum <= mdat_size { Status::Pass } else { Status::Fail },
+                format!("{count} frames totalling {sum} bytes; the mdat box holds {mdat_size}"),
+            );
         }
     }
     facts
@@ -597,7 +814,11 @@ fn crc32_ieee(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -614,19 +835,45 @@ fn tta(w: &mut Window, c: &mut Collector) -> Facts {
     let bits = le16(&h[8..10]) as u32;
     let rate = le32(&h[10..14]);
     let samples = le32(&h[14..18]) as u64;
-    c.check("Header checksum", if crc32_ieee(&h[..18]) == le32(&h[18..22]) { Status::Pass } else { Status::Fail }, "CRC-32 of the first 18 bytes");
+    c.check(
+        "Header checksum",
+        if crc32_ieee(&h[..18]) == le32(&h[18..22]) {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        "CRC-32 of the first 18 bytes",
+    );
     let frame_samples = 256 * rate as u64 / 245;
-    let frames = if frame_samples > 0 { samples.div_ceil(frame_samples) } else { 0 };
+    let frames = if frame_samples > 0 {
+        samples.div_ceil(frame_samples)
+    } else {
+        0
+    };
     let table = w.get(22, (frames * 4 + 4) as usize).to_vec();
     if table.len() as u64 == frames * 4 + 4 {
         let (sizes, crc) = table.split_at(frames as usize * 4);
-        c.check("Seek table checksum", if crc32_ieee(sizes) == le32(crc) { Status::Pass } else { Status::Fail }, format!("{frames} frames"));
+        c.check(
+            "Seek table checksum",
+            if crc32_ieee(sizes) == le32(crc) {
+                Status::Pass
+            } else {
+                Status::Fail
+            },
+            format!("{frames} frames"),
+        );
         let audio: u64 = sizes.chunks_exact(4).map(|s| le32(s) as u64).sum();
         size_check(c, "Frame sizes add up", 22 + frames * 4 + 4 + audio, len);
     } else {
         c.check("Seek table", Status::Fail, "the file ends inside the seek table");
     }
-    Facts { rate, channels, bits, frames: Some(samples), lossless: true }
+    Facts {
+        rate,
+        channels,
+        bits,
+        frames: Some(samples),
+        lossless: true,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -636,7 +883,9 @@ fn tta(w: &mut Window, c: &mut Collector) -> Facts {
 /// stretch of time must add up to the total in the first header.
 fn wavpack(w: &mut Window, c: &mut Collector) -> Facts {
     const HEADER: usize = 32;
-    const RATES: [u32; 15] = [6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000];
+    const RATES: [u32; 15] = [
+        6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000,
+    ];
     let len = w.len;
     let mut at = 0u64;
     let (mut blocks, mut frames, mut total, mut channels, mut counting) = (0u64, 0u64, 0u64, 0u32, true);
@@ -665,9 +914,27 @@ fn wavpack(w: &mut Window, c: &mut Collector) -> Facts {
         blocks += 1;
         at += 8 + le32(&h[4..8]) as u64;
     }
-    c.check("Blocks fill the file", if at == len { Status::Pass } else { Status::Fail }, format!("{blocks} blocks"));
-    c.check("Sample count", if total == 0 || total == frames { Status::Pass } else { Status::Fail }, format!("the header says {total}, the blocks hold {frames}"));
-    Facts { rate, channels, bits, frames: Some(frames), lossless: true }
+    c.check(
+        "Blocks fill the file",
+        if at == len { Status::Pass } else { Status::Fail },
+        format!("{blocks} blocks"),
+    );
+    c.check(
+        "Sample count",
+        if total == 0 || total == frames {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        format!("the header says {total}, the blocks hold {frames}"),
+    );
+    Facts {
+        rate,
+        channels,
+        bits,
+        frames: Some(frames),
+        lossless: true,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -675,7 +942,9 @@ fn wavpack(w: &mut Window, c: &mut Collector) -> Facts {
 
 /// Key prefix of a partition pack (the byte after it says header, body or footer) and of a generic-container
 /// essence element.
-const PARTITION_PREFIX: [u8; 13] = [0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01];
+const PARTITION_PREFIX: [u8; 13] = [
+    0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01,
+];
 const ESSENCE_PREFIX: [u8; 12] = [0x06, 0x0e, 0x2b, 0x34, 0x01, 0x02, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01];
 const DESCRIPTOR_KEY_TAIL: [u8; 4] = [0x01, 0x01, 0x48, 0x00];
 
@@ -692,7 +961,10 @@ fn mxf(w: &mut Window, c: &mut Collector) -> Facts {
             Some(&b) if b < 0x80 => (b as u64, 17u64),
             Some(&b) if (0x81..=0x88).contains(&b) && head.len() >= 17 + (b & 0x7F) as usize => {
                 let n = (b & 0x7F) as usize;
-                (head[17..17 + n].iter().fold(0u64, |acc, &x| acc << 8 | x as u64), 17 + n as u64)
+                (
+                    head[17..17 + n].iter().fold(0u64, |acc, &x| acc << 8 | x as u64),
+                    17 + n as u64,
+                )
             }
             _ => {
                 broken = true;
@@ -716,10 +988,40 @@ fn mxf(w: &mut Window, c: &mut Collector) -> Facts {
         }
         at += header + value_len;
     }
-    c.check("KLV structure", if broken { Status::Fail } else if at == len { Status::Pass } else { Status::Warn }, format!("{partitions} partitions, {frames} essence frames"));
-    c.check("Partition positions", if misplaced == 0 && partitions >= 2 { Status::Pass } else { Status::Fail }, "each partition pack says where it starts");
-    c.check("Frame sizes", if sizes.len() == 1 { Status::Pass } else { Status::Fail }, format!("{} different sizes (a sound track file has one)", sizes.len()));
-    c.check("Footer", if footer_at.is_some() { Status::Pass } else { Status::Fail }, "a footer partition closes the file");
+    c.check(
+        "KLV structure",
+        if broken {
+            Status::Fail
+        } else if at == len {
+            Status::Pass
+        } else {
+            Status::Warn
+        },
+        format!("{partitions} partitions, {frames} essence frames"),
+    );
+    c.check(
+        "Partition positions",
+        if misplaced == 0 && partitions >= 2 {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        "each partition pack says where it starts",
+    );
+    c.check(
+        "Frame sizes",
+        if sizes.len() == 1 { Status::Pass } else { Status::Fail },
+        format!("{} different sizes (a sound track file has one)", sizes.len()),
+    );
+    c.check(
+        "Footer",
+        if footer_at.is_some() {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        "a footer partition closes the file",
+    );
 
     // properties of the wave audio descriptor
     let mut tags = std::collections::HashMap::new();
@@ -732,13 +1034,31 @@ fn mxf(w: &mut Window, c: &mut Collector) -> Facts {
         tags.insert(tag, descriptor[o + 4..o + 4 + l].to_vec());
         o += 4 + l;
     }
-    let number = |tag: u16| tags.get(&tag).map(|v| v.iter().fold(0u64, |acc, &x| acc << 8 | x as u64)).unwrap_or(0);
+    let number = |tag: u16| {
+        tags.get(&tag)
+            .map(|v| v.iter().fold(0u64, |acc, &x| acc << 8 | x as u64))
+            .unwrap_or(0)
+    };
     let rate = tags.get(&0x3d03).map(|v| be32(v)).unwrap_or(0);
     let duration = number(0x3002);
-    c.check("Duration", if duration == frames { Status::Pass } else { Status::Fail }, format!("the descriptor says {duration} frames, the file holds {frames}"));
+    c.check(
+        "Duration",
+        if duration == frames { Status::Pass } else { Status::Fail },
+        format!("the descriptor says {duration} frames, the file holds {frames}"),
+    );
     let edit = tags.get(&0x3001).map(|v| (be32(v), be32(&v[4..]))).unwrap_or((0, 1));
-    let seconds = if edit.0 > 0 { frames as f64 * edit.1 as f64 / edit.0 as f64 } else { 0.0 };
-    Facts { rate, channels: number(0x3d07) as u32, bits: number(0x3d01) as u32, frames: Some((seconds * rate as f64).round() as u64), lossless: true }
+    let seconds = if edit.0 > 0 {
+        frames as f64 * edit.1 as f64 / edit.0 as f64
+    } else {
+        0.0
+    };
+    Facts {
+        rate,
+        channels: number(0x3d07) as u32,
+        bits: number(0x3d01) as u32,
+        frames: Some((seconds * rate as f64).round() as u64),
+        lossless: true,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -748,16 +1068,38 @@ fn mxf(w: &mut Window, c: &mut Collector) -> Facts {
 fn als(w: &mut Window, c: &mut Collector) -> Facts {
     let h = w.get(0, 22).to_vec();
     if h.len() < 22 {
-        c.check("Configuration", Status::Fail, "the file is shorter than the ALS configuration record");
+        c.check(
+            "Configuration",
+            Status::Fail,
+            "the file is shorter than the ALS configuration record",
+        );
         return Facts::default();
     }
     let (rate, samples, channels) = (be32(&h[4..8]), be32(&h[8..12]) as u64, be16(&h[12..14]) as u32 + 1);
     let bits = (((h[14] >> 2) & 7) as u32 + 1) * 8;
     let frame_length = be16(&h[15..17]) as u32 + 1;
     c.kv("Frame length", format!("{frame_length} samples"));
-    c.check("Configuration", if rate > 0 && samples > 0 { Status::Pass } else { Status::Fail }, "the record names a rate and a length");
-    c.check("Frames", Status::Info, "frame sizes are not indexed in a raw file; open it as MP4 for a full decode");
-    Facts { rate, channels, bits, frames: Some(samples), lossless: true }
+    c.check(
+        "Configuration",
+        if rate > 0 && samples > 0 {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        "the record names a rate and a length",
+    );
+    c.check(
+        "Frames",
+        Status::Info,
+        "frame sizes are not indexed in a raw file; open it as MP4 for a full decode",
+    );
+    Facts {
+        rate,
+        channels,
+        bits,
+        frames: Some(samples),
+        lossless: true,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -768,24 +1110,60 @@ fn monkeys(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let h = w.get(0, 76).to_vec();
     if h.len() < 76 {
-        c.check("Descriptor", Status::Fail, "the file is shorter than the descriptor and header");
+        c.check(
+            "Descriptor",
+            Status::Fail,
+            "the file is shorter than the descriptor and header",
+        );
         return Facts::default();
     }
     let version = le16(&h[4..6]);
     c.kv("Version", format!("{}.{:02}", version / 1000, version % 1000 / 10));
     if version < 3980 {
-        c.check("Version", Status::Warn, "older than 3.98: only the header fields are read");
+        c.check(
+            "Version",
+            Status::Warn,
+            "older than 3.98: only the header fields are read",
+        );
         return Facts::default();
     }
     let (descriptor, header, seek) = (le32(&h[8..12]) as u64, le32(&h[12..16]) as u64, le32(&h[16..20]) as u64);
-    let (wav_head, audio, wav_tail) = (le32(&h[20..24]) as u64, le32(&h[24..28]) as u64 | (le32(&h[28..32]) as u64) << 32, le32(&h[32..36]) as u64);
-    let (level, blocks_per_frame, final_blocks, frames) = (le16(&h[52..54]), le32(&h[56..60]) as u64, le32(&h[60..64]) as u64, le32(&h[64..68]) as u64);
+    let (wav_head, audio, wav_tail) = (
+        le32(&h[20..24]) as u64,
+        le32(&h[24..28]) as u64 | (le32(&h[28..32]) as u64) << 32,
+        le32(&h[32..36]) as u64,
+    );
+    let (level, blocks_per_frame, final_blocks, frames) = (
+        le16(&h[52..54]),
+        le32(&h[56..60]) as u64,
+        le32(&h[60..64]) as u64,
+        le32(&h[64..68]) as u64,
+    );
     let (bits, channels, rate) = (le16(&h[68..70]) as u32, le16(&h[70..72]) as u32, le32(&h[72..76]));
     c.kv("Compression level", level.to_string());
-    c.check("Seek table size", if seek >= frames * 4 { Status::Pass } else { Status::Fail }, format!("{frames} frames"));
-    size_check(c, "Audio data size", descriptor + header + seek + wav_head + audio + wav_tail, len);
-    let samples = if frames > 0 { blocks_per_frame * (frames - 1) + final_blocks } else { 0 };
-    Facts { rate, channels, bits, frames: Some(samples), lossless: true }
+    c.check(
+        "Seek table size",
+        if seek >= frames * 4 { Status::Pass } else { Status::Fail },
+        format!("{frames} frames"),
+    );
+    size_check(
+        c,
+        "Audio data size",
+        descriptor + header + seek + wav_head + audio + wav_tail,
+        len,
+    );
+    let samples = if frames > 0 {
+        blocks_per_frame * (frames - 1) + final_blocks
+    } else {
+        0
+    };
+    Facts {
+        rate,
+        channels,
+        bits,
+        frames: Some(samples),
+        lossless: true,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -795,7 +1173,11 @@ fn dsf(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let h = w.get(0, 92).to_vec();
     if h.len() < 92 || &h[28..32] != b"fmt " || &h[80..84] != b"data" {
-        c.check("DSF chunks", Status::Fail, "the DSD, fmt and data chunks are not where a DSF file has them");
+        c.check(
+            "DSF chunks",
+            Status::Fail,
+            "the DSD, fmt and data chunks are not where a DSF file has them",
+        );
         return Facts::default();
     }
     size_check(c, "File size", le64(&h[12..20]), len);
@@ -804,14 +1186,35 @@ fn dsf(w: &mut Window, c: &mut Collector) -> Facts {
     let bit_order = le32(&h[60..64]);
     let samples = le64(&h[64..72]);
     let block = le32(&h[72..76]) as u64;
-    c.kv("Bit order", if bit_order == 1 { "least significant bit first" } else { "most significant bit first" });
+    c.kv(
+        "Bit order",
+        if bit_order == 1 {
+            "least significant bit first"
+        } else {
+            "most significant bit first"
+        },
+    );
     c.kv("DSD rate", format!("DSD{} ({} Hz)", rate / 44_100, rate));
     c.kv("Channel type", le32(&h[48..52]).to_string());
     let data = le64(&h[84..92]).saturating_sub(12);
     let want = (samples.div_ceil(8 * block.max(1)) * block.max(1)) * channels as u64;
-    c.check("Audio data size", if data == want { Status::Pass } else { Status::Fail }, format!("{data} bytes of audio, {want} expected for {samples} samples in {channels} channels"));
-    c.check("Block size", if block == 4096 { Status::Pass } else { Status::Warn }, format!("{block} bytes per channel in each block"));
-    Facts { rate, channels, bits: 1, frames: Some(samples), lossless: false }
+    c.check(
+        "Audio data size",
+        if data == want { Status::Pass } else { Status::Fail },
+        format!("{data} bytes of audio, {want} expected for {samples} samples in {channels} channels"),
+    );
+    c.check(
+        "Block size",
+        if block == 4096 { Status::Pass } else { Status::Warn },
+        format!("{block} bytes per channel in each block"),
+    );
+    Facts {
+        rate,
+        channels,
+        bits: 1,
+        frames: Some(samples),
+        lossless: false,
+    }
 }
 
 fn dff(w: &mut Window, c: &mut Collector) -> Facts {
@@ -852,7 +1255,15 @@ fn dff(w: &mut Window, c: &mut Collector) -> Facts {
         facts.frames = Some(data_bytes / facts.channels as u64 * 8);
         c.kv("DSD rate", format!("DSD{} ({} Hz)", facts.rate / 44_100, facts.rate));
     }
-    c.check("Audio data", if data_bytes > 0 && facts.channels > 0 && data_bytes % facts.channels as u64 == 0 { Status::Pass } else { Status::Fail }, format!("{data_bytes} bytes for {} channels", facts.channels));
+    c.check(
+        "Audio data",
+        if data_bytes > 0 && facts.channels > 0 && data_bytes % facts.channels as u64 == 0 {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        format!("{data_bytes} bytes for {} channels", facts.channels),
+    );
     facts.bits = 1;
     facts
 }

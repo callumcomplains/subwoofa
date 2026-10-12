@@ -49,7 +49,14 @@ fn lossless_frames(e: &mut MaEncoder, pcm: &[Vec<i32>], got: usize, n: usize) ->
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < got {
-        let part: Vec<Vec<i32>> = pcm.iter().map(|c| { let mut v = c[pos..(pos + n).min(c.len())].to_vec(); v.resize(n, 0); v }).collect();
+        let part: Vec<Vec<i32>> = pcm
+            .iter()
+            .map(|c| {
+                let mut v = c[pos..(pos + n).min(c.len())].to_vec();
+                v.resize(n, 0);
+                v
+            })
+            .collect();
         out.push(e.encode_frame(&part));
         pos += n;
     }
@@ -61,10 +68,17 @@ enum Enc {
     Lossless(MaEncoder),
 }
 
-pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<MaStats, MaError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &MaRequest,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<MaStats, MaError> {
     let rate = stems.sample_rate;
     if !matches!(rate, 44_100 | 48_000 | 88_200 | 96_000 | 176_400 | 192_000) {
-        return Err(MaError::Unsupported(format!("{rate} Hz: only 44.1 to 192 kHz are implemented so far")));
+        return Err(MaError::Unsupported(format!(
+            "{rate} Hz: only 44.1 to 192 kHz are implemented so far"
+        )));
     }
     let bit_res = (stems.bits as u32).clamp(16, 24);
     let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
@@ -85,13 +99,33 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         return Err(MaError::Unsupported("above 96 kHz: up to 5.1 channels".into()));
     }
     // a core under 176.4 / 192 kHz lossless data sits under band 0 (up to 5.1); wider streams stand alone
-    let core_bitrate_kbps = if nch > 8 || (rate > 96_000 && nch > 6) { None } else { req.core_bitrate_kbps };
+    let core_bitrate_kbps = if nch > 8 || (rate > 96_000 && nch > 6) {
+        None
+    } else {
+        req.core_bitrate_kbps
+    };
     // the remapping sets describe a wide 7.1 layout: the switch does nothing for any other
     let wide_remap = req.bitstream.wide_remap && req.layout.channels.contains(&sw_core::Channel::Lw);
     let make = || -> Result<Enc, MaError> {
         Ok(match core_bitrate_kbps {
-            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig { layout: req.layout, sample_rate: rate, bit_res, core_bitrate: kbps * 1000, dialnorm: req.dialnorm, x96: req.x96, wide_remap, downmix: downmix.clone() })?),
-            None => Enc::Lossless(MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res, dialnorm: (-req.dialnorm) as u32, wide_remap, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2) })),
+            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig {
+                layout: req.layout,
+                sample_rate: rate,
+                bit_res,
+                core_bitrate: kbps * 1000,
+                dialnorm: req.dialnorm,
+                x96: req.x96,
+                wide_remap,
+                downmix: downmix.clone(),
+            })?),
+            None => Enc::Lossless(MaEncoder::new(MaConfig {
+                sample_rate: rate,
+                map: map.clone(),
+                bit_res,
+                dialnorm: (-req.dialnorm) as u32,
+                wide_remap,
+                repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+            })),
         })
     };
     let mut enc = make()?;
@@ -102,7 +136,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(MaError::Empty);
     }
@@ -112,9 +150,25 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
     // A stream with a core opens with two frames of silence, as the commercial encoder does: the decoder has no
     // history for the first frame (the lossless stage cannot reproduce it exactly when the channels sit in two
     // sets), and the file's codec delay field tells decoders to drop them, so every source sample is kept.
-    let lead = if req.container && core_bitrate_kbps.is_some() { 2 * n } else if req.container { n } else { 0 };
+    let lead = if req.container && core_bitrate_kbps.is_some() {
+        2 * n
+    } else if req.container {
+        n
+    } else {
+        0
+    };
     let info = req.container.then(|| {
-        let mut i = DtsHdInfo::new(rate, n as u16, want, map.exss_mask as u16, if core_bitrate_kbps.is_some() { Kind::CoreAndExtension } else { Kind::ExtensionOnly });
+        let mut i = DtsHdInfo::new(
+            rate,
+            n as u16,
+            want,
+            map.exss_mask as u16,
+            if core_bitrate_kbps.is_some() {
+                Kind::CoreAndExtension
+            } else {
+                Kind::ExtensionOnly
+            },
+        );
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.vbr = true;
         i.core_kbps = core_bitrate_kbps.unwrap_or(0);
@@ -123,7 +177,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         if core_bitrate_kbps.is_some() {
             // CORESSMD describes the core: 48 kHz and the speakers of the base channel set
             i.core_rate = Some(if req.x96 && rate == 96_000 { 96_000 } else { 48_000 });
-            i.core_mask = Some(map.order[..map.core_channels()].iter().fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16);
+            i.core_mask = Some(
+                map.order[..map.core_channels()]
+                    .iter()
+                    .fold(0u32, |m, &c| m | crate::ma::exss_bit(req.layout.channels[c])) as u16,
+            );
         }
         i
     });
@@ -176,7 +234,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
                 let part: Vec<Vec<i32>> = pcm.iter().map(|c| c[..got].to_vec()).collect();
                 e.push(&part)
             }
-            Enc::Lossless(e) => pcm.iter().map(|c| c.len()).max().map_or(vec![], |_| lossless_frames(e, &pcm, got, n)),
+            Enc::Lossless(e) => pcm
+                .iter()
+                .map(|c| c.len())
+                .max()
+                .map_or(vec![], |_| lossless_frames(e, &pcm, got, n)),
         };
         tm[2] += t_p.elapsed().as_secs_f64();
         for f in ready {
@@ -187,7 +249,10 @@ pub fn encode_to_file(stems: &mut StemSet, req: &MaRequest, on_progress: &mut dy
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     if std::env::var_os("SW_TIMING").is_some() {
-        eprintln!("ma driver: read {:.2}s convert {:.2}s encode {:.2}s", tm[0], tm[1], tm[2]);
+        eprintln!(
+            "ma driver: read {:.2}s convert {:.2}s encode {:.2}s",
+            tm[0], tm[1], tm[2]
+        );
     }
     if let Enc::Core(e) = &mut enc {
         for f in e.finish() {

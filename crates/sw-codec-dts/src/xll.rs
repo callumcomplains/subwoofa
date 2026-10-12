@@ -52,14 +52,22 @@ pub fn crc16(data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
         }
     }
     crc
 }
 
 fn zigzag(v: i32) -> u32 {
-    if v >= 0 { (v as u32) << 1 } else { (((-(v as i64)) as u32) << 1) - 1 }
+    if v >= 0 {
+        (v as u32) << 1
+    } else {
+        (((-(v as i64)) as u32) << 1) - 1
+    }
 }
 
 #[inline]
@@ -107,23 +115,43 @@ fn quantize_rc(k: f64) -> i32 {
             best = i;
         }
     }
-    if k < 0.0 { -(best as i32) } else { best as i32 }
+    if k < 0.0 {
+        -(best as i32)
+    } else {
+        best as i32
+    }
 }
 
 fn rc_value(idx: i32) -> i32 {
-    if idx < 0 { -(REFL_COEFF[(-idx) as usize] as i32) } else { REFL_COEFF[idx as usize] as i32 }
+    if idx < 0 {
+        -(REFL_COEFF[(-idx) as usize] as i32)
+    } else {
+        REFL_COEFF[idx as usize] as i32
+    }
 }
 
 /// Levinson-Durbin: reflection coefficients of the error filter `1 + sum a_k z^-k` up to `max_order`.
 fn reflection_coefficients(x: &[i32], max_order: usize) -> Vec<f64> {
     let n = x.len();
-    let taper: f64 = std::env::var("SW_TAPER").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3);
+    let taper: f64 = std::env::var("SW_TAPER")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.3);
     let xs: Vec<f64> = x
         .iter()
         .enumerate()
         .map(|(i, v)| {
             let t = (i as f64 + 0.5) / n as f64;
-            let w = if taper > 0.0 { let e = t.min(1.0 - t); if e < taper / 2.0 { 0.5 - 0.5 * (std::f64::consts::PI * (2.0 * e / taper)).cos() } else { 1.0 } } else { 1.0 };
+            let w = if taper > 0.0 {
+                let e = t.min(1.0 - t);
+                if e < taper / 2.0 {
+                    0.5 - 0.5 * (std::f64::consts::PI * (2.0 * e / taper)).cos()
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
             *v as f64 * w
         })
         .collect();
@@ -277,27 +305,45 @@ enum Code {
     Linear(u32),
     /// Rice code with parameter `k` for most samples; the `c` largest (isolated) samples are sent as `l`-bit
     /// values at listed positions instead of long unary runs.
-    Hybrid { k: u32, l: u32, c: u32 },
+    Hybrid {
+        k: u32,
+        l: u32,
+        c: u32,
+    },
 }
 
 fn choose_code(u: &[u32]) -> (Code, u64) {
     let (k, rb) = best_rice(u);
     let (w, lb) = linear_bits(u);
     // linear data need no unary part; compare including the larger cost of an all-zero block
-    if lb <= rb { (Code::Linear(w), lb) } else { (Code::Rice(k), rb) }
+    if lb <= rb {
+        (Code::Linear(w), lb)
+    } else {
+        (Code::Rice(k), rb)
+    }
 }
 
 /// Hybrid coding is only tried for a segment whose largest value is at least this many times its mean (output
 /// is identical to trying it always on the 192 kHz test material, 14% faster; 0 turns hybrid coding off).
 fn hybrid_gate() -> Option<f64> {
     static G: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *G.get_or_init(|| Some(std::env::var("SW_HYB_GATE").ok().and_then(|v| v.parse().ok()).unwrap_or(8.0)))
+    *G.get_or_init(|| {
+        Some(
+            std::env::var("SW_HYB_GATE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8.0),
+        )
+    })
 }
 
 /// The channel with its predictable part taken out (an order-2 linear predictor fitted to it; `SW_WHITEN` sets the
 /// order, 0 = the samples as they are).
 fn whiten(x: &[i32]) -> Vec<f64> {
-    let order: usize = std::env::var("SW_WHITEN").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let order: usize = std::env::var("SW_WHITEN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
     if order == 0 || x.len() < 64 || x.iter().all(|v| *v == 0) {
         return x.iter().map(|v| *v as f64).collect();
     }
@@ -347,7 +393,9 @@ fn hybrid_code(u: &[u32], posbits: u32, nabits: u32) -> Option<(Code, u64)> {
     }
     let mut order: Vec<usize> = (0..n).collect();
     let top = max_c.min(n);
-    order.select_nth_unstable_by(top.saturating_sub(1).min(n - 1), |&a, &b| u[b].cmp(&u[a]).then(a.cmp(&b)));
+    order.select_nth_unstable_by(top.saturating_sub(1).min(n - 1), |&a, &b| {
+        u[b].cmp(&u[a]).then(a.cmp(&b))
+    });
     let mut top_idx: Vec<usize> = order[..top].to_vec();
     top_idx.sort_by(|&a, &b| u[b].cmp(&u[a]).then(a.cmp(&b)));
     let mut best: Option<(Code, u64)> = None;
@@ -399,8 +447,6 @@ struct SetPlan {
 }
 
 struct ChannelPlan {
-    /// Coded samples of the channel (after decorrelation).
-    coded: Vec<i32>,
     adapt_order: usize,
     fixed_order: usize,
     rc_idx: Vec<i32>,
@@ -422,14 +468,28 @@ impl XllEncoder {
     }
 
     fn nabits(&self) -> u32 {
-        let n = if self.cfg.bit_res > 16 { 5 } else if self.cfg.bit_res > 8 { 4 } else { 3 };
+        let n = if self.cfg.bit_res > 16 {
+            5
+        } else if self.cfg.bit_res > 8 {
+            4
+        } else {
+            3
+        };
         // room for the embedded downmix and the decimator saturation
-        if (self.cfg.sets.len() > 1 || self.nbands() > 1) && n < 5 { n + 1 } else { n }
+        if (self.cfg.sets.len() > 1 || self.nbands() > 1) && n < 5 {
+            n + 1
+        } else {
+            n
+        }
     }
 
     /// Frequency bands: above 96 kHz the signal is split in two.
     fn nbands(&self) -> usize {
-        if self.cfg.sample_rate > 96_000 { 2 } else { 1 }
+        if self.cfg.sample_rate > 96_000 {
+            2
+        } else {
+            1
+        }
     }
 
     /// Samples per channel and band in one frame.
@@ -513,7 +573,15 @@ impl XllEncoder {
             }
             let u: Vec<u32> = res.iter().map(|v| zigzag(*v)).collect();
             let cost = segment_cost(&u, 0, n);
-            consider(cost, ChannelPlan { coded: x.clone(), adapt_order: 0, fixed_order: fo, rc_idx: Vec::new(), residual: res });
+            consider(
+                cost,
+                ChannelPlan {
+                    adapt_order: 0,
+                    fixed_order: fo,
+                    rc_idx: Vec::new(),
+                    residual: res,
+                },
+            );
         }
         if max_order > 0 && x.iter().any(|v| *v != 0) {
             let ks = reflection_coefficients(&x, max_order);
@@ -534,7 +602,15 @@ impl XllEncoder {
                 let res = predict(&x, &coeff);
                 let u: Vec<u32> = res.iter().map(|v| zigzag(*v)).collect();
                 let cost = segment_cost(&u, order, n) + 8 * order as u64;
-                consider(cost, ChannelPlan { coded: x.clone(), adapt_order: order, fixed_order: 0, rc_idx: idx, residual: res });
+                consider(
+                    cost,
+                    ChannelPlan {
+                        adapt_order: order,
+                        fixed_order: 0,
+                        rc_idx: idx,
+                        residual: res,
+                    },
+                );
             }
         }
         best.unwrap().1
@@ -543,20 +619,36 @@ impl XllEncoder {
     /// Choose predictors for every channel of one channel set.
     fn plan_band(&self, pcm: &[Vec<i32>]) -> BandPlan {
         let nch = pcm.len();
-        let (orig_order, coeffs, coded) = if nch >= 2 { self.decorrelate(pcm) } else { (vec![0], vec![], pcm.to_vec()) };
+        let (orig_order, coeffs, coded) = if nch >= 2 {
+            self.decorrelate(pcm)
+        } else {
+            (vec![0], vec![], pcm.to_vec())
+        };
         let decor = coeffs.iter().any(|c| *c != 0);
-        let (orig_order, coeffs, coded) = if decor || nch < 2 { (orig_order, coeffs, coded) } else { ((0..nch).collect(), vec![0; nch / 2], pcm.to_vec()) };
+        let (orig_order, coeffs, coded) = if decor || nch < 2 {
+            (orig_order, coeffs, coded)
+        } else {
+            ((0..nch).collect(), vec![0; nch / 2], pcm.to_vec())
+        };
         let me: &XllEncoder = self;
         let plans: Vec<ChannelPlan> = {
             use rayon::prelude::*;
             coded.into_par_iter().map(|x| me.plan_channel(x)).collect()
         };
-        BandPlan { plans, orig_order, coeffs, decor }
+        BandPlan {
+            plans,
+            orig_order,
+            coeffs,
+            decor,
+        }
     }
 
     fn plan_set(&self, pcm: &[Vec<i32>], core0: Option<&[Vec<i32>]>) -> SetPlan {
         if self.nbands() == 1 {
-            return SetPlan { bands: vec![self.plan_band(pcm)], history: Vec::new() };
+            return SetPlan {
+                bands: vec![self.plan_band(pcm)],
+                history: Vec::new(),
+            };
         }
         let mut lo = Vec::new();
         let mut hi = Vec::new();
@@ -574,7 +666,10 @@ impl XllEncoder {
             history.push(h);
         }
         let (b0, b1) = rayon::join(|| self.plan_band(&lo), || self.plan_band(&hi));
-        SetPlan { bands: vec![b0, b1], history }
+        SetPlan {
+            bands: vec![b0, b1],
+            history,
+        }
     }
 
     /// Encode one frame of samples (`bit_res`-bit signed integers, one vector per channel: the channels of
@@ -589,7 +684,10 @@ impl XllEncoder {
     pub fn encode_frame_core(&mut self, pcm: &[Vec<i32>], core0: Option<&[Vec<i32>]>) -> Vec<u8> {
         let cfg = self.cfg.clone();
         let len = cfg.frame_samples;
-        assert!(self.nbands() == 1 || cfg.sets.len() == 1, "frequency bands: a single channel set only");
+        assert!(
+            self.nbands() == 1 || cfg.sets.len() == 1,
+            "frequency bands: a single channel set only"
+        );
         assert_eq!(pcm.len(), cfg.sets.iter().map(|s| s.channels).sum::<usize>());
         assert!(pcm.iter().all(|c| c.len() == len));
         let mut set_plans = Vec::new();
@@ -605,7 +703,10 @@ impl XllEncoder {
             if seg_len < 16 || seg_len > if cfg.sample_rate > 48_000 { 512 } else { 256 } {
                 continue;
             }
-            let segs: Vec<Vec<Vec<Vec<u8>>>> = set_plans.iter().map(|sp| (0..sp.bands.len()).map(|b| self.set_segments(sp, b, nseg)).collect()).collect();
+            let segs: Vec<Vec<Vec<Vec<u8>>>> = set_plans
+                .iter()
+                .map(|sp| (0..sp.bands.len()).map(|b| self.set_segments(sp, b, nseg)).collect())
+                .collect();
             let frame = self.assemble(&set_plans, &segs, nseg);
             if best_frame.as_ref().map_or(true, |f| frame.len() < f.len()) {
                 best_frame = Some(frame);
@@ -668,7 +769,11 @@ impl XllEncoder {
                 let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
                 let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
                 let a_len = part_a_len[i];
-                let code_a = if seg == 0 { recode(&slice[..a_len], rice) } else { Code::Rice(0) };
+                let code_a = if seg == 0 {
+                    recode(&slice[..a_len], rice)
+                } else {
+                    Code::Rice(0)
+                };
                 if seg == 0 {
                     put_values(&mut w, &slice[..a_len], code_a);
                 }
@@ -695,12 +800,21 @@ impl XllEncoder {
             }
             if band == 1 && seg == 0 {
                 // decimator history: the band-0 samples in front of this frame, as signed values of a common width
-                let peak = set.history.iter().flatten().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+                let peak = set
+                    .history
+                    .iter()
+                    .flatten()
+                    .map(|v| v.unsigned_abs())
+                    .max()
+                    .unwrap_or(0);
                 let nbits = (33 - peak.leading_zeros()).max(1);
                 w.put(nbits - 1, 5);
                 for h in &set.history {
                     for v in h {
-                        w.put((*v as u32) & if nbits >= 32 { u32::MAX } else { (1u32 << nbits) - 1 }, nbits);
+                        w.put(
+                            (*v as u32) & if nbits >= 32 { u32::MAX } else { (1u32 << nbits) - 1 },
+                            nbits,
+                        );
                     }
                 }
             }
@@ -759,7 +873,11 @@ impl XllEncoder {
         }
         for (bi, sp) in set_plan.bands.iter().enumerate() {
             h.put(u32::from(sp.decor), 1);
-            let order_bits = if nch <= 1 { 0 } else { 32 - (nch as u32 - 1).leading_zeros() };
+            let order_bits = if nch <= 1 {
+                0
+            } else {
+                32 - (nch as u32 - 1).leading_zeros()
+            };
             if sp.decor {
                 for o in &sp.orig_order {
                     h.put(*o as u32, order_bits);
@@ -851,8 +969,8 @@ impl XllEncoder {
         tmp.put((self.band_len() / nseg).trailing_zeros(), 4);
         tmp.put(nb4ssize - 1, 5);
         tmp.put(0, 2); // no band CRC
-        // The original sets this flag when the stream has downmix information, and then adds fields for the
-        // scalable resolution of every channel to the set headers; decoders do not need either, so it stays off.
+                       // The original sets this flag when the stream has downmix information, and then adds fields for the
+                       // scalable resolution of every channel to the set headers; decoders do not need either, so it stays off.
         tmp.put(0, 1);
         tmp.put(mask_bits - 1, 5);
         tmp.align(8);
@@ -919,7 +1037,11 @@ fn stored_param(code: Code, _nabits: u32, rice: bool) -> u32 {
 /// Re-choose a coding of the same family (Rice or linear) for another block of residuals.
 fn recode(res: &[i32], rice: bool) -> Code {
     let u: Vec<u32> = res.iter().map(|v| zigzag(*v)).collect();
-    if rice { Code::Rice(best_rice(&u).0) } else { Code::Linear(linear_bits(&u).0) }
+    if rice {
+        Code::Rice(best_rice(&u).0)
+    } else {
+        Code::Linear(linear_bits(&u).0)
+    }
 }
 
 fn put_values(w: &mut BitWriter, vals: &[i32], code: Code) {

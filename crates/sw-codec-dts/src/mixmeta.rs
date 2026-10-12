@@ -79,11 +79,21 @@ impl SecondaryPlan {
         let mut out = Vec::with_capacity(frames);
         for k in 0..frames {
             let db = if fading {
-                attenuation_at(s.attenuation_db, s.fade_down_secs, s.fade_up_secs, k as f64 * frame_secs, total_secs)
+                attenuation_at(
+                    s.attenuation_db,
+                    s.fade_down_secs,
+                    s.fade_up_secs,
+                    k as f64 * frame_secs,
+                    total_secs,
+                )
             } else {
                 s.attenuation_db
             };
-            out.push(FrameMix { scale: level_code(db), speakers, gains: gains.clone() });
+            out.push(FrameMix {
+                scale: level_code(db),
+                speakers,
+                gains: gains.clone(),
+            });
         }
         // the last frame is always back at full level once a fade up is on
         if s.fade_up_secs > 0.0 {
@@ -206,14 +216,27 @@ pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span
     }
     if !bs.timecode.start.trim().is_empty() {
         match parse_timecode(&bs.timecode.start) {
-            Some((h, m, s, f)) => info.start = crate::dtshd::position_of(info.fps_code, timecode_frames(info.fps_code, h, m, s, f)),
-            None => notes.push(format!("start timecode '{}' is not HH:MM:SS:FF; zero used", bs.timecode.start)),
+            Some((h, m, s, f)) => {
+                info.start = crate::dtshd::position_of(info.fps_code, timecode_frames(info.fps_code, h, m, s, f))
+            }
+            None => notes.push(format!(
+                "start timecode '{}' is not HH:MM:SS:FF; zero used",
+                bs.timecode.start
+            )),
         }
     }
     if !bs.timecode.reference.trim().is_empty() {
         match parse_timecode(&bs.timecode.reference) {
-            Some((h, m, s, f)) => info.reference = Some(crate::dtshd::position_of(info.fps_code, timecode_frames(info.fps_code, h, m, s, f))),
-            None => notes.push(format!("reference timecode '{}' is not HH:MM:SS:FF; the start used", bs.timecode.reference)),
+            Some((h, m, s, f)) => {
+                info.reference = Some(crate::dtshd::position_of(
+                    info.fps_code,
+                    timecode_frames(info.fps_code, h, m, s, f),
+                ))
+            }
+            None => notes.push(format!(
+                "reference timecode '{}' is not HH:MM:SS:FF; the start used",
+                bs.timecode.reference
+            )),
         }
     }
     if !bs.program_info.is_empty() {
@@ -234,7 +257,9 @@ pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span
                     }
                     Some(t) if t == 0.0 => {}
                     Some(_) => notes.push(format!("branch point {tc} is outside the encode and was not used")),
-                    None => notes.push(format!("branch point '{tc}' is not a timecode (HH:MM:SS:FF) and was ignored")),
+                    None => notes.push(format!(
+                        "branch point '{tc}' is not a timecode (HH:MM:SS:FF) and was ignored"
+                    )),
                 }
             }
             info.branch_points = Some(branch_points(&units));
@@ -247,7 +272,10 @@ pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span
 pub fn describe(bs: &BitstreamOptions, span: f64, secondary: bool) -> Vec<String> {
     let mut v = Vec::new();
     if !bs.program_info.is_empty() {
-        v.push(format!("Program information: {} characters", bs.program_info.chars().count().min(2000)));
+        v.push(format!(
+            "Program information: {} characters",
+            bs.program_info.chars().count().min(2000)
+        ));
     }
     match &bs.seamless {
         Seamless::Off => {}
@@ -272,7 +300,13 @@ pub fn describe(bs: &BitstreamOptions, span: f64, secondary: bool) -> Vec<String
     }
     if secondary {
         let s = &bs.secondary;
-        v.push(format!("Secondary audio: primary audio attenuation {:.1} dB, fade down {:.1} s, fade up {:.1} s{}", s.attenuation_db, s.fade_down_secs, s.fade_up_secs, if s.dialog_mode { ", dialog mode" } else { "" }));
+        v.push(format!(
+            "Secondary audio: primary audio attenuation {:.1} dB, fade down {:.1} s, fade up {:.1} s{}",
+            s.attenuation_db,
+            s.fade_down_secs,
+            s.fade_up_secs,
+            if s.dialog_mode { ", dialog mode" } else { "" }
+        ));
     }
     v
 }
@@ -284,7 +318,25 @@ mod tests {
     #[test]
     fn level_codes_match_the_original_table() {
         // values read off the original encoder's output
-        for (db, code) in [(0.0, 61), (0.3, 61), (0.4, 60), (6.0, 49), (12.0, 37), (14.8, 32), (14.9, 31), (15.4, 31), (15.6, 30), (18.0, 28), (29.4, 17), (29.6, 16), (30.9, 16), (31.1, 15), (45.0, 8), (59.0, 1), (60.0, 1)] {
+        for (db, code) in [
+            (0.0, 61),
+            (0.3, 61),
+            (0.4, 60),
+            (6.0, 49),
+            (12.0, 37),
+            (14.8, 32),
+            (14.9, 31),
+            (15.4, 31),
+            (15.6, 30),
+            (18.0, 28),
+            (29.4, 17),
+            (29.6, 16),
+            (30.9, 16),
+            (31.1, 15),
+            (45.0, 8),
+            (59.0, 1),
+            (60.0, 1),
+        ] {
             assert_eq!(level_code(db), code, "{db} dB");
         }
     }
@@ -293,19 +345,29 @@ mod tests {
     fn fade_down_is_fast_at_first() {
         // thirty dB over two seconds: 3 dB, then 5.5 dB at the first two frames (85.3 ms each)
         let f = 4096.0 / 48_000.0;
-        let codes: Vec<u8> = (0..4).map(|k| level_code(attenuation_at(30.0, 2.0, 0.0, k as f64 * f, 10.0))).collect();
+        let codes: Vec<u8> = (0..4)
+            .map(|k| level_code(attenuation_at(30.0, 2.0, 0.0, k as f64 * f, 10.0)))
+            .collect();
         assert_eq!(codes, vec![61, 55, 50, 45]);
     }
 
     #[test]
     fn branch_chunks() {
         assert_eq!(branch_points(&[]), vec![0, 0, 0, 1, 1, 3, 0, 0]);
-        assert_eq!(branch_points(&[branch_unit(1.0), branch_unit(2.0)]), vec![0, 0, 0, 3, 1, 3, 0x60, 0xbe]);
-        assert_eq!(branch_points(&[96, 190, 378, 753]), hex("00000005020003006000be017a02f100"));
+        assert_eq!(
+            branch_points(&[branch_unit(1.0), branch_unit(2.0)]),
+            vec![0, 0, 0, 3, 1, 3, 0x60, 0xbe]
+        );
+        assert_eq!(
+            branch_points(&[96, 190, 378, 753]),
+            hex("00000005020003006000be017a02f100")
+        );
     }
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]

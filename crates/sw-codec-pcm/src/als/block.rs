@@ -14,9 +14,72 @@ use crate::bitwriter::BitWriter;
 /// How the coefficients are Rice coded, by table (0 for 48 kHz, 1 for 96 kHz, 2 for 192 kHz): for each of the
 /// first 20 coefficients, the offset subtracted from its index and the Rice parameter.
 const COEFF_CODES: [[(i32, u32); 20]; 3] = [
-    [(-52, 4), (-29, 5), (-31, 4), (19, 4), (-16, 4), (12, 3), (-7, 3), (9, 3), (-5, 3), (6, 3), (-4, 3), (3, 3), (-3, 2), (3, 2), (-2, 2), (3, 2), (-1, 2), (2, 2), (-1, 2), (2, 2)],
-    [(-58, 3), (-42, 4), (-46, 4), (37, 5), (-36, 4), (29, 4), (-29, 4), (25, 4), (-23, 4), (20, 4), (-17, 4), (16, 4), (-12, 4), (12, 3), (-10, 4), (7, 3), (-4, 4), (3, 3), (-1, 3), (1, 3)],
-    [(-59, 3), (-45, 5), (-50, 4), (38, 4), (-39, 4), (32, 4), (-30, 4), (25, 3), (-23, 3), (20, 3), (-20, 3), (16, 3), (-13, 3), (10, 3), (-7, 3), (3, 3), (0, 3), (-1, 3), (2, 3), (-1, 2)],
+    [
+        (-52, 4),
+        (-29, 5),
+        (-31, 4),
+        (19, 4),
+        (-16, 4),
+        (12, 3),
+        (-7, 3),
+        (9, 3),
+        (-5, 3),
+        (6, 3),
+        (-4, 3),
+        (3, 3),
+        (-3, 2),
+        (3, 2),
+        (-2, 2),
+        (3, 2),
+        (-1, 2),
+        (2, 2),
+        (-1, 2),
+        (2, 2),
+    ],
+    [
+        (-58, 3),
+        (-42, 4),
+        (-46, 4),
+        (37, 5),
+        (-36, 4),
+        (29, 4),
+        (-29, 4),
+        (25, 4),
+        (-23, 4),
+        (20, 4),
+        (-17, 4),
+        (16, 4),
+        (-12, 4),
+        (12, 3),
+        (-10, 4),
+        (7, 3),
+        (-4, 4),
+        (3, 3),
+        (-1, 3),
+        (1, 3),
+    ],
+    [
+        (-59, 3),
+        (-45, 5),
+        (-50, 4),
+        (38, 4),
+        (-39, 4),
+        (32, 4),
+        (-30, 4),
+        (25, 3),
+        (-23, 3),
+        (20, 3),
+        (-20, 3),
+        (16, 3),
+        (-13, 3),
+        (10, 3),
+        (-7, 3),
+        (3, 3),
+        (0, 3),
+        (-1, 3),
+        (2, 3),
+        (-1, 2),
+    ],
 ];
 
 /// Coefficients 20 to 126 use Rice parameter 2 (and an offset of their parity), later ones parameter 1.
@@ -36,11 +99,19 @@ pub(crate) struct Settings {
 impl Settings {
     /// Largest Rice parameter the block can name (the field is 4 bits wide, or 5 from 24 bit).
     fn max_rice(&self) -> u32 {
-        if self.bits > 16 { 31 } else { 15 }
+        if self.bits > 16 {
+            31
+        } else {
+            15
+        }
     }
 
     fn rice_field_bits(&self) -> u32 {
-        if self.bits > 16 { 5 } else { 4 }
+        if self.bits > 16 {
+            5
+        } else {
+            4
+        }
     }
 }
 
@@ -109,7 +180,9 @@ fn order_candidates(own: &[i32], cfg: Settings) -> Vec<usize> {
     let analysis = lpc::analyse(own, limit);
     let n = own.len() as f64;
     let estimate = |m: usize| 0.5 * n * (analysis.error[m] / n + 1e-9).log2() + 6.0 * m as f64;
-    let best = (0..=analysis.reflection.len()).min_by(|&a, &b| estimate(a).total_cmp(&estimate(b))).unwrap_or(0);
+    let best = (0..=analysis.reflection.len())
+        .min_by(|&a, &b| estimate(a).total_cmp(&estimate(b)))
+        .unwrap_or(0);
     let mut candidates = vec![0, best, best / 2, (best * 2).min(analysis.reflection.len())];
     candidates.sort_unstable();
     candidates.dedup();
@@ -172,13 +245,20 @@ fn best_partition(residual: &[i32], cfg: Settings) -> (usize, Vec<u32>) {
     if residual.len() % 4 != 0 || residual.len() < 32 {
         return (1, whole.1);
     }
-    let quarters: Vec<(u32, u64)> = residual.chunks(residual.len() / 4).map(|c| best_param(c, max_k)).collect();
+    let quarters: Vec<(u32, u64)> = residual
+        .chunks(residual.len() / 4)
+        .map(|c| best_param(c, max_k))
+        .collect();
     let params: Vec<u32> = quarters.iter().map(|q| q.0).collect();
     let mut bits = cfg.rice_field_bits() as u64 + quarters.iter().map(|q| q.1).sum::<u64>();
     for pair in params.windows(2) {
         bits += rice_bits(pair[1] as i32 - pair[0] as i32, 0);
     }
-    if bits < whole.0 { (4, params) } else { (1, whole.1) }
+    if bits < whole.0 {
+        (4, params)
+    } else {
+        (1, whole.1)
+    }
 }
 
 /// Quantiser indices for reflection coefficients (the first two companded, with the second's sign flipped).
@@ -217,7 +297,10 @@ mod tests {
             w.align();
             let written = w.bytes.len() as u64 * 8;
             let bits = rice_bits(value, k);
-            assert!(written >= bits && written < bits + 8, "{value} k={k}: {written} bits written vs {bits}");
+            assert!(
+                written >= bits && written < bits + 8,
+                "{value} k={k}: {written} bits written vs {bits}"
+            );
         }
     }
 
@@ -230,7 +313,11 @@ mod tests {
 
     #[test]
     fn silence_is_one_byte() {
-        let cfg = Settings { max_order: 32, bits: 16, table: 0 };
+        let cfg = Settings {
+            max_order: 32,
+            bits: 16,
+            table: 0,
+        };
         assert_eq!(encode(&vec![0; 3000], 0, false, cfg).len(), 1);
     }
 }

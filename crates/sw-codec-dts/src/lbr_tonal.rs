@@ -163,8 +163,6 @@ pub struct Search {
     /// A tone is kept when the energy it removes exceeds this many times the energy floor of its footprint.
     pub kappa: f64,
     pub max_tones: usize,
-    /// `limited_range` of the stream (the amplitude reference moves with it).
-    pub limited_range: i32,
 }
 
 /// Pick tones for one subframe set. `targets[ch]` holds the coefficients of the `2 * steps` steps of the set
@@ -220,11 +218,18 @@ pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_lef
                     continue;
                 }
                 // a second tone within a line of one already chosen is the same partial refitted
-                if tones.iter().any(|t| (t.fp as i64 - fp as i64).unsigned_abs() < f as u64) {
+                if tones
+                    .iter()
+                    .any(|t| (t.fp as i64 - fp as i64).unsigned_abs() < f as u64)
+                {
                     continue;
                 }
                 let (_, lo_l, hi_l) = basis_into(grp, fp, &mut bu, &mut bv);
-                let (uu, uv, vv) = (dot(&bu, &bu, lo_l, hi_l), dot(&bu, &bv, lo_l, hi_l), dot(&bv, &bv, lo_l, hi_l));
+                let (uu, uv, vv) = (
+                    dot(&bu, &bu, lo_l, hi_l),
+                    dot(&bu, &bv, lo_l, hi_l),
+                    dot(&bv, &bv, lo_l, hi_l),
+                );
                 let det = uu * vv - uv * uv;
                 if det.abs() > 1e-12 {
                     let mut gain = 0.0;
@@ -244,8 +249,16 @@ pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_lef
         let Some((_, fp)) = best else { break };
         // per channel: best phase code and amplitude index at this frequency
         let (shift, lo_l, hi_l) = basis_into(grp, fp, &mut bu, &mut bv);
-        let (uu, uv, vv) = (dot(&bu, &bu, lo_l, hi_l), dot(&bu, &bv, lo_l, hi_l), dot(&bv, &bv, lo_l, hi_l));
-        let mut tone = Tone { fp, amp: vec![0; nch], phs: vec![0; nch] };
+        let (uu, uv, vv) = (
+            dot(&bu, &bu, lo_l, hi_l),
+            dot(&bu, &bv, lo_l, hi_l),
+            dot(&bv, &bv, lo_l, hi_l),
+        );
+        let mut tone = Tone {
+            fp,
+            amp: vec![0; nch],
+            phs: vec![0; nch],
+        };
         let mut total_gain = 0.0;
         let mut floor = 0.0;
         for (ch, t) in targets.iter().enumerate() {
@@ -349,7 +362,12 @@ pub fn scale_factors(groups: &[Vec<Vec<Tone>>], limited_range: i32) -> [u8; 6] {
 }
 
 fn main_channel(t: &Tone) -> Option<usize> {
-    t.amp.iter().enumerate().filter(|(_, &a)| a > 0).max_by_key(|(_, &a)| a).map(|(i, _)| i)
+    t.amp
+        .iter()
+        .enumerate()
+        .filter(|(_, &a)| a > 0)
+        .max_by_key(|(_, &a)| a)
+        .map(|(i, _)| i)
 }
 
 /// Bits of one group's chunk body: every subframe's tones in frequency order, closed by a zero difference.
@@ -358,7 +376,11 @@ pub fn write_group(g: u32, subs: &[Vec<Tone>], nch: usize, scf: &[u8; 6], limite
     let amp_vlc = Vlc::new(&HUFF_TNL_SCF);
     let damp_vlc = Vlc::new(&HUFF_DAMP);
     let dph_vlc = Vlc::new(&HUFF_DPH);
-    let ch_bits = if nch <= 1 { 0 } else { 32 - (nch as u32 - 1).leading_zeros() };
+    let ch_bits = if nch <= 1 {
+        0
+    } else {
+        32 - (nch as u32 - 1).leading_zeros()
+    };
     let mut w = BitsLe::new();
     let put_diff = |w: &mut BitsLe, d: u32| {
         let size = tnl_table(g).len();
@@ -426,7 +448,11 @@ mod tests {
         let mut target = vec![vec![[0f64; HOP]; n]];
         render(&grp, 514, 36, 3, &mut target[0]);
         let e0: f64 = target[0].iter().flatten().map(|v| v * v).sum();
-        let cfg = Search { max_line: 120, kappa: 1.0, max_tones: 4, limited_range: 0 };
+        let cfg = Search {
+            max_line: 120,
+            kappa: 1.0,
+            max_tones: 4,
+        };
         let mut bits = 1000;
         let tones = pick(&grp, &mut target, &cfg, &mut bits);
         let e1: f64 = target[0].iter().flatten().map(|v| v * v).sum();
@@ -436,7 +462,18 @@ mod tests {
 
     #[test]
     fn group_syntax_ends_every_subframe() {
-        let tones = vec![Tone { fp: 40, amp: vec![24], phs: vec![3] }, Tone { fp: 55, amp: vec![23], phs: vec![7] }];
+        let tones = vec![
+            Tone {
+                fp: 40,
+                amp: vec![24],
+                phs: vec![3],
+            },
+            Tone {
+                fp: 55,
+                amp: vec![23],
+                phs: vec![7],
+            },
+        ];
         let mut subs: Vec<Vec<Tone>> = vec![Vec::new(); 8];
         subs[2] = tones;
         let bytes = write_group(3, &subs, 1, &[0, 0, 23, 25, 0, 0], 0).into_bytes();

@@ -55,12 +55,66 @@ pub fn wide_remap_sets() -> (Vec<u32>, Vec<Vec<(u32, Vec<u32>)>>) {
     let masks = vec![2123, 8207, 47, 79, 159, 287];
     let c = |m: u32, g: u32| (m, vec![g]);
     let rows: Vec<Vec<(u32, Vec<u32>)>> = vec![
-        vec![c(1, 30), c(2, 30), c(4, 30), c(32, 30), c(8, 30), c(16, 30), c(64, 30), c(128, 30)],
-        vec![c(1, 30), c(2, 30), c(4, 30), c(8, 30), c(16, 30), c(32, 30), c(64, 12), c(128, 12)],
-        vec![c(1, 30), c(2, 30), c(4, 30), c(8, 30), c(16, 30), c(32, 30), (0, vec![]), (0, vec![])],
-        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![24, 18]), (144, vec![24, 18]), c(32, 30), c(8, 24), c(16, 24)],
-        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![30, 18]), (144, vec![30, 18]), c(32, 30), (24, vec![6, 6]), (0, vec![])],
-        vec![c(1, 30), (66, vec![30, 12]), (132, vec![30, 12]), (72, vec![30, 18]), (144, vec![30, 18]), c(32, 30), (24, vec![6, 6]), (0, vec![])],
+        vec![
+            c(1, 30),
+            c(2, 30),
+            c(4, 30),
+            c(32, 30),
+            c(8, 30),
+            c(16, 30),
+            c(64, 30),
+            c(128, 30),
+        ],
+        vec![
+            c(1, 30),
+            c(2, 30),
+            c(4, 30),
+            c(8, 30),
+            c(16, 30),
+            c(32, 30),
+            c(64, 12),
+            c(128, 12),
+        ],
+        vec![
+            c(1, 30),
+            c(2, 30),
+            c(4, 30),
+            c(8, 30),
+            c(16, 30),
+            c(32, 30),
+            (0, vec![]),
+            (0, vec![]),
+        ],
+        vec![
+            c(1, 30),
+            (66, vec![30, 12]),
+            (132, vec![30, 12]),
+            (72, vec![24, 18]),
+            (144, vec![24, 18]),
+            c(32, 30),
+            c(8, 24),
+            c(16, 24),
+        ],
+        vec![
+            c(1, 30),
+            (66, vec![30, 12]),
+            (132, vec![30, 12]),
+            (72, vec![30, 18]),
+            (144, vec![30, 18]),
+            c(32, 30),
+            (24, vec![6, 6]),
+            (0, vec![]),
+        ],
+        vec![
+            c(1, 30),
+            (66, vec![30, 12]),
+            (132, vec![30, 12]),
+            (72, vec![30, 18]),
+            (144, vec![30, 18]),
+            c(32, 30),
+            (24, vec![6, 6]),
+            (0, vec![]),
+        ],
     ];
     (masks, rows)
 }
@@ -110,13 +164,30 @@ pub fn exss_frame_xxch_x96(p: &ExssParams, xxch: &[u8], x96: &[u8]) -> Vec<u8> {
     exss_build_x(p, None, None, None, Some(xxch), Some(x96))
 }
 
-fn exss_build(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>, xxch: Option<&[u8]>) -> Vec<u8> {
+fn exss_build(
+    p: &ExssParams,
+    xbr: Option<&[u8]>,
+    xll: Option<&[u8]>,
+    lbr: Option<&[u8]>,
+    xxch: Option<&[u8]>,
+) -> Vec<u8> {
     exss_build_x(p, xbr, xll, lbr, xxch, None)
 }
 
-fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Option<&[u8]>, xxch: Option<&[u8]>, x96: Option<&[u8]>) -> Vec<u8> {
+fn exss_build_x(
+    p: &ExssParams,
+    xbr: Option<&[u8]>,
+    xll: Option<&[u8]>,
+    lbr: Option<&[u8]>,
+    xxch: Option<&[u8]>,
+    x96: Option<&[u8]>,
+) -> Vec<u8> {
     let nb4f = 16u32;
-    let payload = xbr.map_or(0, |x| x.len()) + xll.map_or(0, |x| x.len()) + lbr.map_or(0, |x| x.len()) + xxch.map_or(0, |x| x.len()) + x96.map_or(0, |x| x.len());
+    let payload = xbr.map_or(0, |x| x.len())
+        + xll.map_or(0, |x| x.len())
+        + lbr.map_or(0, |x| x.len())
+        + xxch.map_or(0, |x| x.len())
+        + x96.map_or(0, |x| x.len());
     // ---- asset descriptor (its own byte size)
     let mut a = BitWriter::new();
     a.put(0, 9); // size placeholder
@@ -138,9 +209,20 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
             a.put(u32::from(p.extras.emb_stereo), 1); // embedded stereo downmix
         }
         if p.channels > 6 {
-            a.put(u32::from(xxch.is_some() || p.xch_in_core || p.extras.emb_5_1), 1); // embedded 5.1 downmix (in the XXCH extension, in the 5.1 core of an XCH stream, or in the XLL hierarchy)
+            a.put(u32::from(xxch.is_some() || p.xch_in_core || p.extras.emb_5_1), 1);
+            // embedded 5.1 downmix (in the XXCH extension, in the 5.1 core of an XCH stream, or in the XLL hierarchy)
         }
-        let mask_bits: u32 = if p.extras.wide_remap { 16 } else if p.spk_mask <= 0xF { 4 } else if p.spk_mask <= 0xFF { 8 } else if p.spk_mask <= 0xFFF { 12 } else { 16 };
+        let mask_bits: u32 = if p.extras.wide_remap {
+            16
+        } else if p.spk_mask <= 0xF {
+            4
+        } else if p.spk_mask <= 0xFF {
+            8
+        } else if p.spk_mask <= 0xFFF {
+            12
+        } else {
+            16
+        };
         a.put(1, 1); // speaker mask enabled
         a.put(mask_bits / 4 - 1, 2);
         a.put(p.spk_mask, mask_bits);
@@ -204,7 +286,13 @@ fn exss_build_x(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>, lbr: Opt
         a.put(0, 2); // sync distance 0 frames
     } else if p.with_core || xbr.is_some() || xxch.is_some() || x96.is_some() {
         a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 }) | (if p.x96_in_core { 0x004 } else { 0 }) | (if p.xch_in_core { 0x008 } else { 0 }) | (if xbr.is_some() { 0x020 } else { 0 }) | (if xxch.is_some() { 0x040 } else { 0 }) | (if x96.is_some() { 0x080 } else { 0 }) | (if xll.is_some() { 0x200 } else { 0 });
+        let mask = (if p.with_core { 0x001 } else { 0 })
+            | (if p.x96_in_core { 0x004 } else { 0 })
+            | (if p.xch_in_core { 0x008 } else { 0 })
+            | (if xbr.is_some() { 0x020 } else { 0 })
+            | (if xxch.is_some() { 0x040 } else { 0 })
+            | (if x96.is_some() { 0x080 } else { 0 })
+            | (if xll.is_some() { 0x200 } else { 0 });
         a.put(mask, 12); // core in the core substream, XBR, XLL
         if let Some(b) = xbr {
             a.put(b.len() as u32 - 1, 14);

@@ -55,7 +55,10 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LbrLayout, crate::Error> {
     let has = |c: Channel| pos(c).is_some();
     let side = (has(Ls) && has(Rs)) || (has(Lss) && has(Rss));
     let (ls, rs) = if has(Ls) { (Ls, Rs) } else { (Lss, Rss) };
-    let known = layout.channels.iter().all(|c| matches!(c, C | L | R | Lfe | Ls | Rs | Lss | Rss));
+    let known = layout
+        .channels
+        .iter()
+        .all(|c| matches!(c, C | L | R | Lfe | Ls | Rs | Lss | Rss));
     if !known || (has(L) != has(R)) || (has(Ls) && !has(Rs)) || (has(Lss) && !has(Rss)) || (has(Ls) && has(Lss)) {
         return Err(crate::Error::Unsupported(format!("layout '{}' is not one of the DTS Express arrangements (mono, stereo, with centre, with surrounds, with LFE)", layout.id)));
     }
@@ -79,19 +82,34 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LbrLayout, crate::Error> {
         mask |= 8;
     }
     if mask & 7 == 0 {
-        return Err(crate::Error::Unsupported("DTS Express needs at least one full-band channel".into()));
+        return Err(crate::Error::Unsupported(
+            "DTS Express needs at least one full-band channel".into(),
+        ));
     }
-    Ok(LbrLayout { mask, order, lfe: pos(Lfe) })
+    Ok(LbrLayout {
+        mask,
+        order,
+        lfe: pos(Lfe),
+    })
 }
 
-pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<LbrStats, LbrError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &LbrRequest,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<LbrStats, LbrError> {
     let rate = stems.sample_rate;
     let map = map_layout(req.layout)?;
     let nch = map.order.len();
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(LbrError::Empty);
     }
@@ -99,7 +117,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     let total_channels = nch + usize::from(map.lfe.is_some());
     let frames_total = want.div_ceil(n as u64) as usize;
     // the mixing metadata of every frame: the primary audio's attenuation (with its fades) and the mono mapping
-    let plan = req.secondary.then(|| crate::mixmeta::SecondaryPlan::new(&req.bitstream.secondary, n as f64 / rate as f64, want as f64 / rate as f64, frames_total + 1));
+    let plan = req.secondary.then(|| {
+        crate::mixmeta::SecondaryPlan::new(
+            &req.bitstream.secondary,
+            n as f64 / rate as f64,
+            want as f64 / rate as f64,
+            frames_total + 1,
+        )
+    });
     let mut exss = ExssParams {
         sample_rate: rate,
         channels: total_channels,
@@ -108,8 +133,15 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         with_core: false,
         dialnorm: 0,
         frame_duration_code: (n / 512 - 1) as u32,
-        x96_in_core: false, xch_in_core: false, secondary: req.secondary,
-        extras: ExssExtras { min_header: 28, emb_stereo: false, mix: plan.as_ref().map(|p| p.frames[0].clone()), ..Default::default() },
+        x96_in_core: false,
+        xch_in_core: false,
+        secondary: req.secondary,
+        extras: ExssExtras {
+            min_header: 28,
+            emb_stereo: false,
+            mix: plan.as_ref().map(|p| p.frames[0].clone()),
+            ..Default::default()
+        },
     };
     // the stream's bit rate counts the whole extension substream frame, so the LBR payload gives up the header's share
     let overhead = exss_frame_lbr(&exss, &[0u8; 4]).len() - 4;
@@ -117,7 +149,15 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
     let total = ((req.bitrate_kbps as u64 * 1000 * n as u64 / rate as u64 / 8) & !3) as usize;
     let payload = total.saturating_sub(overhead);
     let bitrate = (payload as u64 * 8 * rate as u64 / n as u64) as u32;
-    let mut enc = LbrEncoder::new(LbrConfig { sample_rate: rate, channels: nch, speaker_mask: map.mask, lfe: map.lfe.is_some(), bitrate, dialog_mode: req.bitstream.secondary.dialog_mode, payload_bytes: Some(payload) })?;
+    let mut enc = LbrEncoder::new(LbrConfig {
+        sample_rate: rate,
+        channels: nch,
+        speaker_mask: map.mask,
+        lfe: map.lfe.is_some(),
+        bitrate,
+        dialog_mode: req.bitstream.secondary.dialog_mode,
+        payload_bytes: Some(payload),
+    })?;
     let mut info = DtsHdInfo::new(rate, n as u16, want, map.mask, Kind::ExtensionOnly);
     crate::mixmeta::apply_container_options(&mut info, &req.bitstream, want as f64 / rate as f64);
     let mut file = StreamOut::create(req.output, Some(info))?;
@@ -135,7 +175,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         let block: Vec<Vec<f32>> = slots.iter().map(|&s| planar[s][..got].to_vec()).collect();
         remaining -= got as u64;
         for p in enc.push(&block) {
-            exss.extras.mix = plan.as_ref().map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
+            exss.extras.mix = plan
+                .as_ref()
+                .map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
             let f = exss_frame_lbr(&exss, &p);
             file.write_frame(&f, f.len())?;
             bytes += f.len() as u64;
@@ -144,7 +186,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &LbrRequest, on_progress: &mut d
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     for p in enc.finish() {
-        exss.extras.mix = plan.as_ref().map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
+        exss.extras.mix = plan
+            .as_ref()
+            .map(|pl| pl.frames[(frames as usize).min(pl.frames.len() - 1)].clone());
         let f = exss_frame_lbr(&exss, &p);
         file.write_frame(&f, f.len())?;
         bytes += f.len() as u64;

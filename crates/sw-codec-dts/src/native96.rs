@@ -7,19 +7,35 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_pcm::StemSet;
 
-pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
     let rate = stems.sample_rate;
     if rate != 96_000 && rate != 88_200 {
         return Err(crate::Error::Unsupported(format!("DTS 96/24 needs 88.2 or 96 kHz input, not {rate} Hz")).into());
     }
     // 6.x with a matrixed centre surround: the core is the 5.x downmix (Cs at -3 dB on both surrounds), flagged ES
     let mix_cs = req.es.map_or(false, |e| e.mix_cs && !e.xch) && req.layout.channels.contains(&sw_core::Channel::Cs);
-    let cs_src = req.layout.channels.iter().position(|c| *c == sw_core::Channel::Cs).filter(|_| mix_cs);
+    let cs_src = req
+        .layout
+        .channels
+        .iter()
+        .position(|c| *c == sw_core::Channel::Cs)
+        .filter(|_| mix_cs);
     let mut map = if mix_cs {
-        let idx: Vec<usize> = (0..req.layout.channels.len()).filter(|&i| req.layout.channels[i] != sw_core::Channel::Cs).collect();
+        let idx: Vec<usize> = (0..req.layout.channels.len())
+            .filter(|&i| req.layout.channels[i] != sw_core::Channel::Cs)
+            .collect();
         let chans: Vec<sw_core::Channel> = idx.iter().map(|&i| req.layout.channels[i]).collect();
         let cm = crate::native::map_channels(&chans, req.layout.id)?;
-        crate::native::LayoutMap { amode: cm.amode, order: cm.order.iter().map(|&i| idx[i]).collect(), lfe: cm.lfe.map(|i| idx[i]) }
+        crate::native::LayoutMap {
+            amode: cm.amode,
+            order: cm.order.iter().map(|&i| idx[i]).collect(),
+            lfe: cm.lfe.map(|i| idx[i]),
+        }
     } else {
         map_layout(req.layout)?
     };
@@ -27,32 +43,81 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
     // a DTS CD: 44.1 kHz core of 1024-sample frames, the stream packed into 14-bit words of a WAV file
     let cd = wav && rate == 88_200 && matches!(req.bitrate_kbps, 1411 | 1234 | 1235);
-    let (core_rate, blocks) = if rate == 88_200 { (44_100u32, if cd { 32usize } else { 16 }) } else { (48_000, 16) };
+    let (core_rate, blocks) = if rate == 88_200 {
+        (44_100u32, if cd { 32usize } else { 16 })
+    } else {
+        (48_000, 16)
+    };
     if cd && map.amode == 4 {
         map.amode = 2; // a DTS CD at 88.2 kHz does not flag matrix-encoded stereo
     }
-    let bitrate = if cd { 1_234_800 } else { crate::native::core_bitrate(req) };
+    let bitrate = if cd {
+        1_234_800
+    } else {
+        crate::native::core_bitrate(req)
+    };
     // a fifth of the frame for the extension, at least 96 bytes
     let frame_bytes = (bitrate as usize * (blocks * 32) / core_rate as usize / 8) & !3;
     let x96_bytes = ((frame_bytes / 5).max(96)) & !3;
-    let make_enc = || Dts96Encoder::new(Dts96Config { map: map.clone(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, x96_bytes, core_rate, blocks, es: req.es.map_or(false, |e| e.flag), aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), false) });
+    let make_enc = || {
+        Dts96Encoder::new(Dts96Config {
+            map: map.clone(),
+            bitrate,
+            dialnorm: req.dialnorm,
+            pcm_bits: req.pcm_bits,
+            x96_bytes,
+            core_rate,
+            blocks,
+            es: req.es.map_or(false, |e| e.flag),
+            aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), false),
+        })
+    };
     let mut enc = make_enc()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
     if let Some(kbps) = req.hra_kbps {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
+        let ex = crate::exss::ExssParams {
+            sample_rate: rate,
+            channels: nprim + usize::from(map.lfe.is_some()),
+            bit_res: req.pcm_bits,
+            spk_mask: crate::ma::map_layout(req.layout).exss_mask,
+            with_core: true,
+            dialnorm: (-req.dialnorm) as u32,
+            frame_duration_code: 0,
+            x96_in_core: true,
+            xch_in_core: false,
+            secondary: false,
+            extras: crate::exss::ExssExtras {
+                min_header: 28,
+                ..Default::default()
+            },
+        };
         enc.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
     }
-    let container = req.hra_kbps.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req.hra_kbps.is_some()
+        && req
+            .output
+            .extension()
+            .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
-        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        let mut i = crate::dtshd::DtsHdInfo::new(
+            rate,
+            n as u16,
+            want,
+            crate::ma::map_layout(req.layout).exss_mask as u16,
+            crate::dtshd::Kind::CoreAndExtension,
+        );
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = req.bitrate_kbps;
         i.core_payload = core_payload;
@@ -65,7 +130,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     } else {
         None
     };
-    let mut out = if wav { None } else { Some(crate::dtshd::StreamOut::create(req.output, info)?) };
+    let mut out = if wav {
+        None
+    } else {
+        Some(crate::dtshd::StreamOut::create(req.output, info)?)
+    };
     let mut written = 0u64;
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
@@ -78,7 +147,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         }
         let got = (remaining as usize).min(chunk);
         stems.read_planar(&mut planar, got)?;
-        let surround = |c: sw_core::Channel| matches!(c, sw_core::Channel::Ls | sw_core::Channel::Rs | sw_core::Channel::Lss | sw_core::Channel::Rss);
+        let surround = |c: sw_core::Channel| {
+            matches!(
+                c,
+                sw_core::Channel::Ls | sw_core::Channel::Rs | sw_core::Channel::Lss | sw_core::Channel::Rss
+            )
+        };
         let block: Vec<Vec<f64>> = slots
             .iter()
             .map(|&s| {
@@ -111,7 +185,22 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let blackout = if container {
         make_enc().ok().and_then(|mut e| {
             if let Some(kbps) = req.hra_kbps {
-                let ex = crate::exss::ExssParams { sample_rate: rate, channels: nprim + usize::from(map.lfe.is_some()), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: true, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
+                let ex = crate::exss::ExssParams {
+                    sample_rate: rate,
+                    channels: nprim + usize::from(map.lfe.is_some()),
+                    bit_res: req.pcm_bits,
+                    spk_mask: crate::ma::map_layout(req.layout).exss_mask,
+                    with_core: true,
+                    dialnorm: (-req.dialnorm) as u32,
+                    frame_duration_code: 0,
+                    x96_in_core: true,
+                    xch_in_core: false,
+                    secondary: false,
+                    extras: crate::exss::ExssExtras {
+                        min_header: 28,
+                        ..Default::default()
+                    },
+                };
                 e.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
             }
             let zeros = vec![vec![0.0f64; n]; slots.len()];
@@ -142,9 +231,20 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
 }
 
 /// Write one frame: into the `.dtshd` container or raw file, or (a DTS CD) packed into 14-bit words in the WAV file.
-fn put(out: &mut Option<crate::dtshd::StreamOut>, wav: &mut Option<std::io::BufWriter<std::fs::File>>, written: &mut u64, frame: &[u8], core_payload: u32, cd: bool) -> std::io::Result<()> {
+fn put(
+    out: &mut Option<crate::dtshd::StreamOut>,
+    wav: &mut Option<std::io::BufWriter<std::fs::File>>,
+    written: &mut u64,
+    frame: &[u8],
+    core_payload: u32,
+    cd: bool,
+) -> std::io::Result<()> {
     if let Some(w) = wav {
-        let data = if cd { crate::native::pack_14bit(frame) } else { frame.to_vec() };
+        let data = if cd {
+            crate::native::pack_14bit(frame)
+        } else {
+            frame.to_vec()
+        };
         w.write_all(&data)?;
         *written += data.len() as u64;
     } else if let Some(o) = out {

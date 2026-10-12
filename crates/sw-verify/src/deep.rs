@@ -12,7 +12,11 @@ pub(crate) fn run(path: &Path, opt: &Options, c: &mut Collector, probe: Option<&
     let ffmpeg = opt.ffmpeg.clone().unwrap_or_else(|| PathBuf::from("ffmpeg"));
     match decode(path, &ffmpeg, probe, c) {
         Decoded::Missing => {
-            c.check("Full decode", Status::Skipped, "FFmpeg was not found, so the audio could not be decoded (set its path in the settings)");
+            c.check(
+                "Full decode",
+                Status::Skipped,
+                "FFmpeg was not found, so the audio could not be decoded (set its path in the settings)",
+            );
         }
         Decoded::Done(d) => {
             if let Some(p) = probe {
@@ -29,29 +33,61 @@ pub(crate) fn run(path: &Path, opt: &Options, c: &mut Collector, probe: Option<&
 
 /// A FLAC file stores the MD5 of the audio it holds; the decoded audio must hash to the same value.
 fn flac_md5_check(path: &Path, ffmpeg: &Path, c: &mut Collector) {
-    let stored = c.report.summary.iter().find(|(k, _)| k == "Stored audio MD5").map(|(_, v)| v.clone());
-    let bits = c.report.summary.iter().find(|(k, _)| k == "Sample format").and_then(|(_, v)| v.split('-').next().and_then(|n| n.parse::<u32>().ok()));
-    let (Some(stored), Some(bits)) = (stored, bits) else { return };
+    let stored = c
+        .report
+        .summary
+        .iter()
+        .find(|(k, _)| k == "Stored audio MD5")
+        .map(|(_, v)| v.clone());
+    let bits = c
+        .report
+        .summary
+        .iter()
+        .find(|(k, _)| k == "Sample format")
+        .and_then(|(_, v)| v.split('-').next().and_then(|n| n.parse::<u32>().ok()));
+    let (Some(stored), Some(bits)) = (stored, bits) else {
+        return;
+    };
     if stored == "not set" {
-        c.check("Audio MD5 (FLAC)", Status::Info, "the file does not store an MD5 of its audio");
+        c.check(
+            "Audio MD5 (FLAC)",
+            Status::Info,
+            "the file does not store an MD5 of its audio",
+        );
         return;
     }
     let codec = if bits <= 16 { "pcm_s16le" } else { "pcm_s24le" };
-    let out = Command::new(ffmpeg).args(["-hide_banner", "-v", "error", "-i"]).arg(path).args(["-vn", "-c:a", codec, "-f", "md5", "-"]).stdin(Stdio::null()).output();
+    let out = Command::new(ffmpeg)
+        .args(["-hide_banner", "-v", "error", "-i"])
+        .arg(path)
+        .args(["-vn", "-c:a", codec, "-f", "md5", "-"])
+        .stdin(Stdio::null())
+        .output();
     let Ok(out) = out else { return };
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let decoded = text.trim().strip_prefix("MD5=").unwrap_or("").to_lowercase();
     if decoded == stored {
-        c.check("Audio MD5 (FLAC)", Status::Pass, "the decoded audio hashes to the MD5 stored in the file");
+        c.check(
+            "Audio MD5 (FLAC)",
+            Status::Pass,
+            "the decoded audio hashes to the MD5 stored in the file",
+        );
     } else {
-        c.check("Audio MD5 (FLAC)", Status::Fail, format!("decoded audio hashes to {decoded}, the file stores {stored}"));
+        c.check(
+            "Audio MD5 (FLAC)",
+            Status::Fail,
+            format!("decoded audio hashes to {decoded}, the file stores {stored}"),
+        );
     }
 }
 
 /// A bare `.als` file (the record, then frames) has no container FFmpeg understands.
 fn is_raw_als(path: &Path) -> bool {
     let mut head = [0u8; 4];
-    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == b"ALS\0"
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && &head == b"ALS\0"
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -65,7 +101,10 @@ fn bitrate_section(c: &mut Collector, p: &Probe) {
     let total: u64 = p.frame_bytes.iter().map(|b| *b as u64).sum();
     let total_samples: u64 = p.frame_samples.iter().map(|b| *b as u64).sum();
     let secs = total_samples as f64 / p.sample_rate as f64;
-    let (mn, mx) = (p.frame_bytes.iter().min().copied().unwrap_or(0), p.frame_bytes.iter().max().copied().unwrap_or(0));
+    let (mn, mx) = (
+        p.frame_bytes.iter().min().copied().unwrap_or(0),
+        p.frame_bytes.iter().max().copied().unwrap_or(0),
+    );
     // peak over one-second windows (the usual measure of a variable rate stream)
     let mut peak = 0f64;
     let mut peak_at = 0f64;
@@ -91,9 +130,18 @@ fn bitrate_section(c: &mut Collector, p: &Probe) {
     }
     let rows = vec![
         ("access units".to_string(), n.to_string()),
-        ("size (min / mean / max)".to_string(), format!("{mn} / {:.0} / {mx} bytes", total as f64 / n as f64)),
-        ("average bit rate".to_string(), format!("{:.1} kbps", total as f64 * 8.0 / secs.max(1e-9) / 1000.0)),
-        ("peak over one second".to_string(), format!("{peak:.1} kbps (starting at {peak_at:.1} s)")),
+        (
+            "size (min / mean / max)".to_string(),
+            format!("{mn} / {:.0} / {mx} bytes", total as f64 / n as f64),
+        ),
+        (
+            "average bit rate".to_string(),
+            format!("{:.1} kbps", total as f64 * 8.0 / secs.max(1e-9) / 1000.0),
+        ),
+        (
+            "peak over one second".to_string(),
+            format!("{peak:.1} kbps (starting at {peak_at:.1} s)"),
+        ),
         ("constant rate".to_string(), (mn == mx).to_string()),
     ];
     c.section("Bit rate", rows);
@@ -130,12 +178,20 @@ fn channels_of(layout: &str) -> Option<usize> {
 }
 
 fn probe_channels(path: &Path, ffmpeg: &Path) -> Option<(usize, u32)> {
-    let out = Command::new(ffmpeg).args(["-hide_banner", "-i"]).arg(path).args(["-t", "0", "-f", "null", "-"]).output().ok()?;
+    let out = Command::new(ffmpeg)
+        .args(["-hide_banner", "-i"])
+        .arg(path)
+        .args(["-t", "0", "-f", "null", "-"])
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stderr).to_string();
     for line in text.lines() {
         if let Some(i) = line.find("Audio:") {
             let parts: Vec<&str> = line[i..].split(',').map(|s| s.trim()).collect();
-            let rate = parts.iter().find_map(|p| p.strip_suffix(" Hz").and_then(|r| r.parse::<u32>().ok())).unwrap_or(0);
+            let rate = parts
+                .iter()
+                .find_map(|p| p.strip_suffix(" Hz").and_then(|r| r.parse::<u32>().ok()))
+                .unwrap_or(0);
             for p in &parts {
                 if let Some(n) = channels_of(p) {
                     if !p.ends_with("Hz") && !p.starts_with("Audio") {
@@ -162,7 +218,14 @@ fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) 
         return Decoded::Done(Done { channels: 0 });
     };
     let mut child = match Command::new(ffmpeg)
-        .args(["-hide_banner", "-v", "warning", "-err_detect", "crccheck+bitstream+buffer", "-i"])
+        .args([
+            "-hide_banner",
+            "-v",
+            "warning",
+            "-err_detect",
+            "crccheck+bitstream+buffer",
+            "-i",
+        ])
         .arg(path)
         .args(["-vn", "-c:a", "pcm_s24le", "-f", "s24le", "-"])
         .stdout(Stdio::piped())
@@ -201,21 +264,54 @@ fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) 
     let messages = errs.join().unwrap_or_default();
     let digest = md5.finish();
     let lines: Vec<&str> = messages.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    let bad: Vec<&&str> = lines.iter().filter(|l| !l.starts_with("Last message repeated") && !l.contains("Estimating duration from bitrate")).collect();
+    let bad: Vec<&&str> = lines
+        .iter()
+        .filter(|l| !l.starts_with("Last message repeated") && !l.contains("Estimating duration from bitrate"))
+        .collect();
     for l in bad.iter().take(60) {
         let low = l.to_lowercase();
-        let fatal = low.contains("error") || low.contains("invalid") || low.contains("corrupt") || low.contains("crc") || low.contains("missing") || low.contains("overread") || low.contains("failed") || low.contains("checksum");
-        c.finding(if fatal { Status::Fail } else { Status::Warn }, None, format!("decoder: {l}"));
+        let fatal = low.contains("error")
+            || low.contains("invalid")
+            || low.contains("corrupt")
+            || low.contains("crc")
+            || low.contains("missing")
+            || low.contains("overread")
+            || low.contains("failed")
+            || low.contains("checksum");
+        c.finding(
+            if fatal { Status::Fail } else { Status::Warn },
+            None,
+            format!("decoder: {l}"),
+        );
     }
     let any_fatal = bad.iter().any(|l| {
         let low = l.to_lowercase();
-        low.contains("error") || low.contains("invalid") || low.contains("corrupt") || low.contains("crc") || low.contains("missing") || low.contains("overread") || low.contains("failed") || low.contains("checksum")
+        low.contains("error")
+            || low.contains("invalid")
+            || low.contains("corrupt")
+            || low.contains("crc")
+            || low.contains("missing")
+            || low.contains("overread")
+            || low.contains("failed")
+            || low.contains("checksum")
     });
     let ok_exit = status.map(|s| s.success()).unwrap_or(false);
     c.check(
         "Full decode (FFmpeg, strict)",
-        if ok_exit && bad.is_empty() { Status::Pass } else if !ok_exit || any_fatal { Status::Fail } else { Status::Warn },
-        if bad.is_empty() && ok_exit { format!("{} samples per channel decoded with no complaints", stats.frames) } else if !ok_exit { "the decoder stopped with an error".to_string() } else { format!("the decoder reported {} message(s)", bad.len()) },
+        if ok_exit && bad.is_empty() {
+            Status::Pass
+        } else if !ok_exit || any_fatal {
+            Status::Fail
+        } else {
+            Status::Warn
+        },
+        if bad.is_empty() && ok_exit {
+            format!("{} samples per channel decoded with no complaints", stats.frames)
+        } else if !ok_exit {
+            "the decoder stopped with an error".to_string()
+        } else {
+            format!("the decoder reported {} message(s)", bad.len())
+        },
     );
     // length
     if let Some(p) = probe {
@@ -223,10 +319,24 @@ fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) 
             let expect = (p.duration_secs * rate as f64).round() as i64;
             let diff = stats.frames as i64 - expect;
             let tol = 4096;
-            c.check("Decoded length", if diff.abs() <= tol { Status::Pass } else { Status::Warn }, format!("{} samples decoded, the frame count implies {expect} (difference {diff})", stats.frames));
+            c.check(
+                "Decoded length",
+                if diff.abs() <= tol { Status::Pass } else { Status::Warn },
+                format!(
+                    "{} samples decoded, the frame count implies {expect} (difference {diff})",
+                    stats.frames
+                ),
+            );
         }
         if channels != 0 && p.channels != 0 && channels as u32 != p.channels {
-            c.check("Channel count", Status::Info, format!("the decoder outputs {channels} channels; the headers describe {}", p.channels));
+            c.check(
+                "Channel count",
+                Status::Info,
+                format!(
+                    "the decoder outputs {channels} channels; the headers describe {}",
+                    p.channels
+                ),
+            );
         }
     }
     // results
@@ -257,7 +367,23 @@ struct Stats {
 
 impl Stats {
     fn new(channels: usize) -> Stats {
-        Stats { channels, frames: 0, peak: vec![0; channels], sum: vec![0; channels], sumsq: vec![0.0; channels], clipped: vec![0; channels], zero_run: 0, longest_zero: 0, longest_zero_at: 0, cur_zero_start: 0, first_sound: None, last_sound: 0, or_bits: vec![0; channels], hashes: vec![0xcbf29ce484222325; channels], silent_all: vec![true; channels] }
+        Stats {
+            channels,
+            frames: 0,
+            peak: vec![0; channels],
+            sum: vec![0; channels],
+            sumsq: vec![0.0; channels],
+            clipped: vec![0; channels],
+            zero_run: 0,
+            longest_zero: 0,
+            longest_zero_at: 0,
+            cur_zero_start: 0,
+            first_sound: None,
+            last_sound: 0,
+            or_bits: vec![0; channels],
+            hashes: vec![0xcbf29ce484222325; channels],
+            silent_all: vec![true; channels],
+        }
     }
     fn feed(&mut self, d: &[u8]) {
         let ch = self.channels;
@@ -303,22 +429,69 @@ impl Stats {
     }
     fn report(&self, c: &mut Collector, rate: u32) {
         let r = rate as f64;
-        let db = |x: f64| if x <= 0.0 { "-inf".to_string() } else { format!("{:.1}", 20.0 * (x / 8_388_608.0).log10()) };
-        let mut rows = vec![("samples per channel".to_string(), format!("{} ({:.3} s at {rate} Hz)", self.frames, self.frames as f64 / r))];
+        let db = |x: f64| {
+            if x <= 0.0 {
+                "-inf".to_string()
+            } else {
+                format!("{:.1}", 20.0 * (x / 8_388_608.0).log10())
+            }
+        };
+        let mut rows = vec![(
+            "samples per channel".to_string(),
+            format!("{} ({:.3} s at {rate} Hz)", self.frames, self.frames as f64 / r),
+        )];
         let mut clip_total = 0u64;
         for k in 0..self.channels {
             let rms = (self.sumsq[k] / self.frames.max(1) as f64).sqrt();
             let dc = self.sum[k] as f64 / self.frames.max(1) as f64;
-            let wasted = if self.or_bits[k] == 0 { 24 } else { self.or_bits[k].trailing_zeros() };
+            let wasted = if self.or_bits[k] == 0 {
+                24
+            } else {
+                self.or_bits[k].trailing_zeros()
+            };
             clip_total += self.clipped[k];
             rows.push((
                 format!("channel {}", k + 1),
-                if self.silent_all[k] { "digital silence throughout".to_string() } else { format!("peak {} dBFS, RMS {} dBFS, DC {:.1}, {} unused low bit(s), {} full-scale sample(s)", db(self.peak[k] as f64), db(rms), dc, wasted, self.clipped[k]) },
+                if self.silent_all[k] {
+                    "digital silence throughout".to_string()
+                } else {
+                    format!(
+                        "peak {} dBFS, RMS {} dBFS, DC {:.1}, {} unused low bit(s), {} full-scale sample(s)",
+                        db(self.peak[k] as f64),
+                        db(rms),
+                        dc,
+                        wasted,
+                        self.clipped[k]
+                    )
+                },
             ));
         }
         c.section("Decoded audio", rows);
-        let silent: Vec<usize> = (0..self.channels).filter(|k| self.silent_all[*k]).map(|k| k + 1).collect();
-        c.check("Channels carry audio", if silent.is_empty() || silent.len() == self.channels { if silent.len() == self.channels { Status::Warn } else { Status::Pass } } else { Status::Info }, if silent.is_empty() { "every channel has signal".to_string() } else if silent.len() == self.channels { "the whole programme is digital silence".to_string() } else { format!("channel(s) {silent:?} are digital silence throughout (normal for unused LFE or height channels)") });
+        let silent: Vec<usize> = (0..self.channels)
+            .filter(|k| self.silent_all[*k])
+            .map(|k| k + 1)
+            .collect();
+        c.check(
+            "Channels carry audio",
+            if silent.is_empty() || silent.len() == self.channels {
+                if silent.len() == self.channels {
+                    Status::Warn
+                } else {
+                    Status::Pass
+                }
+            } else {
+                Status::Info
+            },
+            if silent.is_empty() {
+                "every channel has signal".to_string()
+            } else if silent.len() == self.channels {
+                "the whole programme is digital silence".to_string()
+            } else {
+                format!(
+                    "channel(s) {silent:?} are digital silence throughout (normal for unused LFE or height channels)"
+                )
+            },
+        );
         let mut dup = Vec::new();
         for a in 0..self.channels {
             for b in a + 1..self.channels {
@@ -328,17 +501,39 @@ impl Stats {
             }
         }
         if !dup.is_empty() {
-            c.check("Identical channels", Status::Info, format!("these channels are sample-for-sample identical: {}", dup.join(", ")));
+            c.check(
+                "Identical channels",
+                Status::Info,
+                format!("these channels are sample-for-sample identical: {}", dup.join(", ")),
+            );
         }
         c.check("Clipping", if clip_total == 0 { Status::Pass } else { Status::Warn }, if clip_total == 0 { "no sample reaches full scale".to_string() } else { format!("{clip_total} full-scale sample(s) in all channels (decoded audio, so this includes any clipping in the source)") });
         if let Some(f) = self.first_sound {
             c.kv("Silence before the first sound", format!("{:.3} s", f as f64 / r));
-            c.kv("Silence after the last sound", format!("{:.3} s", (self.frames - 1 - self.last_sound) as f64 / r));
+            c.kv(
+                "Silence after the last sound",
+                format!("{:.3} s", (self.frames - 1 - self.last_sound) as f64 / r),
+            );
         }
-        if self.longest_zero as f64 / r > 1.0 && self.first_sound.map_or(false, |f| self.longest_zero_at > f) && self.longest_zero_at + self.longest_zero < self.last_sound {
-            c.check("Dropouts", Status::Warn, format!("{:.2} s of digital silence in all channels at {:.2} s", self.longest_zero as f64 / r, self.longest_zero_at as f64 / r));
+        if self.longest_zero as f64 / r > 1.0
+            && self.first_sound.map_or(false, |f| self.longest_zero_at > f)
+            && self.longest_zero_at + self.longest_zero < self.last_sound
+        {
+            c.check(
+                "Dropouts",
+                Status::Warn,
+                format!(
+                    "{:.2} s of digital silence in all channels at {:.2} s",
+                    self.longest_zero as f64 / r,
+                    self.longest_zero_at as f64 / r
+                ),
+            );
         } else {
-            c.check("Dropouts", Status::Pass, "no stretch of silence longer than a second inside the programme");
+            c.check(
+                "Dropouts",
+                Status::Pass,
+                "no stretch of silence longer than a second inside the programme",
+            );
         }
     }
 }
@@ -352,8 +547,27 @@ fn read_pcm(path: &Path, ffmpeg: &Path, core_only: bool, seconds: u32) -> Option
     if core_only {
         cmd.args(["-core_only", "1"]);
     }
-    let out = cmd.arg("-i").arg(path).args(["-t", &seconds.to_string(), "-vn", "-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().ok()?;
-    Some(out.stdout.chunks_exact(3).map(|b| (((b[0] as i32) | ((b[1] as i32) << 8) | ((b[2] as i32) << 16)) << 8) >> 8).collect())
+    let out = cmd
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-t",
+            &seconds.to_string(),
+            "-vn",
+            "-c:a",
+            "pcm_s24le",
+            "-f",
+            "s24le",
+            "-",
+        ])
+        .output()
+        .ok()?;
+    Some(
+        out.stdout
+            .chunks_exact(3)
+            .map(|b| (((b[0] as i32) | ((b[1] as i32) << 8) | ((b[2] as i32) << 16)) << 8) >> 8)
+            .collect(),
+    )
 }
 
 fn core_comparison(path: &Path, ffmpeg: &Path, p: &Probe, channels: usize, c: &mut Collector) {
@@ -371,7 +585,11 @@ fn core_comparison(path: &Path, ffmpeg: &Path, p: &Probe, channels: usize, c: &m
         return;
     }
     // the core decodes to fewer channels when the stream is wider than the core
-    let core_ch = if core.len() * channels == full.len() { channels } else { 0 };
+    let core_ch = if core.len() * channels == full.len() {
+        channels
+    } else {
+        0
+    };
     if core_ch == 0 {
         c.check("Core against lossless extension", Status::Info, "the core has a different channel count or sample rate than the full stream, so the two decodes were not compared");
         return;
@@ -410,7 +628,11 @@ fn core_comparison(path: &Path, ffmpeg: &Path, p: &Probe, channels: usize, c: &m
             err += (a - b) * (a - b);
         }
     }
-    let snr = if err > 0.0 { 10.0 * (sig / err).log10() } else { f64::INFINITY };
+    let snr = if err > 0.0 {
+        10.0 * (sig / err).log10()
+    } else {
+        f64::INFINITY
+    };
     let aligned = lag == 0;
     c.check(
         "Core against lossless extension",
@@ -428,13 +650,25 @@ fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &mut Collecto
     }
     let tool = opt.reference_verifier.clone().or_else(crate::mas_verifier);
     let Some(tool) = tool else {
-        c.check("DTS reference verifier", Status::Skipped, "DTSHDVerify is not installed; install the DTS-HD encoder suite to add its verdict");
+        c.check(
+            "DTS reference verifier",
+            Status::Skipped,
+            "DTSHDVerify is not installed; install the DTS-HD encoder suite to add its verdict",
+        );
         return;
     };
-    let out = match Command::new(&tool).arg(path).stdin(std::process::Stdio::null()).output() {
+    let out = match Command::new(&tool)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
         Ok(o) => o,
         Err(e) => {
-            c.check("DTS reference verifier", Status::Skipped, format!("could not run {}: {e}", tool.display()));
+            c.check(
+                "DTS reference verifier",
+                Status::Skipped,
+                format!("could not run {}: {e}", tool.display()),
+            );
             return;
         }
     };
@@ -443,15 +677,33 @@ fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &mut Collecto
     // the bare stream instead
     if text.contains("number of audio presentations (0)") {
         if let Some(raw) = extract_stream(path) {
-            if let Ok(o) = Command::new(&tool).arg(&raw).stdin(std::process::Stdio::null()).output() {
+            if let Ok(o) = Command::new(&tool)
+                .arg(&raw)
+                .stdin(std::process::Stdio::null())
+                .output()
+            {
                 text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
             }
             let _ = std::fs::remove_file(&raw);
         }
     }
-    let summary = text.lines().find(|l| l.contains("frames verified")).map(|l| l.trim().to_string());
+    let summary = text
+        .lines()
+        .find(|l| l.contains("frames verified"))
+        .map(|l| l.trim().to_string());
     let passed = text.contains("passes verification with no errors");
-    c.check("DTS reference verifier (DTSHDVerify)", if passed { Status::Pass } else { Status::Fail }, summary.unwrap_or_else(|| text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output").trim().to_string()));
+    c.check(
+        "DTS reference verifier (DTSHDVerify)",
+        if passed { Status::Pass } else { Status::Fail },
+        summary.unwrap_or_else(|| {
+            text.lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("no output")
+                .trim()
+                .to_string()
+        }),
+    );
     if !passed {
         for l in text.lines().filter(|l| l.to_lowercase().contains("error")).take(20) {
             c.finding(Status::Fail, None, format!("DTSHDVerify: {}", l.trim()));
@@ -469,16 +721,34 @@ struct Md5 {
 }
 
 const K: [u32; 64] = [
-    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1, 0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501, 0x698098d8,
+    0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340,
+    0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87,
+    0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+    0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039,
+    0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92,
+    0xffeff47d, 0x85845dd1, 0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+    0xeb86d391,
 ];
-const R: [u32; 64] = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+const R: [u32; 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15,
+    21,
+];
 
 impl Md5 {
     fn new() -> Md5 {
-        Md5 { s: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476], buf: Vec::new(), len: 0 }
+        Md5 {
+            s: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+            buf: Vec::new(),
+            len: 0,
+        }
     }
     fn block(&mut self, m: &[u8]) {
-        let w: Vec<u32> = m.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let w: Vec<u32> = m
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
         let [mut a, mut b, mut c, mut d] = self.s;
         for i in 0..64 {
             let (f, g) = match i / 16 {
@@ -490,7 +760,12 @@ impl Md5 {
             let t = d;
             d = c;
             c = b;
-            b = b.wrapping_add(a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(w[g]).rotate_left(R[i]));
+            b = b.wrapping_add(
+                a.wrapping_add(f)
+                    .wrapping_add(K[i])
+                    .wrapping_add(w[g])
+                    .rotate_left(R[i]),
+            );
             a = t;
         }
         self.s[0] = self.s[0].wrapping_add(a);
@@ -518,7 +793,11 @@ impl Md5 {
         for b in rest.chunks_exact(64) {
             self.block(b);
         }
-        self.s.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
+        self.s
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 }
 

@@ -20,9 +20,19 @@ fn bessel_i0(x: f64) -> f64 {
 ///
 /// `pass_edge` and `stop_edge` are in Hz, `attenuation` in dB. Returns the taps (an odd count, symmetric, scaled by
 /// `up` so the passband gain is one) and how many taps belong to each phase.
-fn design_filter(intermediate_rate: f64, up: usize, pass_edge: f64, stop_edge: f64, attenuation: f64) -> (Vec<f64>, usize) {
+fn design_filter(
+    intermediate_rate: f64,
+    up: usize,
+    pass_edge: f64,
+    stop_edge: f64,
+    attenuation: f64,
+) -> (Vec<f64>, usize) {
     let transition = 2.0 * std::f64::consts::PI * (stop_edge - pass_edge) / intermediate_rate;
-    let beta = if attenuation > 50.0 { 0.1102 * (attenuation - 8.7) } else { 0.5842 * (attenuation - 21.0).powf(0.4) + 0.07886 * (attenuation - 21.0) };
+    let beta = if attenuation > 50.0 {
+        0.1102 * (attenuation - 8.7)
+    } else {
+        0.5842 * (attenuation - 21.0).powf(0.4) + 0.07886 * (attenuation - 21.0)
+    };
     let length = ((attenuation - 8.0) / (2.285 * transition)).ceil() as usize;
     // whole phases, and an odd total so the filter has a centre tap
     let per_phase = length.div_ceil(up).max(2);
@@ -33,7 +43,11 @@ fn design_filter(intermediate_rate: f64, up: usize, pass_edge: f64, stop_edge: f
     let taps = (0..taps_count)
         .map(|i| {
             let m = i as f64 - centre;
-            let sinc = if m == 0.0 { 2.0 * cutoff } else { (2.0 * std::f64::consts::PI * cutoff * m).sin() / (std::f64::consts::PI * m) };
+            let sinc = if m == 0.0 {
+                2.0 * cutoff
+            } else {
+                (2.0 * std::f64::consts::PI * cutoff * m).sin() / (std::f64::consts::PI * m)
+            };
             let r = m / centre;
             let window = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / norm;
             sinc * window * up as f64
@@ -62,7 +76,16 @@ impl Resampler {
         let intermediate = input_rate * up as f64;
         let (taps, per_phase) = design_filter(intermediate, up, pass_edge, stop_edge, 100.0);
         let delay_seconds = (taps.len() - 1) as f64 / 2.0 / intermediate;
-        Resampler { up, down, taps, per_phase, buffer: vec![0.0; per_phase], buffer_start: 0, produced: 0, delay_seconds }
+        Resampler {
+            up,
+            down,
+            taps,
+            per_phase,
+            buffer: vec![0.0; per_phase],
+            buffer_start: 0,
+            produced: 0,
+            delay_seconds,
+        }
     }
 
     /// Time the filter delays the signal by.
@@ -112,8 +135,8 @@ impl Resampler {
 /// The noise transfer function has `ORDER` zeros at zero frequency and Butterworth poles, with the cutoff set so the
 /// out-of-band noise gain is `NOISE_GAIN` (about 1.5, the usual limit for a stable one-bit loop).
 pub struct Modulator {
-    numerator: [f64; ORDER],   // b_1 .. b_ORDER of NTF = (1 + sum b z^-k) / (1 + sum a z^-k)
-    denominator: [f64; ORDER], // a_1 .. a_ORDER
+    numerator: [f64; ORDER],       // b_1 .. b_ORDER of NTF = (1 + sum b z^-k) / (1 + sum a z^-k)
+    denominator: [f64; ORDER],     // a_1 .. a_ORDER
     quantiser_error: [f64; ORDER], // e[n-1] ..: output minus quantiser input
     shaped_error: [f64; ORDER],    // es[n-1] ..: output minus input
     overloads: u64,
@@ -126,7 +149,13 @@ const NOISE_GAIN: f64 = 1.5;
 impl Modulator {
     pub fn new() -> Modulator {
         let (numerator, denominator) = noise_transfer_function();
-        Modulator { numerator, denominator, quantiser_error: [0.0; ORDER], shaped_error: [0.0; ORDER], overloads: 0 }
+        Modulator {
+            numerator,
+            denominator,
+            quantiser_error: [0.0; ORDER],
+            shaped_error: [0.0; ORDER],
+            overloads: 0,
+        }
     }
 
     /// Times the loop had to be reset because the input overloaded it.
@@ -206,7 +235,10 @@ fn butterworth_denominator(fc: f64) -> Vec<f64> {
         let s = (warped * angle.cos(), warped * angle.sin());
         // z-plane pole p = (1 + s) / (1 - s)
         let denom = (1.0 - s.0).powi(2) + s.1 * s.1;
-        let p = (((1.0 + s.0) * (1.0 - s.0) - s.1 * s.1) / denom, (s.1 * (1.0 - s.0) + s.1 * (1.0 + s.0)) / denom);
+        let p = (
+            ((1.0 + s.0) * (1.0 - s.0) - s.1 * s.1) / denom,
+            (s.1 * (1.0 - s.0) + s.1 * (1.0 + s.0)) / denom,
+        );
         // multiply poly by (1 - p z^-1)
         let mut next = vec![(0.0, 0.0); poly.len() + 1];
         for (k, &c) in poly.iter().enumerate() {
@@ -258,7 +290,9 @@ mod tests {
         let w = 2.0 * std::f64::consts::PI * 0.01;
         let g = {
             let eval = |p: &[f64]| -> f64 {
-                let (re, im) = p.iter().enumerate().fold((0.0, 0.0), |(r, i), (k, c)| (r + c * (w * k as f64).cos(), i - c * (w * k as f64).sin()));
+                let (re, im) = p.iter().enumerate().fold((0.0, 0.0), |(r, i), (k, c)| {
+                    (r + c * (w * k as f64).cos(), i - c * (w * k as f64).sin())
+                });
                 (re * re + im * im).sqrt()
             };
             eval(&num) / eval(&den)
@@ -270,7 +304,9 @@ mod tests {
     fn a_resampler_keeps_a_tone_and_scales_the_rate() {
         // 1 kHz tone at 48 kHz, up by 147/160 to 44.1 kHz
         let mut r = Resampler::new(48_000.0, 147, 160, 20_000.0, 22_050.0);
-        let input: Vec<f64> = (0..48_000).map(|i| (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / 48_000.0).sin()).collect();
+        let input: Vec<f64> = (0..48_000)
+            .map(|i| (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / 48_000.0).sin())
+            .collect();
         let mut out = Vec::new();
         for chunk in input.chunks(5000) {
             out.extend(r.process(chunk));
@@ -298,6 +334,11 @@ mod tests {
         }
         assert_eq!(m.overloads(), 0);
         let _ = ones;
-        assert!((acc - reference).abs() / (n as f64) < 0.01, "mean {} against {}", acc / n as f64, reference / n as f64);
+        assert!(
+            (acc - reference).abs() / (n as f64) < 0.01,
+            "mean {} against {}",
+            acc / n as f64,
+            reference / n as f64
+        );
     }
 }

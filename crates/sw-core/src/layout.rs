@@ -38,7 +38,11 @@ impl ChannelLayout {
     }
     /// "5.1", "7.0", "2.0" style label.
     pub fn short_label(&self) -> String {
-        format!("{}.{}", self.main_channels(), self.channels.iter().filter(|c| matches!(c, Lfe | Lfe2)).count())
+        format!(
+            "{}.{}",
+            self.main_channels(),
+            self.channels.iter().filter(|c| matches!(c, Lfe | Lfe2)).count()
+        )
     }
     pub fn find(id: &str) -> Option<&'static ChannelLayout> {
         LAYOUTS.iter().find(|l| l.id.eq_ignore_ascii_case(id))
@@ -53,26 +57,129 @@ macro_rules! lay {
 
 /// All primary-audio layouts, richest first (the order shown in the GUI drop-down).
 pub static LAYOUTS: &[ChannelLayout] = &[
-    lay!("22.2", "NHK 22.2 (24 ch) C L R Lw Rw Lss Rss Lb Rb Cb LFE LFE2 Tfc Tfl Tfr Tsl Tsr Tc Tbl Tbr Tbc Bfc Bfl Bfr", Discrete, [C, L, R, Lw, Rw, Lss, Rss, Lsr, Rsr, Cs, Lfe, Lfe2, Tfc, Tfl, Tfr, Tsl, Tsr, Tc, Tbl, Tbr, Tbc, Bfc, Bfl, Bfr]),
-    lay!("9.1.6", "9.1.6 L R C LFE Lw Rw Lss Rss Lsr Rsr Tfl Tfr Tsl Tsr Tbl Tbr", Discrete, [L, R, C, Lfe, Lw, Rw, Lss, Rss, Lsr, Rsr, Tfl, Tfr, Tsl, Tsr, Tbl, Tbr]),
-    lay!("7.1.4", "7.1.4 L R C LFE Lss Rss Lsr Rsr Tfl Tfr Tbl Tbr", Discrete, [L, R, C, Lfe, Lss, Rss, Lsr, Rsr, Tfl, Tfr, Tbl, Tbr]),
-    lay!("7.1.2", "7.1.2 L R C LFE Lss Rss Lsr Rsr Tsl Tsr", Discrete, [L, R, C, Lfe, Lss, Rss, Lsr, Rsr, Tsl, Tsr]),
-    lay!("5.1.4", "5.1.4 L R C LFE Ls Rs Tfl Tfr Tbl Tbr", Discrete, [L, R, C, Lfe, Ls, Rs, Tfl, Tfr, Tbl, Tbr]),
-    lay!("5.1.2", "5.1.2 L R C LFE Ls Rs Tsl Tsr", Discrete, [L, R, C, Lfe, Ls, Rs, Tsl, Tsr]),
-    lay!("7.1-side-rear", "7.1 L R C LFE Lss Rss Lsr Rsr", Discrete, [L, R, C, Lfe, Lss, Rss, Lsr, Rsr]),
-    lay!("7.1-ls-rs-lsr-rsr", "7.1 L R C LFE Ls Rs Lsr Rsr", Discrete, [L, R, C, Lfe, Ls, Rs, Lsr, Rsr]),
-    lay!("7.1-height", "7.1 L R C LFE Ls Rs Lh Rh", Discrete, [L, R, C, Lfe, Ls, Rs, Lh, Rh]),
-    lay!("7.1-height-side", "7.1 L R C LFE Ls Rs Lhs Rhs", Discrete, [L, R, C, Lfe, Ls, Rs, Lhs, Rhs]),
-    lay!("7.1-cs-ch", "7.1 L R C LFE Ls Rs Cs Ch", Discrete, [L, R, C, Lfe, Ls, Rs, Cs, Ch]),
-    lay!("7.1-cs-oh", "7.1 L R C LFE Ls Rs Cs Oh", Discrete, [L, R, C, Lfe, Ls, Rs, Cs, Oh]),
-    lay!("7.1-wide", "7.1 L R C LFE Ls Rs Lw Rw", Discrete, [L, R, C, Lfe, Ls, Rs, Lw, Rw]),
-    lay!("7.0-side-rear", "7.0 L R C Lss Rss Lsr Rsr", Discrete, [L, R, C, Lss, Rss, Lsr, Rsr]),
-    lay!("6.1-discrete", "6.1 Discrete L R C LFE Ls Rs Cs", Discrete, [L, R, C, Lfe, Ls, Rs, Cs]),
-    lay!("6.0-discrete", "6.0 Discrete L R C Ls Rs Cs", Discrete, [L, R, C, Ls, Rs, Cs]),
-    lay!("6.1-matrix", "6.1 Matrix L R C LFE Ls Rs Cs", EsMatrix, [L, R, C, Lfe, Ls, Rs, Cs]),
-    lay!("6.0-matrix", "6.0 Matrix L R C Ls Rs Cs", EsMatrix, [L, R, C, Ls, Rs, Cs]),
-    lay!("6.1-matrix-premixed", "6.1 Matrix (pre-mixed) L R C LFE Ls Rs", EsMatrixPremixed, [L, R, C, Lfe, Ls, Rs]),
-    lay!("6.0-matrix-premixed", "6.0 Matrix (pre-mixed) L R C Ls Rs", EsMatrixPremixed, [L, R, C, Ls, Rs]),
+    lay!(
+        "22.2",
+        "NHK 22.2 (24 ch) C L R Lw Rw Lss Rss Lb Rb Cb LFE LFE2 Tfc Tfl Tfr Tsl Tsr Tc Tbl Tbr Tbc Bfc Bfl Bfr",
+        Discrete,
+        [
+            C, L, R, Lw, Rw, Lss, Rss, Lsr, Rsr, Cs, Lfe, Lfe2, Tfc, Tfl, Tfr, Tsl, Tsr, Tc, Tbl, Tbr, Tbc, Bfc, Bfl,
+            Bfr
+        ]
+    ),
+    lay!(
+        "9.1.6",
+        "9.1.6 L R C LFE Lw Rw Lss Rss Lsr Rsr Tfl Tfr Tsl Tsr Tbl Tbr",
+        Discrete,
+        [L, R, C, Lfe, Lw, Rw, Lss, Rss, Lsr, Rsr, Tfl, Tfr, Tsl, Tsr, Tbl, Tbr]
+    ),
+    lay!(
+        "7.1.4",
+        "7.1.4 L R C LFE Lss Rss Lsr Rsr Tfl Tfr Tbl Tbr",
+        Discrete,
+        [L, R, C, Lfe, Lss, Rss, Lsr, Rsr, Tfl, Tfr, Tbl, Tbr]
+    ),
+    lay!(
+        "7.1.2",
+        "7.1.2 L R C LFE Lss Rss Lsr Rsr Tsl Tsr",
+        Discrete,
+        [L, R, C, Lfe, Lss, Rss, Lsr, Rsr, Tsl, Tsr]
+    ),
+    lay!(
+        "5.1.4",
+        "5.1.4 L R C LFE Ls Rs Tfl Tfr Tbl Tbr",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Tfl, Tfr, Tbl, Tbr]
+    ),
+    lay!(
+        "5.1.2",
+        "5.1.2 L R C LFE Ls Rs Tsl Tsr",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Tsl, Tsr]
+    ),
+    lay!(
+        "7.1-side-rear",
+        "7.1 L R C LFE Lss Rss Lsr Rsr",
+        Discrete,
+        [L, R, C, Lfe, Lss, Rss, Lsr, Rsr]
+    ),
+    lay!(
+        "7.1-ls-rs-lsr-rsr",
+        "7.1 L R C LFE Ls Rs Lsr Rsr",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Lsr, Rsr]
+    ),
+    lay!(
+        "7.1-height",
+        "7.1 L R C LFE Ls Rs Lh Rh",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Lh, Rh]
+    ),
+    lay!(
+        "7.1-height-side",
+        "7.1 L R C LFE Ls Rs Lhs Rhs",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Lhs, Rhs]
+    ),
+    lay!(
+        "7.1-cs-ch",
+        "7.1 L R C LFE Ls Rs Cs Ch",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Cs, Ch]
+    ),
+    lay!(
+        "7.1-cs-oh",
+        "7.1 L R C LFE Ls Rs Cs Oh",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Cs, Oh]
+    ),
+    lay!(
+        "7.1-wide",
+        "7.1 L R C LFE Ls Rs Lw Rw",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Lw, Rw]
+    ),
+    lay!(
+        "7.0-side-rear",
+        "7.0 L R C Lss Rss Lsr Rsr",
+        Discrete,
+        [L, R, C, Lss, Rss, Lsr, Rsr]
+    ),
+    lay!(
+        "6.1-discrete",
+        "6.1 Discrete L R C LFE Ls Rs Cs",
+        Discrete,
+        [L, R, C, Lfe, Ls, Rs, Cs]
+    ),
+    lay!(
+        "6.0-discrete",
+        "6.0 Discrete L R C Ls Rs Cs",
+        Discrete,
+        [L, R, C, Ls, Rs, Cs]
+    ),
+    lay!(
+        "6.1-matrix",
+        "6.1 Matrix L R C LFE Ls Rs Cs",
+        EsMatrix,
+        [L, R, C, Lfe, Ls, Rs, Cs]
+    ),
+    lay!(
+        "6.0-matrix",
+        "6.0 Matrix L R C Ls Rs Cs",
+        EsMatrix,
+        [L, R, C, Ls, Rs, Cs]
+    ),
+    lay!(
+        "6.1-matrix-premixed",
+        "6.1 Matrix (pre-mixed) L R C LFE Ls Rs",
+        EsMatrixPremixed,
+        [L, R, C, Lfe, Ls, Rs]
+    ),
+    lay!(
+        "6.0-matrix-premixed",
+        "6.0 Matrix (pre-mixed) L R C Ls Rs",
+        EsMatrixPremixed,
+        [L, R, C, Ls, Rs]
+    ),
     lay!("5.1", "5.1 L R C LFE Ls Rs", Discrete, [L, R, C, Lfe, Ls, Rs]),
     lay!("5.0", "5.0 L R C Ls Rs", Discrete, [L, R, C, Ls, Rs]),
     lay!("4.1-lcrs", "4.1 L C R S LFE", Discrete, [L, C, R, Cs, Lfe]),
@@ -102,7 +209,11 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), LAYOUTS.len(), "layout ids must be unique");
         for l in LAYOUTS {
-            assert!(l.channel_count() <= 8 || l.channels.iter().any(|c| c.is_height()), "{} exceeds 8 channels without being an immersive layout", l.id);
+            assert!(
+                l.channel_count() <= 8 || l.channels.iter().any(|c| c.is_height()),
+                "{} exceeds 8 channels without being an immersive layout",
+                l.id
+            );
         }
     }
 

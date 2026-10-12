@@ -40,7 +40,11 @@ fn crc16(data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x8005 } else { crc << 1 };
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x8005
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -88,7 +92,12 @@ fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize) -> Rice
         let wide = parameters.iter().any(|&k| k > 14);
         let bits = 2 + 4 + parts * (4 + usize::from(wide)) + payload;
         if best.as_ref().map_or(true, |b| bits < b.bits) {
-            best = Some(RiceCoding { partition_order: order, parameters, wide, bits });
+            best = Some(RiceCoding {
+                partition_order: order,
+                parameters,
+                wide,
+                bits,
+            });
         }
     }
     best.expect("partition order 0 always fits")
@@ -132,8 +141,14 @@ fn write_rice(w: &mut BitWriter, residual: &[i32], predictor_order: usize, block
 enum Predictor {
     Constant(i32),
     Verbatim,
-    Fixed { order: usize },
-    Linear { order: usize, shift: u32, coefficients: Vec<i32> },
+    Fixed {
+        order: usize,
+    },
+    Linear {
+        order: usize,
+        shift: u32,
+        coefficients: Vec<i32>,
+    },
 }
 
 /// A channel of a block, coded.
@@ -156,13 +171,29 @@ fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
     let n = samples.len();
     let or_all = samples.iter().fold(0i32, |a, &s| a | s);
     if or_all == 0 {
-        return Subframe { wasted: 0, bits_per_sample: sample_bits, predictor: Predictor::Constant(0), samples: Vec::new(), residual: Vec::new(), rice: None, bits: 8 + sample_bits as usize };
+        return Subframe {
+            wasted: 0,
+            bits_per_sample: sample_bits,
+            predictor: Predictor::Constant(0),
+            samples: Vec::new(),
+            residual: Vec::new(),
+            rice: None,
+            bits: 8 + sample_bits as usize,
+        };
     }
     let wasted = or_all.trailing_zeros();
     let x: Vec<i32> = samples.iter().map(|&s| s >> wasted).collect();
     let bps = sample_bits - wasted;
     let header = 8 + wasted as usize; // type byte (with the wasted flag) and the unary wasted-bits count
-    let mut best = Subframe { wasted, bits_per_sample: bps, predictor: Predictor::Verbatim, samples: x.clone(), residual: Vec::new(), rice: None, bits: header + n * bps as usize };
+    let mut best = Subframe {
+        wasted,
+        bits_per_sample: bps,
+        predictor: Predictor::Verbatim,
+        samples: x.clone(),
+        residual: Vec::new(),
+        rice: None,
+        bits: header + n * bps as usize,
+    };
     if x.iter().all(|&v| v == x[0]) {
         best.predictor = Predictor::Constant(x[0]);
         best.bits = header + bps as usize;
@@ -174,7 +205,15 @@ fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
         let rice = rice_code(&residual, order, n);
         let bits = header + order * bps as usize + rice.bits;
         if bits < best.bits {
-            best = Subframe { wasted, bits_per_sample: bps, predictor: Predictor::Fixed { order }, samples: x.clone(), residual, rice: Some(rice), bits };
+            best = Subframe {
+                wasted,
+                bits_per_sample: bps,
+                predictor: Predictor::Fixed { order },
+                samples: x.clone(),
+                residual,
+                rice: Some(rice),
+                bits,
+            };
         }
     }
     // linear predictors fitted to this block
@@ -184,7 +223,19 @@ fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
             let rice = rice_code(&residual, order, n);
             let bits = header + 4 + 5 + order * LPC_PRECISION as usize + order * bps as usize + rice.bits;
             if bits < best.bits {
-                best = Subframe { wasted, bits_per_sample: bps, predictor: Predictor::Linear { order, shift, coefficients }, samples: x.clone(), residual, rice: Some(rice), bits };
+                best = Subframe {
+                    wasted,
+                    bits_per_sample: bps,
+                    predictor: Predictor::Linear {
+                        order,
+                        shift,
+                        coefficients,
+                    },
+                    samples: x.clone(),
+                    residual,
+                    rice: Some(rice),
+                    bits,
+                };
             }
         }
     }
@@ -207,7 +258,11 @@ fn linear_residual(x: &[i32], coefficients: &[i32], shift: u32) -> Vec<i32> {
     let order = coefficients.len();
     (order..x.len())
         .map(|i| {
-            let prediction: i64 = coefficients.iter().enumerate().map(|(j, &c)| c as i64 * x[i - 1 - j] as i64).sum();
+            let prediction: i64 = coefficients
+                .iter()
+                .enumerate()
+                .map(|(j, &c)| c as i64 * x[i - 1 - j] as i64)
+                .sum();
             (x[i] as i64 - (prediction >> shift)) as i32
         })
         .collect()
@@ -225,7 +280,11 @@ fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
         .enumerate()
         .map(|(i, &s)| {
             let edge = i.min(n - 1 - i);
-            let w = if edge < ramp { 0.5 - 0.5 * (std::f64::consts::PI * edge as f64 / ramp as f64).cos() } else { 1.0 };
+            let w = if edge < ramp {
+                0.5 - 0.5 * (std::f64::consts::PI * edge as f64 / ramp as f64).cos()
+            } else {
+                1.0
+            };
             s as f64 * w
         })
         .collect();
@@ -243,7 +302,12 @@ fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
     let mut current: Vec<f64> = Vec::new();
     let mut error = autocorrelation[0];
     for order in 1..=MAX_LPC_ORDER {
-        let acc: f64 = autocorrelation[order] - current.iter().enumerate().map(|(j, c)| c * autocorrelation[order - 1 - j]).sum::<f64>();
+        let acc: f64 = autocorrelation[order]
+            - current
+                .iter()
+                .enumerate()
+                .map(|(j, c)| c * autocorrelation[order - 1 - j])
+                .sum::<f64>();
         let reflection = acc / error;
         let mut next = vec![0f64; order];
         for j in 0..order - 1 {
@@ -274,7 +338,10 @@ fn quantise(coefficients: &[f64]) -> (Vec<i32>, u32) {
     let shift = (LPC_PRECISION as i32 - 1 - integer_bits).clamp(0, 15);
     let limit = (1i64 << (LPC_PRECISION - 1)) - 1;
     let scale = (1u64 << shift) as f64;
-    let q = coefficients.iter().map(|&c| ((c * scale).round() as i64).clamp(-limit - 1, limit) as i32).collect();
+    let q = coefficients
+        .iter()
+        .map(|&c| ((c * scale).round() as i64).clamp(-limit - 1, limit) as i32)
+        .collect();
     (q, shift as u32)
 }
 
@@ -309,7 +376,11 @@ fn write_subframe(w: &mut BitWriter, s: &Subframe) {
             }
             write_rice(w, &s.residual, *order, block_len, s.rice.as_ref().unwrap());
         }
-        Predictor::Linear { order, shift, coefficients } => {
+        Predictor::Linear {
+            order,
+            shift,
+            coefficients,
+        } => {
             for &v in &s.samples[..*order] {
                 w.put_signed(v as i64, bps);
             }
@@ -341,7 +412,10 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32, frame_number: u64, block_size_
     let (assignment, subframes) = if channels.len() == 2 {
         choose_stereo(&channels[0], &channels[1], bits)
     } else {
-        (Assignment::Independent, channels.iter().map(|c| code_channel(c, bits)).collect())
+        (
+            Assignment::Independent,
+            channels.iter().map(|c| code_channel(c, bits)).collect(),
+        )
     };
     let mut w = BitWriter::default();
     w.put(0xFFF8, 16); // sync code and fixed block size
@@ -378,12 +452,21 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32, frame_number: u64, block_size_
 /// Codes a stereo block as left/right, left/side, right/side or mid/side, whichever is smallest.
 fn choose_stereo(left: &[i32], right: &[i32], bits: u32) -> (Assignment, Vec<Subframe>) {
     let side: Vec<i32> = left.iter().zip(right).map(|(l, r)| l - r).collect();
-    let mid: Vec<i32> = left.iter().zip(right).map(|(l, r)| ((*l as i64 + *r as i64) >> 1) as i32).collect();
+    let mid: Vec<i32> = left
+        .iter()
+        .zip(right)
+        .map(|(l, r)| ((*l as i64 + *r as i64) >> 1) as i32)
+        .collect();
     let l = code_channel(left, bits);
     let r = code_channel(right, bits);
     let s = code_channel(&side, bits + 1);
     let m = code_channel(&mid, bits);
-    let options = [(Assignment::Independent, l.bits + r.bits), (Assignment::LeftSide, l.bits + s.bits), (Assignment::RightSide, s.bits + r.bits), (Assignment::MidSide, m.bits + s.bits)];
+    let options = [
+        (Assignment::Independent, l.bits + r.bits),
+        (Assignment::LeftSide, l.bits + s.bits),
+        (Assignment::RightSide, s.bits + r.bits),
+        (Assignment::MidSide, m.bits + s.bits),
+    ];
     let (assignment, _) = options.iter().copied().min_by_key(|&(_, b)| b).unwrap();
     let subframes = match assignment {
         Assignment::Independent => vec![l, r],
@@ -400,7 +483,19 @@ fn put_utf8_number(w: &mut BitWriter, value: u64) {
         w.put(value, 8);
         return;
     }
-    let continuation_bytes = if value < 0x800 { 1 } else if value < 0x1_0000 { 2 } else if value < 0x20_0000 { 3 } else if value < 0x400_0000 { 4 } else if value < 0x8000_0000 { 5 } else { 6 };
+    let continuation_bytes = if value < 0x800 {
+        1
+    } else if value < 0x1_0000 {
+        2
+    } else if value < 0x20_0000 {
+        3
+    } else if value < 0x400_0000 {
+        4
+    } else if value < 0x8000_0000 {
+        5
+    } else {
+        6
+    };
     let lead_mark = (0xFF00u32 >> (continuation_bytes + 1)) as u8; // 110xxxxx, 1110xxxx ...
     let lead_bits = value >> (6 * continuation_bytes);
     w.put(lead_mark as u64 | lead_bits, 8);
@@ -441,16 +536,47 @@ impl FlacWriter {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "FLAC holds 16 or 24 bit integer samples")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "FLAC holds 16 or 24 bit integer samples",
+                ))
+            }
         };
         if params.channels() > 8 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "FLAC holds at most 8 channels"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "FLAC holds at most 8 channels",
+            ));
         }
-        let (block_size, block_size_code) = if params.rate <= 48_000 { (4096, 12) } else if params.rate <= 96_000 { (8192, 13) } else { (16384, 14) };
+        let (block_size, block_size_code) = if params.rate <= 48_000 {
+            (4096, 12)
+        } else if params.rate <= 96_000 {
+            (8192, 13)
+        } else {
+            (16384, 14)
+        };
         let out = BufWriter::new(File::create(path)?);
-        let sink = if in_ogg { Sink::Ogg(PacketWriter::new(out, OGG_SERIAL)) } else { Sink::Plain(out) };
+        let sink = if in_ogg {
+            Sink::Ogg(PacketWriter::new(out, OGG_SERIAL))
+        } else {
+            Sink::Plain(out)
+        };
         // STREAMINFO is rewritten at the end, when the totals are known
-        let mut writer = FlacWriter { sink: Some(sink), samples_done: 0, bits, block_size, block_size_code, pending: vec![Vec::new(); params.channels()], next_frame: 0, md5: md5::Context::new(), min_frame_bytes: u32::MAX, max_frame_bytes: 0, bytes: 0, params };
+        let mut writer = FlacWriter {
+            sink: Some(sink),
+            samples_done: 0,
+            bits,
+            block_size,
+            block_size_code,
+            pending: vec![Vec::new(); params.channels()],
+            next_frame: 0,
+            md5: md5::Context::new(),
+            min_frame_bytes: u32::MAX,
+            max_frame_bytes: 0,
+            bytes: 0,
+            params,
+        };
         let comment = writer.channel_mask_comment(in_ogg);
         let mut header_bytes = 0u64;
         match writer.sink.as_mut().unwrap() {
@@ -506,7 +632,13 @@ impl FlacWriter {
 
     fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
         let n = block[0].len();
-        let code = if n == self.block_size { self.block_size_code } else if n <= 256 { 6 } else { 7 };
+        let code = if n == self.block_size {
+            self.block_size_code
+        } else if n <= 256 {
+            6
+        } else {
+            7
+        };
         let frame = encode_frame(block, self.bits, self.next_frame, code);
         self.next_frame += 1;
         self.min_frame_bytes = self.min_frame_bytes.min(frame.len() as u32);
@@ -539,7 +671,11 @@ impl BlockWriter for FlacWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= self.block_size {
-            let block: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..self.block_size).collect()).collect();
+            let block: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..self.block_size).collect())
+                .collect();
             self.update_md5(&block);
             self.write_frame(&block)?;
         }
@@ -586,7 +722,10 @@ impl FlacWriter {
         info.extend_from_slice(&largest_block.to_be_bytes());
         info.extend_from_slice(&self.min_frame_bytes.to_be_bytes()[1..]);
         info.extend_from_slice(&self.max_frame_bytes.to_be_bytes()[1..]);
-        let packed: u64 = ((self.params.rate as u64) << 44) | (((self.params.channels() as u64) - 1) << 41) | (((self.bits as u64) - 1) << 36) | self.params.total_frames;
+        let packed: u64 = ((self.params.rate as u64) << 44)
+            | (((self.params.channels() as u64) - 1) << 41)
+            | (((self.bits as u64) - 1) << 36)
+            | self.params.total_frames;
         info.extend_from_slice(&packed.to_be_bytes());
         let digest = std::mem::replace(&mut self.md5, md5::Context::new()).finalize();
         info.extend_from_slice(&digest.0);

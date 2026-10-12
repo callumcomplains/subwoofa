@@ -25,7 +25,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 
 ## Next, unblocked
 
-- [ ] **Readability pass** over the older code: per-crate guides, module comments on each pipeline, clearer names,
+- [ ] **Readability pass** over the older code (started: the whole code base is now `rustfmt`-formatted at 120 columns and CI checks it; the five dead-code warnings are gone; what is left is the guides, module comments and clearer names): per-crate guides, module comments on each pipeline, clearer names,
       shorter lines. Behaviour must not change; existing tests are the proof.
 - [x] **DCP audio**: done (SMPTE and Interop, checked against asdcplib's own output and tools; not tried on a cinema server). Encrypted track files and the rest of a DCP (CPL, PKL, ASSETMAP) are not made.
 - [x] **AC-3 exponent-strategy optimisation**: measured instead of built. Eight combinations of exponent strategy and block grouping were tried on film audio (stereo 192 and 384, 5.1 at 448 and 640 kbps, decoded SNR): all within 0.2 dB of the current choice, so the fixed choice stays.

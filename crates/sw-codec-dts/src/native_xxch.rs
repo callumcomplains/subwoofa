@@ -5,8 +5,8 @@
 
 use crate::encoder::XxchParams;
 use crate::exss::{exss_frame_xbr_xxch, exss_frame_xxch, ExssParams};
-use crate::xbr::XbrEncoder;
 use crate::native::{NativeError, Request, Stats};
+use crate::xbr::XbrEncoder;
 use crate::{Config, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_core::{Channel, Downmix};
@@ -63,7 +63,12 @@ impl XxchMap {
     fn codes(&self, dm: &Downmix) -> (u32, [Vec<(usize, u32)>; 2]) {
         let code = |db: f64| crate::mixmeta::level_code(db) as u32;
         let scale = dm.primary[0].map_or(61, code);
-        let rows = [&dm.extra_a, &dm.extra_b].map(|table| (0..6).filter(|&s| s < 5 || self.has_lfe).filter_map(|s| table[s].map(|db| (s, code(db)))).collect::<Vec<_>>());
+        let rows = [&dm.extra_a, &dm.extra_b].map(|table| {
+            (0..6)
+                .filter(|&s| s < 5 || self.has_lfe)
+                .filter_map(|s| table[s].map(|db| (s, code(db))))
+                .collect::<Vec<_>>()
+        });
         (scale, rows)
     }
 
@@ -71,7 +76,12 @@ impl XxchMap {
     /// was added to the core channels the Downmix tab names, by default the surround on its side at -3 dB, and the
     /// whole core pre-scaled).
     pub fn params(&self, dm: &Downmix) -> XxchParams {
-        let core_mask: u32 = 0x1 | 0x2 | 0x4 | (if self.has_lfe { 0x20 } else { 0 }) | (1 << self.side_bits[0]) | (1 << self.side_bits[1]);
+        let core_mask: u32 = 0x1
+            | 0x2
+            | 0x4
+            | (if self.has_lfe { 0x20 } else { 0 })
+            | (1 << self.side_bits[0])
+            | (1 << self.side_bits[1]);
         let spk_mask: u32 = (1 << self.rear_bits[0]) | (1 << self.rear_bits[1]);
         let top = 32 - (core_mask | spk_mask).leading_zeros();
         let (scale, rows) = self.codes(dm);
@@ -83,7 +93,12 @@ impl XxchMap {
                 v
             })
             .collect();
-        XxchParams { core_mask, spk_mask, mask_bits: top.max(9), dmix: Some((scale, rows)) }
+        XxchParams {
+            core_mask,
+            spk_mask,
+            mask_bits: top.max(9),
+            dmix: Some((scale, rows)),
+        }
     }
 
     pub fn mix(&self, dm: &Downmix) -> XxchMix {
@@ -95,7 +110,14 @@ impl XxchMap {
             }
         }
         // the decoder multiplies by the table's inverse of the scale, which for 3 dB is 92682 / 65536
-        XxchMix { scale: if scale == 55 { 65536.0 / 92682.0 } else { code_gain(scale) }, extra }
+        XxchMix {
+            scale: if scale == 55 {
+                65536.0 / 92682.0
+            } else {
+                code_gain(scale)
+            },
+            extra,
+        }
     }
 }
 
@@ -105,20 +127,39 @@ pub fn xxch_map(layout: &sw_core::ChannelLayout) -> Option<XxchMap> {
     use Channel::*;
     let pos = |list: &[Channel]| layout.channels.iter().position(|c| list.contains(c));
     // (channels, their bits in the XXCH channel mask) in the order the original encoder codes them
-    let pairs: [([Channel; 2], [u32; 2]); 6] = [([Lsr, Rsr], [7, 8]), ([Lw, Rw], [17, 18]), ([Lh, Rh], [13, 15]), ([Lhs, Rhs], [20, 21]), ([Cs, Ch], [6, 14]), ([Cs, Oh], [6, 19])];
-    let (pair, rear_bits) = pairs.iter().find(|(p, _)| p.iter().all(|c| layout.channels.contains(c)))?;
+    let pairs: [([Channel; 2], [u32; 2]); 6] = [
+        ([Lsr, Rsr], [7, 8]),
+        ([Lw, Rw], [17, 18]),
+        ([Lh, Rh], [13, 15]),
+        ([Lhs, Rhs], [20, 21]),
+        ([Cs, Ch], [6, 14]),
+        ([Cs, Oh], [6, 19]),
+    ];
+    let (pair, rear_bits) = pairs
+        .iter()
+        .find(|(p, _)| p.iter().all(|c| layout.channels.contains(c)))?;
     let map = XxchMap {
         core: [pos(&[C])?, pos(&[L])?, pos(&[R])?, pos(&[Ls, Lss])?, pos(&[Rs, Rss])?],
         lfe: pos(&[Lfe]),
         rear: [pos(&[pair[0]])?, pos(&[pair[1]])?],
         rear_bits: *rear_bits,
-        side_bits: if layout.channels.contains(&Lss) { [9, 10] } else { [3, 4] },
+        side_bits: if layout.channels.contains(&Lss) {
+            [9, 10]
+        } else {
+            [3, 4]
+        },
         has_lfe: layout.channels.contains(&Lfe),
     };
     (layout.channel_count() == 7 + usize::from(map.lfe.is_some())).then_some(map)
 }
 
-pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    map: XxchMap,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
     let total_kbps = req.hra_kbps.unwrap_or(2046);
     let rate = stems.sample_rate;
     if rate != 48_000 {
@@ -150,14 +191,33 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(NativeError::Empty);
     }
     let n = core.frame_samples();
     let nch_total = 7 + usize::from(has_lfe);
     let spk = crate::ma::map_layout(req.layout).exss_mask;
-    let exss = ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: spk, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: false, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
+    let exss = ExssParams {
+        sample_rate: rate,
+        channels: nch_total,
+        bit_res: req.pcm_bits,
+        spk_mask: spk,
+        with_core: true,
+        dialnorm: (-req.dialnorm) as u32,
+        frame_duration_code: 0,
+        x96_in_core: false,
+        xch_in_core: false,
+        secondary: false,
+        extras: crate::exss::ExssExtras {
+            min_header: 28,
+            ..Default::default()
+        },
+    };
     let params = map.params(&req.bitstream.downmix);
     let mix = map.mix(&req.bitstream.downmix);
     let overhead = exss_frame_xxch(&exss, &[0u8; 4]).len() - 4;
@@ -165,10 +225,14 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);
     let upto = |k: u64| (k * bits_num) / (bits_den * 8);
 
-    let container = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req
+        .output
+        .extension()
+        .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
-        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, spk as u16, crate::dtshd::Kind::CoreAndExtension);
+        let mut i =
+            crate::dtshd::DtsHdInfo::new(rate, n as u16, want, spk as u16, crate::dtshd::Kind::CoreAndExtension);
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = 1509;
         i.core_payload = core_payload;
@@ -181,7 +245,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     // filter bank delay: in a .dtshd the stream starts with silence so the delay is 1024 samples, which the
     // file states; a raw stream starts that many samples into the source instead (see `native.rs`)
     let delay = core.delay();
-    let (skip, lead) = if container { (0usize, 1024usize.saturating_sub(delay)) } else { (delay.min(want as usize), 0) };
+    let (skip, lead) = if container {
+        (0usize, 1024usize.saturating_sub(delay))
+    } else {
+        (delay.min(want as usize), 0)
+    };
     let mut left = skip as u64;
     while left > 0 {
         let k = left.min(n as u64) as usize;
@@ -196,7 +264,13 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: XxchMap, on_progr
     let mut ext_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 2];
     let to24 = |v: f32| v as f64 * 8_388_608.0;
     // one frame: the core, then XBR for the core channels and XXCH for the extra pair in the extension substream
-    let assemble = |core: &mut Encoder, ext: &mut Encoder, xbr: &mut XbrEncoder, core_pcm: &[Vec<f64>], ext_pcm: &[Vec<f64>], f: u64| -> Vec<u8> {
+    let assemble = |core: &mut Encoder,
+                    ext: &mut Encoder,
+                    xbr: &mut XbrEncoder,
+                    core_pcm: &[Vec<f64>],
+                    ext_pcm: &[Vec<f64>],
+                    f: u64|
+     -> Vec<u8> {
         let mut data = core.encode_frame(core_pcm);
         let pad = (4 - data.len() % 4) % 4;
         data.resize(data.len() + pad, 0);

@@ -42,7 +42,10 @@ pub struct DcpOptions {
 
 impl Default for DcpOptions {
     fn default() -> DcpOptions {
-        DcpOptions { frame_rate: (24, 1), smpte: true }
+        DcpOptions {
+            frame_rate: (24, 1),
+            smpte: true,
+        }
     }
 }
 
@@ -58,11 +61,21 @@ impl DcpOptions {
             "48" => (48, 1),
             "50" => (50, 1),
             "60" => (60, 1),
-            other => return Err(format!("'{other}' is not a DCP frame rate (24, 23.976, 25, 30, 48, 50 or 60)")),
+            other => {
+                return Err(format!(
+                    "'{other}' is not a DCP frame rate (24, 23.976, 25, 30, 48, 50 or 60)"
+                ))
+            }
         };
         match standard {
-            "smpte" => Ok(DcpOptions { frame_rate, smpte: true }),
-            "interop" => Ok(DcpOptions { frame_rate, smpte: false }),
+            "smpte" => Ok(DcpOptions {
+                frame_rate,
+                smpte: true,
+            }),
+            "interop" => Ok(DcpOptions {
+                frame_rate,
+                smpte: false,
+            }),
             other => Err(format!("'{other}' is not a DCP standard (smpte or interop)")),
         }
     }
@@ -146,12 +159,18 @@ impl DcpWriter {
             return Err(bad("DCP sound holds at most 16 channels".into()));
         }
         if !FRAME_RATES.contains(&options.frame_rate) {
-            return Err(bad(format!("{}/{} is not a DCP frame rate (24, 25, 30, 48, 50, 60 or 24000/1001)", options.frame_rate.0, options.frame_rate.1)));
+            return Err(bad(format!(
+                "{}/{} is not a DCP frame rate (24, 25, 30, 48, 50, 60 or 24000/1001)",
+                options.frame_rate.0, options.frame_rate.1
+            )));
         }
         let (num, den) = options.frame_rate;
         let per_frame = params.rate as u64 * den as u64;
         if per_frame % num as u64 != 0 {
-            return Err(bad(format!("{} Hz does not divide into whole samples per {}/{} fps frame", params.rate, num, den)));
+            return Err(bad(format!(
+                "{} Hz does not divide into whole samples per {}/{} fps frame",
+                params.rate, num, den
+            )));
         }
         let samples_per_frame = (per_frame / num as u64) as usize;
         let frame_bytes = samples_per_frame * params.channels() * 3;
@@ -160,7 +179,17 @@ impl DcpWriter {
 
         let mut out = BufWriter::new(File::create(path)?);
         out.write_all(&vec![0u8; HEADER_SIZE])?; // the header is written last, when the footer's position is known
-        let mut writer = DcpWriter { out, params, options, channel_label, ids: Ids::new(), frame_bytes, frames_total, pending: Vec::new(), frames_written: 0 };
+        let mut writer = DcpWriter {
+            out,
+            params,
+            options,
+            channel_label,
+            ids: Ids::new(),
+            frame_bytes,
+            frames_total,
+            pending: Vec::new(),
+            frames_written: 0,
+        };
         if options.smpte {
             let body = writer.partition(Kind::Body, HEADER_SIZE as u64, 0, 0, 0, 0, 0, BODY_SID);
             writer.out.write_all(&body)?;
@@ -169,11 +198,25 @@ impl DcpWriter {
     }
 
     fn operational_pattern(&self) -> Label {
-        label(if self.options.smpte { "060e2b34040101020d01020110000000" } else { "060e2b34040101010d01020110000000" })
+        label(if self.options.smpte {
+            "060e2b34040101020d01020110000000"
+        } else {
+            "060e2b34040101010d01020110000000"
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn partition(&self, kind: Kind, this: u64, previous: u64, footer: u64, header_bytes: u64, index_bytes: u64, index_sid: u32, body_sid: u32) -> Vec<u8> {
+    fn partition(
+        &self,
+        kind: Kind,
+        this: u64,
+        previous: u64,
+        footer: u64,
+        header_bytes: u64,
+        index_bytes: u64,
+        index_sid: u32,
+        body_sid: u32,
+    ) -> Vec<u8> {
         Partition {
             kind,
             this,
@@ -184,7 +227,10 @@ impl DcpWriter {
             index_sid,
             body_sid,
             operational_pattern: self.operational_pattern(),
-            containers: vec![label("060e2b34040101010d01030102060100"), label("060e2b34040101030d010301027f0100")],
+            containers: vec![
+                label("060e2b34040101010d01030102060100"),
+                label("060e2b34040101030d010301027f0100"),
+            ],
         }
         .bytes()
     }
@@ -192,12 +238,21 @@ impl DcpWriter {
     /// The header partition: pack, primer, all the metadata sets, padded with filler to `HEADER_SIZE`.
     fn header(&self, footer: u64) -> std::io::Result<Vec<u8>> {
         let metadata = self.metadata();
-        let entries: Vec<(u16, Label)> = primer::ENTRIES.iter().filter(|(tag, _)| *tag != primer::CHANNEL_ASSIGNMENT || self.channel_label.is_some()).map(|&(tag, ul)| (tag, label(ul))).collect();
+        let entries: Vec<(u16, Label)> = primer::ENTRIES
+            .iter()
+            .filter(|(tag, _)| *tag != primer::CHANNEL_ASSIGNMENT || self.channel_label.is_some())
+            .map(|&(tag, ul)| (tag, label(ul)))
+            .collect();
         let primer = mxf::primer(&entries);
         let body_sid = if self.options.smpte { 0 } else { BODY_SID };
         let pack_size = self.partition(Kind::Header, 0, 0, footer, 0, 0, 0, body_sid).len();
         let used = primer.len() + metadata.len();
-        let fill = mxf::filler(pack_size + used, HEADER_SIZE).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the DCP header does not fit in 16 KiB"))?;
+        let fill = mxf::filler(pack_size + used, HEADER_SIZE).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the DCP header does not fit in 16 KiB",
+            )
+        })?;
         let header_bytes = (primer.len() + metadata.len() + fill.len()) as u64;
         let mut out = self.partition(Kind::Header, 0, 0, footer, header_bytes, 0, 0, body_sid);
         out.extend(primer);
@@ -227,42 +282,112 @@ impl DcpWriter {
         let mut out = Vec::new();
 
         let mut preface = Set::new("060e2b34025301010d01010101012f00");
-        preface.prop(0x3c0a, &ids.preface).prop(0x3b02, &now).u16(0x3b05, 0x0102).u32(0x3b07, 1);
-        preface.prop(0x3b08, &ids.file).prop(0x3b06, &id_batch(&[ids.identification])).prop(0x3b03, &ids.content);
+        preface
+            .prop(0x3c0a, &ids.preface)
+            .prop(0x3b02, &now)
+            .u16(0x3b05, 0x0102)
+            .u32(0x3b07, 1);
+        preface
+            .prop(0x3b08, &ids.file)
+            .prop(0x3b06, &id_batch(&[ids.identification]))
+            .prop(0x3b03, &ids.content);
         preface.prop(0x3b09, &self.operational_pattern());
-        preface.prop(0x3b0a, &batch(&[label("060e2b34040101010d01030102060100").to_vec(), label("060e2b34040101030d010301027f0100").to_vec()]));
+        preface.prop(
+            0x3b0a,
+            &batch(&[
+                label("060e2b34040101010d01030102060100").to_vec(),
+                label("060e2b34040101030d010301027f0100").to_vec(),
+            ]),
+        );
         preface.prop(0x3b0b, &batch(&[]));
         out.extend(preface.finish());
 
         let mut ident = Set::new("060e2b34025301010d01010101013000");
-        ident.prop(0x3c0a, &ids.identification).prop(0x3c09, &ids.generation).prop(0x3c01, &utf16("Subwoofa")).prop(0x3c02, &utf16("Subwoofa"));
-        ident.prop(0x3c03, &[0u8; 10]).prop(0x3c04, &utf16(sw_core::version::NUMBER)).prop(0x3c05, &label("5375626f6f6661201f9f4e7a8c3d4b01"));
-        ident.prop(0x3c06, &now).prop(0x3c07, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).prop(0x3c08, &utf16("Windows"));
+        ident
+            .prop(0x3c0a, &ids.identification)
+            .prop(0x3c09, &ids.generation)
+            .prop(0x3c01, &utf16("Subwoofa"))
+            .prop(0x3c02, &utf16("Subwoofa"));
+        ident
+            .prop(0x3c03, &[0u8; 10])
+            .prop(0x3c04, &utf16(sw_core::version::NUMBER))
+            .prop(0x3c05, &label("5375626f6f6661201f9f4e7a8c3d4b01"));
+        ident
+            .prop(0x3c06, &now)
+            .prop(0x3c07, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+            .prop(0x3c08, &utf16("Windows"));
         out.extend(ident.finish());
 
         let mut content = Set::new("060e2b34025301010d01010101011800");
-        content.prop(0x3c0a, &ids.content).prop(0x1901, &id_batch(&[ids.file, ids.material])).prop(0x1902, &id_batch(&[ids.container_data]));
+        content
+            .prop(0x3c0a, &ids.content)
+            .prop(0x1901, &id_batch(&[ids.file, ids.material]))
+            .prop(0x1902, &id_batch(&[ids.container_data]));
         out.extend(content.finish());
 
         let mut data = Set::new("060e2b34025301010d01010101012300");
-        data.prop(0x3c0a, &ids.container_data).prop(0x2701, &ids.file_umid).u32(0x3f06, INDEX_SID).u32(0x3f07, BODY_SID);
+        data.prop(0x3c0a, &ids.container_data)
+            .prop(0x2701, &ids.file_umid)
+            .u32(0x3f06, INDEX_SID)
+            .u32(0x3f07, BODY_SID);
         out.extend(data.finish());
 
         // the material package: what a player plays, pointing into the file package
         let mut material = Set::new("060e2b34025301010d01010101013600");
-        material.prop(0x3c0a, &ids.material).prop(0x4401, &ids.material_umid).prop(0x4402, &utf16("Material Package"));
-        material.prop(0x4405, &now).prop(0x4404, &now).prop(0x4403, &id_batch(&[ids_tc_track[0], ids_sound_track[0]]));
+        material
+            .prop(0x3c0a, &ids.material)
+            .prop(0x4401, &ids.material_umid)
+            .prop(0x4402, &utf16("Material Package"));
+        material
+            .prop(0x4405, &now)
+            .prop(0x4404, &now)
+            .prop(0x4403, &id_batch(&[ids_tc_track[0], ids_sound_track[0]]));
         out.extend(material.finish());
-        out.extend(self.timecode_track(&ids_tc_track[0], &ids_tc_seq[0], &ids_tc[0], tc_dd, frames, rounded_rate));
-        out.extend(self.sound_track(&ids_sound_track[0], &ids_sound_seq[0], &ids_clip[0], sound_dd, 0, frames, Some(ids.file_umid.clone())));
+        out.extend(self.timecode_track(
+            &ids_tc_track[0],
+            &ids_tc_seq[0],
+            &ids_tc[0],
+            tc_dd,
+            frames,
+            rounded_rate,
+        ));
+        out.extend(self.sound_track(
+            &ids_sound_track[0],
+            &ids_sound_seq[0],
+            &ids_clip[0],
+            sound_dd,
+            0,
+            frames,
+            Some(ids.file_umid.clone()),
+        ));
 
         // the file package: describes the essence in this file
         let mut file = Set::new("060e2b34025301010d01010101013700");
-        file.prop(0x3c0a, &ids.file).prop(0x4401, &ids.file_umid).prop(0x4402, &utf16("File Package: SMPTE 382M frame wrapping of wave audio"));
-        file.prop(0x4405, &now).prop(0x4404, &now).prop(0x4403, &id_batch(&[ids_tc_track[1], ids_sound_track[1]])).prop(0x4701, &ids.descriptor);
+        file.prop(0x3c0a, &ids.file)
+            .prop(0x4401, &ids.file_umid)
+            .prop(0x4402, &utf16("File Package: SMPTE 382M frame wrapping of wave audio"));
+        file.prop(0x4405, &now)
+            .prop(0x4404, &now)
+            .prop(0x4403, &id_batch(&[ids_tc_track[1], ids_sound_track[1]]))
+            .prop(0x4701, &ids.descriptor);
         out.extend(file.finish());
-        out.extend(self.timecode_track(&ids_tc_track[1], &ids_tc_seq[1], &ids_tc[1], tc_dd, frames, rounded_rate));
-        out.extend(self.sound_track(&ids_sound_track[1], &ids_sound_seq[1], &ids_clip[1], sound_dd, sound_track_number, frames, None));
+        out.extend(self.timecode_track(
+            &ids_tc_track[1],
+            &ids_tc_seq[1],
+            &ids_tc[1],
+            tc_dd,
+            frames,
+            rounded_rate,
+        ));
+        out.extend(self.sound_track(
+            &ids_sound_track[1],
+            &ids_sound_seq[1],
+            &ids_clip[1],
+            sound_dd,
+            sound_track_number,
+            frames,
+            None,
+        ));
 
         out.extend(self.descriptor());
         out
@@ -271,30 +396,65 @@ impl DcpWriter {
     fn track(&self, id: &[u8; 16], track_id: u32, number: u32, name: &str, sequence: &[u8; 16]) -> Vec<u8> {
         let (num, den) = self.options.frame_rate;
         let mut t = Set::new("060e2b34025301010d01010101013b00");
-        t.prop(0x3c0a, id).u32(0x4801, track_id).u32(0x4804, number).prop(0x4802, &utf16(name)).prop(0x4803, sequence);
+        t.prop(0x3c0a, id)
+            .u32(0x4801, track_id)
+            .u32(0x4804, number)
+            .prop(0x4802, &utf16(name))
+            .prop(0x4803, sequence);
         t.prop(0x4b01, &rational(num, den)).u64(0x4b02, 0);
         t.finish()
     }
 
-    fn timecode_track(&self, track: &[u8; 16], sequence: &[u8; 16], component: &[u8; 16], data_def: &str, frames: u64, rounded_rate: u16) -> Vec<u8> {
+    fn timecode_track(
+        &self,
+        track: &[u8; 16],
+        sequence: &[u8; 16],
+        component: &[u8; 16],
+        data_def: &str,
+        frames: u64,
+        rounded_rate: u16,
+    ) -> Vec<u8> {
         let mut out = self.track(track, 1, 0, "Timecode Track", sequence);
         let mut seq = Set::new("060e2b34025301010d01010101010f00");
-        seq.prop(0x3c0a, sequence).prop(0x0201, &label(data_def)).u64(0x0202, frames).prop(0x1001, &batch(&[component.to_vec()]));
+        seq.prop(0x3c0a, sequence)
+            .prop(0x0201, &label(data_def))
+            .u64(0x0202, frames)
+            .prop(0x1001, &batch(&[component.to_vec()]));
         out.extend(seq.finish());
         let mut tc = Set::new("060e2b34025301010d01010101011400");
-        tc.prop(0x3c0a, component).prop(0x0201, &label(data_def)).u64(0x0202, frames).u16(0x1502, rounded_rate).u64(0x1501, 0).u8(0x1503, 0);
+        tc.prop(0x3c0a, component)
+            .prop(0x0201, &label(data_def))
+            .u64(0x0202, frames)
+            .u16(0x1502, rounded_rate)
+            .u64(0x1501, 0)
+            .u8(0x1503, 0);
         out.extend(tc.finish());
         out
     }
 
     /// A sound track: the track, its sequence and a source clip (pointing at `source`, or at nothing for the file package).
-    fn sound_track(&self, track: &[u8; 16], sequence: &[u8; 16], clip: &[u8; 16], data_def: &str, number: u32, frames: u64, source: Option<Vec<u8>>) -> Vec<u8> {
+    fn sound_track(
+        &self,
+        track: &[u8; 16],
+        sequence: &[u8; 16],
+        clip: &[u8; 16],
+        data_def: &str,
+        number: u32,
+        frames: u64,
+        source: Option<Vec<u8>>,
+    ) -> Vec<u8> {
         let mut out = self.track(track, 2, number, "Sound Track", sequence);
         let mut seq = Set::new("060e2b34025301010d01010101010f00");
-        seq.prop(0x3c0a, sequence).prop(0x0201, &label(data_def)).u64(0x0202, frames).prop(0x1001, &batch(&[clip.to_vec()]));
+        seq.prop(0x3c0a, sequence)
+            .prop(0x0201, &label(data_def))
+            .u64(0x0202, frames)
+            .prop(0x1001, &batch(&[clip.to_vec()]));
         out.extend(seq.finish());
         let mut c = Set::new("060e2b34025301010d01010101011100");
-        c.prop(0x3c0a, clip).prop(0x0201, &label(data_def)).u64(0x0202, frames).u64(0x1201, 0);
+        c.prop(0x3c0a, clip)
+            .prop(0x0201, &label(data_def))
+            .u64(0x0202, frames)
+            .u64(0x1201, 0);
         match source {
             Some(umid) => c.prop(0x1101, &umid).u32(0x1102, 2),
             None => c.prop(0x1101, &[0u8; 32]).u32(0x1102, 0),
@@ -308,9 +468,17 @@ impl DcpWriter {
         let channels = self.params.channels() as u32;
         let block_align = (channels * 3) as u16;
         let mut d = Set::new("060e2b34025301010d01010101014800");
-        d.prop(0x3c0a, &self.ids.descriptor).u32(0x3006, 2).prop(0x3001, &rational(num, den)).u64(0x3002, self.frames_total);
-        d.prop(0x3004, &label("060e2b34040101010d01030102060100")).prop(0x3d03, &rational(self.params.rate, 1)).u8(0x3d02, 0);
-        d.u32(0x3d07, channels).u32(0x3d01, 24).u16(0x3d0a, block_align).u32(0x3d09, self.params.rate * block_align as u32);
+        d.prop(0x3c0a, &self.ids.descriptor)
+            .u32(0x3006, 2)
+            .prop(0x3001, &rational(num, den))
+            .u64(0x3002, self.frames_total);
+        d.prop(0x3004, &label("060e2b34040101010d01030102060100"))
+            .prop(0x3d03, &rational(self.params.rate, 1))
+            .u8(0x3d02, 0);
+        d.u32(0x3d07, channels)
+            .u32(0x3d01, 24)
+            .u16(0x3d0a, block_align)
+            .u32(0x3d09, self.params.rate * block_align as u32);
         if let Some(assignment) = &self.channel_label {
             d.prop(primer::CHANNEL_ASSIGNMENT, assignment);
         }
@@ -348,10 +516,29 @@ impl BlockWriter for DcpWriter {
         }
         self.out.flush()?;
         let footer = self.out.stream_position()?;
-        let index = mxf::index_segment(self.options.frame_rate, if self.options.smpte { 0 } else { self.frames_total }, self.frame_bytes as u32 + KLV_OVERHEAD, INDEX_SID, BODY_SID);
+        let index = mxf::index_segment(
+            self.options.frame_rate,
+            if self.options.smpte { 0 } else { self.frames_total },
+            self.frame_bytes as u32 + KLV_OVERHEAD,
+            INDEX_SID,
+            BODY_SID,
+        );
         let previous = if self.options.smpte { HEADER_SIZE as u64 } else { 0 };
-        let pack = self.partition(Kind::Footer, footer, previous, footer, 0, index.len() as u64, INDEX_SID, 0);
-        let rip = if self.options.smpte { mxf::random_index(&[(0, 0), (BODY_SID, HEADER_SIZE as u64), (0, footer)]) } else { mxf::random_index(&[(BODY_SID, 0), (0, footer)]) };
+        let pack = self.partition(
+            Kind::Footer,
+            footer,
+            previous,
+            footer,
+            0,
+            index.len() as u64,
+            INDEX_SID,
+            0,
+        );
+        let rip = if self.options.smpte {
+            mxf::random_index(&[(0, 0), (BODY_SID, HEADER_SIZE as u64), (0, footer)])
+        } else {
+            mxf::random_index(&[(BODY_SID, 0), (0, footer)])
+        };
         for part in [&pack, &index, &rip] {
             self.out.write_all(part)?;
         }

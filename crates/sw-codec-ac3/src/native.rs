@@ -42,7 +42,13 @@ pub fn encode_to_file(
     on_progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
 ) -> Result<Stats, NativeError> {
-    if req.eac3 && req.layout.channels.iter().any(|c| matches!(c, sw_core::Channel::Lsr | sw_core::Channel::Rsr)) {
+    if req.eac3
+        && req
+            .layout
+            .channels
+            .iter()
+            .any(|c| matches!(c, sw_core::Channel::Lsr | sw_core::Channel::Rsr))
+    {
         return encode_extended(stems, req, on_progress, cancel);
     }
     let map = map_layout(req.layout)?;
@@ -60,7 +66,11 @@ pub fn encode_to_file(
     let first = ((req.start_secs * rate as f64) as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64) as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64) as u64)
+        .unwrap_or(avail)
+        .min(avail);
     // one extra block of zeros flushes the transform delay
     let total_frames = (want + 256).div_ceil(SAMPLES_PER_FRAME as u64);
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
@@ -96,20 +106,38 @@ pub fn encode_to_file(
     }
     out.flush()?;
     on_progress(1.0);
-    Ok(Stats { frames: total_frames, input_frames: want, bytes })
+    Ok(Stats {
+        frames: total_frames,
+        input_frames: want,
+        bytes,
+    })
 }
-
 
 /// 7.1 / 7.0 as E-AC-3: the independent substream carries a 5.1 (5.0) downmix in which the rear channels are
 /// folded into the surrounds; a dependent substream carries the true side surrounds and the rear pair, with a
 /// custom channel map that makes a 7.1 decoder replace the downmixed surrounds and add the rears.
-fn encode_extended(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+fn encode_extended(
+    stems: &mut StemSet,
+    req: &Request,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
     use sw_core::Channel::*;
     let unsupported = || Error::Unsupported(format!("layout '{}' cannot be carried by E-AC-3", req.layout.id));
     let pos = |chs: &[sw_core::Channel]| req.layout.channels.iter().position(|c| chs.contains(c));
-    let (l, r, c) = (pos(&[L]).ok_or_else(unsupported)?, pos(&[R]).ok_or_else(unsupported)?, pos(&[C]).ok_or_else(unsupported)?);
-    let (sl, sr) = (pos(&[Ls, Lss]).ok_or_else(unsupported)?, pos(&[Rs, Rss]).ok_or_else(unsupported)?);
-    let (bl, br) = (pos(&[Lsr]).ok_or_else(unsupported)?, pos(&[Rsr]).ok_or_else(unsupported)?);
+    let (l, r, c) = (
+        pos(&[L]).ok_or_else(unsupported)?,
+        pos(&[R]).ok_or_else(unsupported)?,
+        pos(&[C]).ok_or_else(unsupported)?,
+    );
+    let (sl, sr) = (
+        pos(&[Ls, Lss]).ok_or_else(unsupported)?,
+        pos(&[Rs, Rss]).ok_or_else(unsupported)?,
+    );
+    let (bl, br) = (
+        pos(&[Lsr]).ok_or_else(unsupported)?,
+        pos(&[Rsr]).ok_or_else(unsupported)?,
+    );
     let lfe = pos(&[Lfe]);
     if req.layout.channel_count() != 7 + usize::from(lfe.is_some()) {
         return Err(unsupported().into());
@@ -120,14 +148,36 @@ fn encode_extended(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnM
     let share = |w: f64| ((total as f64 * w).round() as u32).max(8);
     let indep_kbps = share(if lfe.is_some() { 5.1 / 9.1 } else { 5.0 / 9.0 });
     let dep_kbps = total.saturating_sub(indep_kbps).max(8);
-    let mut indep = Encoder::new(Config { acmod: 7, lfe: lfe.is_some(), sample_rate: rate, bitrate_kbps: indep_kbps, dialnorm: req.dialnorm, dolby_surround: false, bandwidth_hz: None, eac3: true })?;
-    let mut dep = Encoder::new(Config { acmod: 6, lfe: false, sample_rate: rate, bitrate_kbps: dep_kbps, dialnorm: req.dialnorm, dolby_surround: false, bandwidth_hz: None, eac3: true })?;
+    let mut indep = Encoder::new(Config {
+        acmod: 7,
+        lfe: lfe.is_some(),
+        sample_rate: rate,
+        bitrate_kbps: indep_kbps,
+        dialnorm: req.dialnorm,
+        dolby_surround: false,
+        bandwidth_hz: None,
+        eac3: true,
+    })?;
+    let mut dep = Encoder::new(Config {
+        acmod: 6,
+        lfe: false,
+        sample_rate: rate,
+        bitrate_kbps: dep_kbps,
+        dialnorm: req.dialnorm,
+        dolby_surround: false,
+        bandwidth_hz: None,
+        eac3: true,
+    })?;
     // Ls, Rs and the Lrs/Rrs pair: custom channel map bits 3, 4 and 6 (bit 15 is the Left location)
     dep.set_dependent((1 << 12) | (1 << 11) | (1 << 9));
     let first = ((req.start_secs * rate as f64) as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64) as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64) as u64)
+        .unwrap_or(avail)
+        .min(avail);
     let total_frames = (want + 256).div_ceil(SAMPLES_PER_FRAME as u64);
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
     let n = SAMPLES_PER_FRAME;
@@ -176,5 +226,9 @@ fn encode_extended(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnM
     }
     out.flush()?;
     on_progress(1.0);
-    Ok(Stats { frames: total_frames, input_frames: want, bytes })
+    Ok(Stats {
+        frames: total_frames,
+        input_frames: want,
+        bytes,
+    })
 }

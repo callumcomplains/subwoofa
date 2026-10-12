@@ -9,8 +9,8 @@
 //! 3. *Entropy coding*: adaptive Golomb-Rice codes whose parameter follows a running average of recent magnitudes,
 //!    with a run-length code for stretches of zeros.
 
-use crate::mp4_audio::{self, atom};
 use crate::bitwriter::BitWriter;
+use crate::mp4_audio::{self, atom};
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -66,7 +66,10 @@ pub fn alac_order(layout: &ChannelLayout) -> Option<(Vec<usize>, u32)> {
         8 => (&[C, Lw, Rw, L, R, Ls, Rs, Lfe], (127 << 16) | 8),
         _ => return None,
     };
-    let order: Option<Vec<usize>> = wanted.iter().map(|w| layout.channels.iter().position(|c| c == w)).collect();
+    let order: Option<Vec<usize>> = wanted
+        .iter()
+        .map(|w| layout.channels.iter().position(|c| c == w))
+        .collect();
     order.map(|o| (o, tag))
 }
 
@@ -75,7 +78,11 @@ pub fn alac_order(layout: &ChannelLayout) -> Option<(Vec<usize>, u32)> {
 
 /// Floor of log2 for positive numbers (0 gives 0).
 fn log2_floor(v: u32) -> u32 {
-    if v == 0 { 0 } else { 31 - v.leading_zeros() }
+    if v == 0 {
+        0
+    } else {
+        31 - v.leading_zeros()
+    }
 }
 
 /// One value with the adaptive Golomb code: a unary quotient (of the divisor 2^k - 1), then the remainder; a quotient
@@ -118,7 +125,9 @@ fn entropy_code(w: &mut BitWriter, residual: &[i32], escape_bits: u32) {
         };
         i += 1;
         put_scalar(w, x - sign_modifier, k, escape_bits);
-        history = history.wrapping_add(x.wrapping_mul(HISTORY_MULT)).wrapping_sub(history.wrapping_mul(HISTORY_MULT) >> 9);
+        history = history
+            .wrapping_add(x.wrapping_mul(HISTORY_MULT))
+            .wrapping_sub(history.wrapping_mul(HISTORY_MULT) >> 9);
         sign_modifier = 0;
         if x > 0xFFFF {
             history = 0xFFFF;
@@ -224,7 +233,12 @@ fn fit_coefficients(samples: &[i32], order: usize) -> Option<Vec<i32>> {
     }
     let solution = solve(a, b)?;
     let limit = i16::MAX as f64;
-    Some(solution.iter().map(|c| (c * (1u32 << PREDICTOR_SHIFT) as f64).round().clamp(-limit, limit) as i32).collect())
+    Some(
+        solution
+            .iter()
+            .map(|c| (c * (1u32 << PREDICTOR_SHIFT) as f64).round().clamp(-limit, limit) as i32)
+            .collect(),
+    )
 }
 
 /// Gaussian elimination with partial pivoting.
@@ -280,12 +294,20 @@ fn best_prediction(samples: &[i32], bits: u32, orders: &[usize]) -> Predicted {
         entropy_code(&mut w, &residual, bits);
         let total = w.bytes.len() * 8 + order * 16;
         if best.as_ref().map_or(true, |b| total < b.bits) {
-            best = Some(Predicted { coefficients, residual, bits: total });
+            best = Some(Predicted {
+                coefficients,
+                residual,
+                bits: total,
+            });
         }
     }
     best.unwrap_or_else(|| {
         let residual = predict(samples, &[], bits);
-        Predicted { coefficients: Vec::new(), residual, bits: usize::MAX }
+        Predicted {
+            coefficients: Vec::new(),
+            residual,
+            bits: usize::MAX,
+        }
     })
 }
 
@@ -299,14 +321,24 @@ struct Stereo {
     left_weight: u32,
 }
 
-const LEFT_RIGHT: Stereo = Stereo { shift: 0, left_weight: 0 };
+const LEFT_RIGHT: Stereo = Stereo {
+    shift: 0,
+    left_weight: 0,
+};
 
 /// The four ways of storing a pair: left/right, left/side, right/side, mid/side. Returns the changed channels.
 fn stereo_variants(left: &[i32], right: &[i32]) -> Vec<(Stereo, Vec<i32>, Vec<i32>)> {
     let n = left.len();
     let mut out = vec![(LEFT_RIGHT, left.to_vec(), right.to_vec())];
     // left and side
-    out.push((Stereo { shift: 0, left_weight: 1 }, left.to_vec(), (0..n).map(|i| left[i].wrapping_sub(right[i])).collect()));
+    out.push((
+        Stereo {
+            shift: 0,
+            left_weight: 1,
+        },
+        left.to_vec(),
+        (0..n).map(|i| left[i].wrapping_sub(right[i])).collect(),
+    ));
     // right and side
     let mut l2 = Vec::with_capacity(n);
     let mut r2 = Vec::with_capacity(n);
@@ -315,7 +347,14 @@ fn stereo_variants(left: &[i32], right: &[i32]) -> Vec<(Stereo, Vec<i32>, Vec<i3
         r2.push(side);
         l2.push(right[i].wrapping_add(side >> 31));
     }
-    out.push((Stereo { shift: 31, left_weight: 1 }, l2, r2));
+    out.push((
+        Stereo {
+            shift: 31,
+            left_weight: 1,
+        },
+        l2,
+        r2,
+    ));
     // mid and side
     let mut l3 = Vec::with_capacity(n);
     let mut r3 = Vec::with_capacity(n);
@@ -323,7 +362,14 @@ fn stereo_variants(left: &[i32], right: &[i32]) -> Vec<(Stereo, Vec<i32>, Vec<i3
         l3.push(left[i].wrapping_add(right[i]) >> 1);
         r3.push(left[i].wrapping_sub(right[i]));
     }
-    out.push((Stereo { shift: 1, left_weight: 1 }, l3, r3));
+    out.push((
+        Stereo {
+            shift: 1,
+            left_weight: 1,
+        },
+        l3,
+        r3,
+    ));
     out
 }
 
@@ -353,15 +399,20 @@ fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]
         return;
     }
     let width = bits - extra_bits + channels.len() as u32 - 1; // the side channel needs one more bit
-    // the low bytes are kept aside; the rest is what gets predicted
+                                                               // the low bytes are kept aside; the rest is what gets predicted
     let mask = (1i32 << extra_bits) - 1;
     let low: Vec<Vec<i32>> = channels.iter().map(|c| c.iter().map(|v| v & mask).collect()).collect();
-    let high: Vec<Vec<i32>> = channels.iter().map(|c| c.iter().map(|v| v >> extra_bits).collect()).collect();
+    let high: Vec<Vec<i32>> = channels
+        .iter()
+        .map(|c| c.iter().map(|v| v >> extra_bits).collect())
+        .collect();
     let (stereo, coded): (Stereo, Vec<Vec<i32>>) = if channels.len() == 2 {
         // try every way of storing the pair with a quick predictor, keep the smallest
         let mut best: Option<(usize, Stereo, Vec<Vec<i32>>)> = None;
         for (s, l, r) in stereo_variants(&high[0], &high[1]) {
-            let cost = best_prediction(&l, width, &[8]).bits.saturating_add(best_prediction(&r, width, &[8]).bits);
+            let cost = best_prediction(&l, width, &[8])
+                .bits
+                .saturating_add(best_prediction(&r, width, &[8]).bits);
             if best.as_ref().map_or(true, |b| cost < b.0) {
                 best = Some((cost, s, vec![l, r]));
             }
@@ -373,7 +424,10 @@ fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]
     };
     w.put(stereo.shift as u64, 8);
     w.put(stereo.left_weight as u64, 8);
-    let predictions: Vec<Predicted> = coded.iter().map(|c| best_prediction(c, width, &PREDICTOR_ORDERS)).collect();
+    let predictions: Vec<Predicted> = coded
+        .iter()
+        .map(|c| best_prediction(c, width, &PREDICTOR_ORDERS))
+        .collect();
     for p in &predictions {
         w.put(0, 4); // prediction type
         w.put(PREDICTOR_SHIFT as u64, 4);
@@ -446,11 +500,25 @@ impl AlacWriter {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "ALAC holds 16 or 24 bit integer samples")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "ALAC holds 16 or 24 bit integer samples",
+                ))
+            }
         };
         let mut out = BufWriter::new(File::create(path)?);
         let start = mp4_audio::write_start(&mut out, b"M4A ")?;
-        Ok(AlacWriter { out, bits, pending: vec![Vec::new(); params.channels()], frame_sizes: Vec::new(), start, layout_tag, samples_done: 0, params })
+        Ok(AlacWriter {
+            out,
+            bits,
+            pending: vec![Vec::new(); params.channels()],
+            frame_sizes: Vec::new(),
+            start,
+            layout_tag,
+            samples_done: 0,
+            params,
+        })
     }
 
     fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
@@ -466,7 +534,11 @@ impl AlacWriter {
         let total = self.samples_done;
         let max_frame = self.frame_sizes.iter().copied().max().unwrap_or(0);
         let bytes: u64 = self.frame_sizes.iter().map(|&s| s as u64).sum();
-        let average_bitrate = if total > 0 { (bytes * 8 * p.rate as u64 / total) as u32 } else { 0 };
+        let average_bitrate = if total > 0 {
+            (bytes * 8 * p.rate as u64 / total) as u32
+        } else {
+            0
+        };
 
         let mut cookie = Vec::new();
         cookie.extend_from_slice(&0u32.to_be_bytes()); // version and flags
@@ -501,7 +573,11 @@ impl BlockWriter for AlacWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= FRAME_SAMPLES {
-            let block: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..FRAME_SAMPLES).collect()).collect();
+            let block: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..FRAME_SAMPLES).collect())
+                .collect();
             self.write_frame(&block)?;
         }
         Ok(())
@@ -566,7 +642,9 @@ mod tests {
     #[test]
     fn predictor_residual_is_what_the_decoder_undoes() {
         // decode the residual with the decoder's rule and compare with the input
-        let samples: Vec<i32> = (0..500).map(|i| ((i as f64 * 0.07).sin() * 9000.0) as i32 + (i * 7 % 13) as i32).collect();
+        let samples: Vec<i32> = (0..500)
+            .map(|i| ((i as f64 * 0.07).sin() * 9000.0) as i32 + (i * 7 % 13) as i32)
+            .collect();
         let coefficients = fit_coefficients(&samples, 8).unwrap();
         let residual = predict(&samples, &coefficients, 17);
         let order = 8usize;

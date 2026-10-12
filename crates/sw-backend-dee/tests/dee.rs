@@ -44,11 +44,25 @@ fn channel_bed_becomes_dolby_digital_plus_atmos() {
     bed_wav(&wav, 4);
     let job = AtmosJob::new(&wav, dir.join("bed.ec3"), Target::Ddp(DdpOptions::default()));
     let mut last = 0.0;
-    let done = run(&dee, &job, &dir.join("work"), &mut |p| last = p, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    let done = run(
+        &dee,
+        &job,
+        &dir.join("work"),
+        &mut |p| last = p,
+        &mut |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     assert!(last > 0.99, "progress reached {last}");
     let r = sw_verify::verify(&done.output, &sw_verify::Options::default()).unwrap();
     assert!(r.passed, "{}", r.to_text());
-    assert!(r.summary.iter().any(|(k, v)| k == "Dolby Atmos" && v.starts_with("yes")), "{}", r.to_text());
+    assert!(
+        r.summary
+            .iter()
+            .any(|(k, v)| k == "Dolby Atmos" && v.starts_with("yes")),
+        "{}",
+        r.to_text()
+    );
     // the licence's feature list must not reach the lines we pass on
     assert!(!done.messages.iter().any(|m| m.contains("Features enabled")));
 }

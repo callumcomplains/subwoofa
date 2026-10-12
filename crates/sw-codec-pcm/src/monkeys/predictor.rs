@@ -37,7 +37,11 @@ struct Line {
 
 impl Line {
     fn new(len: usize) -> Line {
-        Line { len, previous: 0, differences: [0; TAPS_B - 1] }
+        Line {
+            len,
+            previous: 0,
+            differences: [0; TAPS_B - 1],
+        }
     }
 
     /// The tap values for a step that starts from `newest`, and the fresh first difference among them.
@@ -59,7 +63,9 @@ impl Line {
 
 /// Weighted sum of taps, wrapping as 64-bit arithmetic does.
 fn weigh(taps: &[i64], weights: &[i64]) -> i64 {
-    taps.iter().zip(weights).fold(0i64, |sum, (&t, &w)| sum.wrapping_add(t.wrapping_mul(w)))
+    taps.iter()
+        .zip(weights)
+        .fold(0i64, |sum, (&t, &w)| sum.wrapping_add(t.wrapping_mul(w)))
 }
 
 /// Moves each weight by the sign of its tap times the sign of the residual.
@@ -134,7 +140,9 @@ pub(crate) struct Predictor {
 
 impl Predictor {
     pub fn new() -> Predictor {
-        Predictor { channels: [Channel::new(), Channel::new()] }
+        Predictor {
+            channels: [Channel::new(), Channel::new()],
+        }
     }
 
     pub fn mono(&mut self, value: i32) -> i32 {

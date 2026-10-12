@@ -110,8 +110,12 @@ impl<'a> Bits<'a> {
 
 const CORE_SYNC: u32 = 0x7FFE_8001;
 const EXSS_SYNC: u32 = 0x6458_2025;
-const SFREQ: [u32; 16] = [0, 8000, 16000, 32000, 0, 0, 11025, 22050, 44100, 0, 0, 12000, 24000, 48000, 0, 0];
-const FS_INDEX: [u32; 16] = [8000, 16000, 32000, 64000, 128000, 22050, 44100, 88200, 176400, 352800, 12000, 24000, 48000, 96000, 192000, 384000];
+const SFREQ: [u32; 16] = [
+    0, 8000, 16000, 32000, 0, 0, 11025, 22050, 44100, 0, 0, 12000, 24000, 48000, 0, 0,
+];
+const FS_INDEX: [u32; 16] = [
+    8000, 16000, 32000, 64000, 128000, 22050, 44100, 88200, 176400, 352800, 12000, 24000, 48000, 96000, 192000, 384000,
+];
 const AMODE_CHANNELS: [u32; 16] = [1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8];
 
 fn be32(d: &[u8]) -> u32 {
@@ -149,7 +153,14 @@ fn parse_core(d: &[u8]) -> Option<CoreInfo> {
         return None;
     }
     let channels = AMODE_CHANNELS.get(amode).copied().unwrap_or(0) + u32::from(lff != 0);
-    Some(CoreInfo { size: fsize as usize + 1, samples: (nblks + 1) * 32, rate: SFREQ[sfreq & 15], channels, ext_x96: ext == 1 && ext_id == 2, xch: ext == 1 && ext_id == 0 })
+    Some(CoreInfo {
+        size: fsize as usize + 1,
+        samples: (nblks + 1) * 32,
+        rate: SFREQ[sfreq & 15],
+        channels,
+        ext_x96: ext == 1 && ext_id == 2,
+        xch: ext == 1 && ext_id == 0,
+    })
 }
 
 struct ExssInfo {
@@ -222,7 +233,12 @@ fn parse_exss(d: &[u8], carry: Option<(u32, u32)>) -> Option<ExssInfo> {
         rate = FS_INDEX[b.get(4) as usize & 15];
         channels = b.get(8) + 1;
     }
-    Some(ExssInfo { size: fsize, ticks, rate, channels })
+    Some(ExssInfo {
+        size: fsize,
+        ticks,
+        rate,
+        channels,
+    })
 }
 
 /// Sliding window over a file: indexing reads forward in big blocks instead of seeking per frame.
@@ -235,7 +251,12 @@ struct Window {
 
 impl Window {
     fn new(base: u64, total: u64) -> Window {
-        Window { base, start: 0, data: Vec::new(), total }
+        Window {
+            base,
+            start: 0,
+            data: Vec::new(),
+            total,
+        }
     }
 
     /// Up to `n` bytes at stream position `pos`.
@@ -288,7 +309,12 @@ fn index_dts<R: Read + Seek>(r: &mut R, base: u64, len: u64) -> Result<(Vec<Fram
                 rate = c.rate * if c.ext_x96 { 2 } else { 1 };
                 chans = chans.max(c.channels + u32::from(c.xch));
                 tick_rate = c.rate;
-                cur = Some(Frame { off: pos, len: c.size as u32, ticks: c.samples, restart: true });
+                cur = Some(Frame {
+                    off: pos,
+                    len: c.size as u32,
+                    ticks: c.samples,
+                    restart: true,
+                });
                 pos += c.size as u64;
                 continue;
             }
@@ -308,7 +334,12 @@ fn index_dts<R: Read + Seek>(r: &mut R, base: u64, len: u64) -> Result<(Vec<Fram
                         }
                         let (dur, clk) = e.ticks.unwrap_or((512, 48000));
                         tick_rate = clk;
-                        cur = Some(Frame { off: pos, len: e.size as u32, ticks: dur, restart: true });
+                        cur = Some(Frame {
+                            off: pos,
+                            len: e.size as u32,
+                            ticks: dur,
+                            restart: true,
+                        });
                     }
                 }
                 pos += e.size as u64;
@@ -327,7 +358,11 @@ fn index_dts<R: Read + Seek>(r: &mut R, base: u64, len: u64) -> Result<(Vec<Fram
     if tick_rate == 0 {
         tick_rate = rate.max(1);
     }
-    let mut parts = vec![if has_exss { "DTS-HD".to_string() } else { "DTS".to_string() }];
+    let mut parts = vec![if has_exss {
+        "DTS-HD".to_string()
+    } else {
+        "DTS".to_string()
+    }];
     if has_core && has_exss {
         parts.push("core + extension substream".into());
     } else if has_core {
@@ -395,13 +430,23 @@ fn index_truehd<R: Read + Seek>(r: &mut R, base: u64, len: u64) -> Result<TrueHd
                 au_ticks = 40 << (code & 7);
             }
         }
-        frames.push(Frame { off: pos, len: size as u32, ticks: au_ticks, restart });
+        frames.push(Frame {
+            off: pos,
+            len: size as u32,
+            ticks: au_ticks,
+            restart,
+        });
         pos += size as u64;
     }
     if frames.is_empty() {
         return Err(Error::Format("no access units found".into()));
     }
-    let desc = if fmt == Format::Mlp { "MLP (DVD-Audio)" } else { "Dolby TrueHD" }.to_string();
+    let desc = if fmt == Format::Mlp {
+        "MLP (DVD-Audio)"
+    } else {
+        "Dolby TrueHD"
+    }
+    .to_string();
     Ok((frames, rate, rate, chans, desc, fmt))
 }
 
@@ -453,8 +498,24 @@ impl Stream {
             let (fr, tr, sr, ch, d) = index_dts(&mut r, data_start, data_len)?;
             (Format::Dts, fr, tr, sr, ch, d)
         };
-        let trailer = if header.is_empty() { Vec::new() } else { read_chunks(&mut r, data_start + data_len, total)? };
-        Ok(Stream { format, header, data_start, data_len, frames, tick_rate, sample_rate, channels, description, trailer, path: path.to_path_buf() })
+        let trailer = if header.is_empty() {
+            Vec::new()
+        } else {
+            read_chunks(&mut r, data_start + data_len, total)?
+        };
+        Ok(Stream {
+            format,
+            header,
+            data_start,
+            data_len,
+            frames,
+            tick_rate,
+            sample_rate,
+            channels,
+            description,
+            trailer,
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn is_container(&self) -> bool {
@@ -483,13 +544,21 @@ impl Stream {
     }
 
     pub fn frame_start_secs(&self, index: usize) -> f64 {
-        self.frames[..index.min(self.frames.len())].iter().map(|f| f.ticks as u64).sum::<u64>() as f64 / self.tick_rate.max(1) as f64
+        self.frames[..index.min(self.frames.len())]
+            .iter()
+            .map(|f| f.ticks as u64)
+            .sum::<u64>() as f64
+            / self.tick_rate.max(1) as f64
     }
 
     pub fn info(&self) -> Info {
         let secs = self.duration_secs();
         let bytes: u64 = self.frames.iter().map(|f| f.len as u64).sum();
-        let peak = self.frames.iter().map(|f| f.len as f64 * 8.0 * self.tick_rate as f64 / f.ticks.max(1) as f64 / 1000.0).fold(0.0, f64::max);
+        let peak = self
+            .frames
+            .iter()
+            .map(|f| f.len as f64 * 8.0 * self.tick_rate as f64 / f.ticks.max(1) as f64 / 1000.0)
+            .fold(0.0, f64::max);
         Info {
             format: format!("{:?}", self.format),
             description: self.description.clone(),
@@ -498,7 +567,11 @@ impl Stream {
             frames: self.frames.len(),
             duration_secs: secs,
             bytes,
-            average_kbps: if secs > 0.0 { bytes as f64 * 8.0 / secs / 1000.0 } else { 0.0 },
+            average_kbps: if secs > 0.0 {
+                bytes as f64 * 8.0 / secs / 1000.0
+            } else {
+                0.0
+            },
             peak_kbps: peak,
             restart_points: self.frames.iter().filter(|f| f.restart).count(),
             container: self.is_container(),
@@ -516,14 +589,22 @@ impl Stream {
             bits += f.len as f64 * 8.0;
             t += d;
             if t - wstart >= window {
-                out.push(PbrPoint { secs: wstart, mean_kbps: bits / (t - wstart) / 1000.0, peak_kbps: peak });
+                out.push(PbrPoint {
+                    secs: wstart,
+                    mean_kbps: bits / (t - wstart) / 1000.0,
+                    peak_kbps: peak,
+                });
                 wstart = t;
                 bits = 0.0;
                 peak = 0.0;
             }
         }
         if t > wstart + 1e-9 {
-            out.push(PbrPoint { secs: wstart, mean_kbps: bits / (t - wstart) / 1000.0, peak_kbps: peak });
+            out.push(PbrPoint {
+                secs: wstart,
+                mean_kbps: bits / (t - wstart) / 1000.0,
+                peak_kbps: peak,
+            });
         }
         out
     }
@@ -544,7 +625,13 @@ impl Stream {
         let bytes: u64 = frames.iter().map(|f| f.len as u64).sum();
         let ticks: u64 = frames.iter().map(|f| f.ticks as u64).sum();
         if self.is_container() {
-            w.write_all(&patch_container(&self.header, frames.len() as u32, ticks, self.tick_rate, bytes))?;
+            w.write_all(&patch_container(
+                &self.header,
+                frames.len() as u32,
+                ticks,
+                self.tick_rate,
+                bytes,
+            ))?;
         }
         copy_frames(&mut src, &mut w, self.data_start, frames)?;
         if self.is_container() {
@@ -600,7 +687,9 @@ impl Stream {
 /// Append several streams into one file; they must be the same format at the same rate.
 pub fn append(inputs: &[&Path], out: &Path) -> Result<()> {
     let streams: Vec<Stream> = inputs.iter().map(|p| Stream::open(p)).collect::<Result<_>>()?;
-    let first = streams.first().ok_or_else(|| Error::Format("nothing to append".into()))?;
+    let first = streams
+        .first()
+        .ok_or_else(|| Error::Format("nothing to append".into()))?;
     for s in &streams {
         if s.format != first.format || s.sample_rate != first.sample_rate || s.channels != first.channels {
             return Err(Error::Format(format!(
@@ -633,7 +722,6 @@ pub fn append(inputs: &[&Path], out: &Path) -> Result<()> {
     Ok(())
 }
 
-
 impl Stream {
     /// First frame at or after `i` that decoding can begin at (the frame count when there is none).
     fn restart_at_or_after(&self, mut i: usize) -> usize {
@@ -663,8 +751,16 @@ fn check_compatible(a: &Stream, b: &Stream) -> Result<()> {
 /// `head` patched for the new totals.
 fn write_pieces(head: &Stream, pieces: &[(&Stream, usize, usize)], out: &Path) -> Result<()> {
     let frames: u32 = pieces.iter().map(|(_, a, b)| (b - a) as u32).sum();
-    let ticks: u64 = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.ticks as u64).sum();
-    let bytes: u64 = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.len as u64).sum();
+    let ticks: u64 = pieces
+        .iter()
+        .flat_map(|(s, a, b)| s.frames[*a..*b].iter())
+        .map(|f| f.ticks as u64)
+        .sum();
+    let bytes: u64 = pieces
+        .iter()
+        .flat_map(|(s, a, b)| s.frames[*a..*b].iter())
+        .map(|f| f.len as u64)
+        .sum();
     let mut w = BufWriter::new(File::create(out)?);
     if head.is_container() {
         w.write_all(&patch_container(&head.header, frames, ticks, head.tick_rate, bytes))?;
@@ -674,7 +770,11 @@ fn write_pieces(head: &Stream, pieces: &[(&Stream, usize, usize)], out: &Path) -
         copy_frames(&mut src, &mut w, s.data_start, &s.frames[*a..*b])?;
     }
     if head.is_container() {
-        let sizes: Vec<u32> = pieces.iter().flat_map(|(s, a, b)| s.frames[*a..*b].iter()).map(|f| f.len).collect();
+        let sizes: Vec<u32> = pieces
+            .iter()
+            .flat_map(|(s, a, b)| s.frames[*a..*b].iter())
+            .map(|f| f.len)
+            .collect();
         write_trailer(&mut w, &head.trailer, &sizes)?;
     }
     w.flush()?;
@@ -699,7 +799,10 @@ pub fn replace(base: &Path, insert: &Path, at: f64, out: &Path) -> Result<(f64, 
     let last = last.max(first);
     let pieces = [(&a, 0, first), (&b, 0, b.frames.len()), (&a, last, a.frames.len())];
     write_pieces(&a, &pieces, out)?;
-    Ok((a.frame_start_secs(first), a.frame_start_secs(last) - a.frame_start_secs(first)))
+    Ok((
+        a.frame_start_secs(first),
+        a.frame_start_secs(last) - a.frame_start_secs(first),
+    ))
 }
 
 /// Insert all of `insert` into `base` at `at` seconds without removing anything.
@@ -722,7 +825,10 @@ fn read_chunks<R: Read + Seek>(r: &mut R, mut pos: u64, total: u64) -> Result<Ve
         r.seek(SeekFrom::Start(pos))?;
         let mut h = [0u8; 16];
         r.read_exact(&mut h)?;
-        if !h[..8].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_') {
+        if !h[..8]
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+        {
             break;
         }
         let size = u64::from_be_bytes(h[8..16].try_into().unwrap());
@@ -731,7 +837,10 @@ fn read_chunks<R: Read + Seek>(r: &mut R, mut pos: u64, total: u64) -> Result<Ve
         }
         let mut body = vec![0u8; size as usize];
         r.read_exact(&mut body)?;
-        out.push(Chunk { name: h[..8].try_into().unwrap(), body });
+        out.push(Chunk {
+            name: h[..8].try_into().unwrap(),
+            body,
+        });
         pos += 16 + size;
     }
     Ok(out)
@@ -759,7 +868,11 @@ fn navi_table(sizes: &[u32]) -> Vec<u8> {
 /// Write the chunks that follow the stream, rebuilding the frame offset table for the frames just written.
 fn write_trailer<W: Write>(w: &mut W, trailer: &[Chunk], sizes: &[u32]) -> Result<()> {
     for c in trailer {
-        let body = if &c.name == b"NAVI-TBL" { navi_table(sizes) } else { c.body.clone() };
+        let body = if &c.name == b"NAVI-TBL" {
+            navi_table(sizes)
+        } else {
+            c.body.clone()
+        };
         w.write_all(&c.name)?;
         w.write_all(&(body.len() as u64).to_be_bytes())?;
         w.write_all(&body)?;
@@ -806,7 +919,11 @@ fn patch_container(header: &[u8], frames: u32, ticks: u64, tick_rate: u32, bytes
             let p = pos + 16;
             h[p + 6..p + 10].copy_from_slice(&frames.to_be_bytes());
             let rate = ((h[p + 3] as u64) << 16) | ((h[p + 4] as u64) << 8) | h[p + 5] as u64;
-            let samples = if tick_rate > 0 && rate > 0 { ticks * rate / tick_rate as u64 } else { ticks };
+            let samples = if tick_rate > 0 && rate > 0 {
+                ticks * rate / tick_rate as u64
+            } else {
+                ticks
+            };
             h[p + 12..p + 16].copy_from_slice(&((samples >> 8) as u32).to_be_bytes());
             h[p + 16] = samples as u8;
         } else if name == b"STRMDATA" {
@@ -876,7 +993,10 @@ pub fn timecode_position(code: u8, h: u32, m: u32, s: u32, f: u32) -> (u32, u32)
 
 /// Parse `hh:mm:ss:ff` (also with semicolons).
 pub fn parse_timecode(text: &str) -> Option<(u32, u32, u32, u32)> {
-    let parts: Vec<u32> = text.split(|c| c == ':' || c == ';').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+    let parts: Vec<u32> = text
+        .split(|c| c == ':' || c == ';')
+        .map(|p| p.trim().parse().ok())
+        .collect::<Option<_>>()?;
     (parts.len() == 4).then(|| (parts[0], parts[1], parts[2], parts[3]))
 }
 
@@ -891,7 +1011,11 @@ fn chunk_offsets(path: &Path) -> Result<Vec<(Vec<u8>, u64, u64)>> {
         let mut h = [0u8; 16];
         f.read_exact(&mut h)?;
         let size = u64::from_be_bytes(h[8..16].try_into().unwrap());
-        if !h[..8].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_') || size > total - pos - 16 {
+        if !h[..8]
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+            || size > total - pos - 16
+        {
             break;
         }
         out.push((h[..8].to_vec(), pos + 16, size));
@@ -911,14 +1035,21 @@ pub struct Stripe {
 pub fn read_stripe(path: &Path) -> Result<Stripe> {
     let chunks = chunk_offsets(path)?;
     let mut f = File::open(path)?;
-    let (_, at, size) = chunks.iter().find(|(n, _, _)| n == b"TIMECODE").ok_or_else(|| Error::Format("the file has no TIMECODE chunk (not a .dtshd written by an encoder)".into()))?;
+    let (_, at, size) = chunks
+        .iter()
+        .find(|(n, _, _)| n == b"TIMECODE")
+        .ok_or_else(|| Error::Format("the file has no TIMECODE chunk (not a .dtshd written by an encoder)".into()))?;
     if *size < 32 {
         return Err(Error::Format("TIMECODE chunk too short".into()));
     }
     f.seek(SeekFrom::Start(*at))?;
     let mut b = [0u8; 32];
     f.read_exact(&mut b)?;
-    Ok(Stripe { fps_code: b[4], start_samples: u32::from_be_bytes(b[9..13].try_into().unwrap()), reference_samples: u32::from_be_bytes(b[21..25].try_into().unwrap()) })
+    Ok(Stripe {
+        fps_code: b[4],
+        start_samples: u32::from_be_bytes(b[9..13].try_into().unwrap()),
+        reference_samples: u32::from_be_bytes(b[21..25].try_into().unwrap()),
+    })
 }
 
 /// Relabel the start time and frame rate of a `.dtshd` file (the header and the timecode chunk; the reference
@@ -948,7 +1079,9 @@ pub fn restripe(input: &Path, out: &Path, fps_code: u8, start: (u32, u32, u32, u
         }
     }
     if patched < 2 {
-        return Err(Error::Format("the file has no DTSHDHDR and TIMECODE chunks to restripe".into()));
+        return Err(Error::Format(
+            "the file has no DTSHDHDR and TIMECODE chunks to restripe".into(),
+        ));
     }
     Ok(())
 }
@@ -981,7 +1114,9 @@ pub fn add_silence(input: &Path, out: &Path, head_secs: f64, tail_secs: f64) -> 
     if !s.is_container() {
         return Err(Error::Format("Add Silence needs a .dtshd file".into()));
     }
-    let silent = s.blackout().ok_or_else(|| Error::Format("this file has no silent frame (BLACKOUT chunk), so silence cannot be added to it".into()))?;
+    let silent = s.blackout().ok_or_else(|| {
+        Error::Format("this file has no silent frame (BLACKOUT chunk), so silence cannot be added to it".into())
+    })?;
     let per_frame = s.frames[0].ticks as f64 / s.tick_rate.max(1) as f64;
     let nh = (head_secs.max(0.0) / per_frame + 1e-9).floor() as usize;
     let nt = (tail_secs.max(0.0) / per_frame + 1e-9).floor() as usize;
@@ -1026,9 +1161,21 @@ pub fn verify(path: &Path, ffmpeg: &Path) -> Result<VerifyReport> {
         .args(["-c:a", "pcm_s24le", "-f", "md5", "-"])
         .output()?;
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let messages: Vec<String> = stderr.lines().filter(|l| !l.trim().is_empty()).map(|l| l.to_string()).collect();
-    let md5 = String::from_utf8_lossy(&out.stdout).lines().find_map(|l| l.strip_prefix("MD5=").map(|m| m.to_string()));
-    Ok(VerifyReport { passed: out.status.success() && messages.is_empty(), messages, pcm_md5: md5, frames: s.frames.len(), duration_secs: s.duration_secs() })
+    let messages: Vec<String> = stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    let md5 = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("MD5=").map(|m| m.to_string()));
+    Ok(VerifyReport {
+        passed: out.status.success() && messages.is_empty(),
+        messages,
+        pcm_md5: md5,
+        frames: s.frames.len(),
+        duration_secs: s.duration_secs(),
+    })
 }
 
 #[cfg(test)]
@@ -1128,7 +1275,11 @@ mod tests {
             f.extend_from_slice(&(b.len() as u64).to_be_bytes());
             f.extend_from_slice(b);
         };
-        chunk(&mut f, b"DTSHDHDR", &[0, 0, 0, 0, 0x80, 0, 0, 0, 0, 2, 0, 0x1d, 1, 0, 0, 0]);
+        chunk(
+            &mut f,
+            b"DTSHDHDR",
+            &[0, 0, 0, 0, 0x80, 0, 0, 0, 0, 2, 0, 0x1d, 1, 0, 0, 0],
+        );
         chunk(&mut f, b"STRMDATA", &[0u8; 64]);
         let mut tc = vec![0u8; 32];
         tc[..4].copy_from_slice(&48_000u32.to_be_bytes());
@@ -1138,7 +1289,10 @@ mod tests {
         std::fs::write(&a, &f).unwrap();
         restripe(&a, &b, FPS_29_97_DROP, (1, 0, 0, 0)).unwrap();
         let s = read_stripe(&b).unwrap();
-        assert_eq!((s.fps_code, s.start_samples, s.reference_samples), (FPS_29_97_DROP, 172_799_827, 0));
+        assert_eq!(
+            (s.fps_code, s.start_samples, s.reference_samples),
+            (FPS_29_97_DROP, 172_799_827, 0)
+        );
         let out = std::fs::read(&b).unwrap();
         assert_eq!(&out[16 + 5..16 + 9], &172_799_827u32.to_be_bytes());
         assert_eq!(out[16 + 9], FPS_29_97_DROP);

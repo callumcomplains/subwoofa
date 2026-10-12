@@ -79,7 +79,10 @@ pub struct Position {
 pub fn position_of(code: u8, frames: u64) -> Position {
     let (num, den) = fps_exact(code);
     let scaled = frames as u128 * 48_000 * den as u128;
-    Position { samples: (scaled / num as u128) as u32, fraction: (scaled % num as u128) as u32 }
+    Position {
+        samples: (scaled / num as u128) as u32,
+        fraction: (scaled % num as u128) as u32,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +116,24 @@ pub struct DtsHdInfo {
 
 impl DtsHdInfo {
     pub fn new(sample_rate: u32, samples_per_frame: u16, total_samples: u64, ch_mask: u16, kind: Kind) -> DtsHdInfo {
-        DtsHdInfo { sample_rate, samples_per_frame, total_samples, ch_mask, kind, core_kbps: 0, core_payload: 0, vbr: false, fps_code: FPS_24, start: Position::default(), reference: None, codec_delay: 0, core_rate: None, core_mask: None, file_info: vec![0x09, 0x0a, 0, 0], branch_points: None }
+        DtsHdInfo {
+            sample_rate,
+            samples_per_frame,
+            total_samples,
+            ch_mask,
+            kind,
+            core_kbps: 0,
+            core_payload: 0,
+            vbr: false,
+            fps_code: FPS_24,
+            start: Position::default(),
+            reference: None,
+            codec_delay: 0,
+            core_rate: None,
+            core_mask: None,
+            file_info: vec![0x09, 0x0a, 0, 0],
+            branch_points: None,
+        }
     }
 }
 
@@ -202,7 +222,15 @@ impl DtsHdSink {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
         let h = leading(&info, 0, 0, 0, 0, 0);
         out.write_all(&h)?;
-        Ok(DtsHdSink { out, info, header_len: h.len() as u64, sizes: Vec::new(), bytes: 0, ext_peak: 0, ext_total: 0 })
+        Ok(DtsHdSink {
+            out,
+            info,
+            header_len: h.len() as u64,
+            sizes: Vec::new(),
+            bytes: 0,
+            ext_peak: 0,
+            ext_total: 0,
+        })
     }
 
     /// Append one frame (`ext_len` bytes of it belong to the extension substream).
@@ -247,7 +275,8 @@ impl DtsHdSink {
 BUILD TIME = 00:00:00
 VERSION = 1
 REVISION = 0
-".to_vec();
+"
+        .to_vec();
         build.resize(76, 0);
         chunk(&mut t, b"BUILDVER", &build);
         chunk(&mut t, b"FILEINFO", &info.file_info);
@@ -261,8 +290,13 @@ REVISION = 0
         self.out.flush()?;
         let frames = self.sizes.len() as u32;
         let secs = frames as f64 * info.samples_per_frame as f64 / info.sample_rate as f64;
-        let avg = if info.kind == Kind::CoreAndExtension || info.vbr { (self.ext_total as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32 } else { (self.bytes as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32 };
-        let peak = (self.ext_peak as f64 * 8.0 * info.sample_rate as f64 / info.samples_per_frame as f64 / 1000.0).ceil() as u32;
+        let avg = if info.kind == Kind::CoreAndExtension || info.vbr {
+            (self.ext_total as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32
+        } else {
+            (self.bytes as f64 * 8.0 / secs.max(1e-9) / 1000.0) as u32
+        };
+        let peak = (self.ext_peak as f64 * 8.0 * info.sample_rate as f64 / info.samples_per_frame as f64 / 1000.0)
+            .ceil() as u32;
         let ext_payload = (self.ext_total / frames.max(1) as u64) as u32;
         let h = leading(&info, frames, self.bytes, avg, peak, ext_payload);
         debug_assert_eq!(h.len() as u64, self.header_len);
@@ -317,13 +351,31 @@ mod tests {
     fn timecode_positions_match_the_commercial_tools() {
         // values StreamTools wrote when restriping the same file
         assert_eq!(position_of(FPS_24, timecode_frames(FPS_24, 0, 0, 1, 0)).samples, 48_000);
-        assert_eq!(position_of(FPS_23_976, timecode_frames(FPS_23_976, 0, 0, 10, 0)).samples, 480_480);
-        assert_eq!(position_of(FPS_23_976, timecode_frames(FPS_23_976, 1, 2, 3, 4)).samples, 178_890_712);
-        assert_eq!(position_of(FPS_25, timecode_frames(FPS_25, 1, 0, 0, 0)).samples, 172_800_000);
-        assert_eq!(position_of(FPS_30, timecode_frames(FPS_30, 1, 0, 0, 0)).samples, 172_800_000);
-        assert_eq!(position_of(FPS_29_97, timecode_frames(FPS_29_97, 1, 0, 0, 0)).samples, 172_972_800);
+        assert_eq!(
+            position_of(FPS_23_976, timecode_frames(FPS_23_976, 0, 0, 10, 0)).samples,
+            480_480
+        );
+        assert_eq!(
+            position_of(FPS_23_976, timecode_frames(FPS_23_976, 1, 2, 3, 4)).samples,
+            178_890_712
+        );
+        assert_eq!(
+            position_of(FPS_25, timecode_frames(FPS_25, 1, 0, 0, 0)).samples,
+            172_800_000
+        );
+        assert_eq!(
+            position_of(FPS_30, timecode_frames(FPS_30, 1, 0, 0, 0)).samples,
+            172_800_000
+        );
+        assert_eq!(
+            position_of(FPS_29_97, timecode_frames(FPS_29_97, 1, 0, 0, 0)).samples,
+            172_972_800
+        );
         let p = position_of(FPS_29_97_DROP, timecode_frames(FPS_29_97_DROP, 1, 0, 0, 0));
         assert_eq!((p.samples, p.fraction), (172_799_827, 6000));
-        assert_eq!(position_of(FPS_30_DROP, timecode_frames(FPS_30_DROP, 1, 0, 0, 0)).samples, 172_627_200);
+        assert_eq!(
+            position_of(FPS_30_DROP, timecode_frames(FPS_30_DROP, 1, 0, 0, 0)).samples,
+            172_627_200
+        );
     }
 }

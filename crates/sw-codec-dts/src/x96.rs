@@ -24,7 +24,11 @@ fn max_q(k: usize) -> i32 {
 }
 
 fn sample_bits(k: usize, n: usize) -> usize {
-    if k <= 7 { n / 4 * BLOCK_BITS[k - 1] as usize } else { n * (k - 3) }
+    if k <= 7 {
+        n / 4 * BLOCK_BITS[k - 1] as usize
+    } else {
+        n * (k - 3)
+    }
 }
 
 #[derive(Clone)]
@@ -41,7 +45,13 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
     let n = r.len();
     let energy: f64 = r.iter().map(|v| v * v).sum();
     let peak = r.iter().fold(0f64, |m, v| m.max(v.abs()));
-    let mut out = vec![Cand { abits: 0, scale: 0, bits: 0, dist: energy, q: Vec::new() }];
+    let mut out = vec![Cand {
+        abits: 0,
+        scale: 0,
+        bits: 0,
+        dist: energy,
+        q: Vec::new(),
+    }];
     if peak < 0.5 {
         return out;
     }
@@ -55,7 +65,13 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
         let delta = SCALE_6[idx] as f64 * st;
         let q: Vec<i32> = r.iter().map(|v| ((v / delta).round() as i32).clamp(-mq, mq)).collect();
         let dist: f64 = r.iter().zip(&q).map(|(v, qi)| (v - *qi as f64 * delta).powi(2)).sum();
-        out.push(Cand { abits: k, scale: idx, bits: sample_bits(k, n), dist, q });
+        out.push(Cand {
+            abits: k,
+            scale: idx,
+            bits: sample_bits(k, n),
+            dist,
+            q,
+        });
         if dist < 1e-2 * n as f64 {
             break;
         }
@@ -63,11 +79,15 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
     prune(out, |c| c.bits as f64, |c| c.dist)
 }
 
-
 /// Keep only the candidates on the lower convex hull of (bits, distortion): the Lagrangian search never
 /// picks any other.
 fn prune<T: Clone>(mut c: Vec<T>, bits: impl Fn(&T) -> f64, dist: impl Fn(&T) -> f64) -> Vec<T> {
-    c.sort_by(|a, b| bits(a).partial_cmp(&bits(b)).unwrap().then(dist(a).partial_cmp(&dist(b)).unwrap()));
+    c.sort_by(|a, b| {
+        bits(a)
+            .partial_cmp(&bits(b))
+            .unwrap()
+            .then(dist(a).partial_cmp(&dist(b)).unwrap())
+    });
     let mut h: Vec<T> = Vec::new();
     for p in c {
         if let Some(last) = h.last() {
@@ -131,10 +151,14 @@ impl X96Encoder {
         }
         let hdr = frame_header_bytes(sets.len());
         let size = |p: &Vec<Vec<usize>>| -> usize {
-            hdr + (0..sets.len()).map(|i| self.size_set(&cands[bounds[i]..bounds[i + 1]], &p[bounds[i]..bounds[i + 1]], true)).sum::<usize>()
+            hdr + (0..sets.len())
+                .map(|i| self.size_set(&cands[bounds[i]..bounds[i + 1]], &p[bounds[i]..bounds[i + 1]], true))
+                .sum::<usize>()
         };
         let best = self.solve(&cands, &size, total);
-        let mut parts: Vec<Vec<u8>> = (0..sets.len()).map(|i| self.pack(&cands[bounds[i]..bounds[i + 1]], &best[bounds[i]..bounds[i + 1]], true)).collect();
+        let mut parts: Vec<Vec<u8>> = (0..sets.len())
+            .map(|i| self.pack(&cands[bounds[i]..bounds[i + 1]], &best[bounds[i]..bounds[i + 1]], true))
+            .collect();
         let used: usize = hdr + parts.iter().map(|p| p.len()).sum::<usize>();
         assert!(used <= total, "X96 overflow: {used} > {total}");
         // whatever is left pads the last channel set
@@ -167,11 +191,19 @@ impl X96Encoder {
 
     fn candidates_for(&self, residual: &[Vec<Vec<f64>>]) -> Vec<Vec<Vec<Cand>>> {
         use rayon::prelude::*;
-        residual.par_iter().map(|c| c.par_iter().map(|b| candidates(b)).collect()).collect()
+        residual
+            .par_iter()
+            .map(|c| c.par_iter().map(|b| candidates(b)).collect())
+            .collect()
     }
 
     /// Lagrangian search for the choices that fit `budget` bytes (everything at full quality when it fits).
-    fn solve(&self, cands: &[Vec<Vec<Cand>>], size: &dyn Fn(&Vec<Vec<usize>>) -> usize, budget: usize) -> Vec<Vec<usize>> {
+    fn solve(
+        &self,
+        cands: &[Vec<Vec<Cand>>],
+        size: &dyn Fn(&Vec<Vec<usize>>) -> usize,
+        budget: usize,
+    ) -> Vec<Vec<usize>> {
         let fits = |p: &Vec<Vec<usize>>| size(p) <= budget;
         let mut lo = 1e-9f64;
         let mut hi = 1e15f64;
@@ -231,7 +263,11 @@ impl X96Encoder {
                 }
             }
         }
-        Layout { high_res: max_a > 6, sbs: sbs.min(27), nsub }
+        Layout {
+            high_res: max_a > 6,
+            sbs: sbs.min(27),
+            nsub,
+        }
     }
 
     fn size(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> usize {

@@ -9,23 +9,23 @@ mod alac;
 mod als;
 mod bitwriter;
 mod caf;
+pub mod channels;
 mod crc;
 mod dcp;
+mod dsd;
+mod flac;
 mod le_bits;
 mod monkeys;
 mod mp4_audio;
-pub mod channels;
-mod dsd;
-mod flac;
 mod ogg;
 mod tta;
 mod wav;
 mod wavpack;
 
+pub use dcp::{DcpOptions, FRAME_RATES as DCP_FRAME_RATES};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-pub use dcp::{DcpOptions, FRAME_RATES as DCP_FRAME_RATES};
 use sw_core::ChannelLayout;
 use sw_pcm::StemSet;
 
@@ -160,7 +160,14 @@ impl Params {
 }
 
 /// Sample bytes for `frames` frames of the file's channels, interleaved.
-pub(crate) fn interleave(planar: &[Vec<f32>], order: &[usize], frames: usize, format: SampleFormat, big_endian: bool, out: &mut Vec<u8>) {
+pub(crate) fn interleave(
+    planar: &[Vec<f32>],
+    order: &[usize],
+    frames: usize,
+    format: SampleFormat,
+    big_endian: bool,
+    out: &mut Vec<u8>,
+) {
     out.clear();
     out.reserve(frames * order.len() * format.bytes());
     for i in 0..frames {
@@ -194,7 +201,15 @@ fn to_int(v: f32, magnitude_bits: u32) -> i64 {
 
 /// The channels as integers of `bits` bits (FLAC works on integers).
 pub(crate) fn to_integers(planar: &[Vec<f32>], order: &[usize], frames: usize, bits: u32) -> Vec<Vec<i32>> {
-    order.iter().map(|&ch| planar[ch][..frames].iter().map(|&v| to_int(v, bits - 1) as i32).collect()).collect()
+    order
+        .iter()
+        .map(|&ch| {
+            planar[ch][..frames]
+                .iter()
+                .map(|&v| to_int(v, bits - 1) as i32)
+                .collect()
+        })
+        .collect()
 }
 
 /// The layout channel placed at each channel of a DSD file (the file has Apple-style fixed arrangements), or `None`
@@ -204,21 +219,44 @@ pub fn dsd_order(layout: &ChannelLayout) -> Option<Vec<usize>> {
 }
 
 /// Writes the stems as the requested file.
-pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, PcmError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, PcmError> {
     let rate = stems.sample_rate;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let available = stems.frames - first;
-    let wanted = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(available).min(available);
+    let wanted = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(available)
+        .min(available);
     if wanted == 0 {
         return Err(PcmError::Empty);
     }
     let mask_order = channels::wav_order(req.layout);
-    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac | Container::Tta | Container::WavPack | Container::MonkeysAudio | Container::MpegAls);
+    let wav_style = matches!(
+        req.container,
+        Container::Wav
+            | Container::Flac
+            | Container::OggFlac
+            | Container::Tta
+            | Container::WavPack
+            | Container::MonkeysAudio
+            | Container::MpegAls
+    );
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
     let mut layout_tag = 0;
     let dsd_layout = if matches!(req.container, Container::Dsf | Container::Dff) {
-        Some(dsd::dsd_layout(req.layout).ok_or_else(|| PcmError::Unsupported(format!("DSD files have channel arrangements for mono, stereo, 3.0, 3.1, quad, 5.0 and 5.1, not {}", req.layout.id)))?)
+        Some(dsd::dsd_layout(req.layout).ok_or_else(|| {
+            PcmError::Unsupported(format!(
+                "DSD files have channel arrangements for mono, stereo, 3.0, 3.1, quad, 5.0 and 5.1, not {}",
+                req.layout.id
+            ))
+        })?)
     } else {
         None
     };
@@ -233,8 +271,19 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     } else {
         (0..req.layout.channels.len()).collect()
     };
-    let labels = order.iter().map(|&i| channels::caf_label(req.layout.channels[i], i)).collect();
-    let params = Params { rate, format: req.format, total_frames: wanted, order, mask: mask_order.mask, labels, time_reference: stems.time_reference.map(|t| t + first) };
+    let labels = order
+        .iter()
+        .map(|&i| channels::caf_label(req.layout.channels[i], i))
+        .collect();
+    let params = Params {
+        rate,
+        format: req.format,
+        total_frames: wanted,
+        order,
+        mask: mask_order.mask,
+        labels,
+        time_reference: stems.time_reference.map(|t| t + first),
+    };
 
     let mut writer: Box<dyn BlockWriter> = match req.container {
         Container::Wav => Box::new(wav::WavWriter::create(req.output, params)?),
@@ -249,8 +298,18 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::MpegAls => Box::new(als::AlsWriter::create(req.output, params)?),
         Container::DcpAudio => Box::new(dcp::DcpWriter::create(req.output, params, req.dcp)?),
         Container::Dsf | Container::Dff => {
-            let file = if req.container == Container::Dsf { dsd::DsdFile::Dsf } else { dsd::DsdFile::Dff };
-            Box::new(dsd::DsdWriter::create(req.output, params, file, dsd_layout.as_ref().unwrap(), req.dsd_multiplier)?)
+            let file = if req.container == Container::Dsf {
+                dsd::DsdFile::Dsf
+            } else {
+                dsd::DsdFile::Dff
+            };
+            Box::new(dsd::DsdWriter::create(
+                req.output,
+                params,
+                file,
+                dsd_layout.as_ref().unwrap(),
+                req.dsd_multiplier,
+            )?)
         }
     };
     let block = 16_384usize;

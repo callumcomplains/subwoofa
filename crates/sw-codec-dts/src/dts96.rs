@@ -47,7 +47,11 @@ pub(crate) fn decimator_taps(frac: f64) -> Vec<f64> {
     let mut h = Vec::with_capacity(2 * HALF + 1);
     for i in 0..=2 * HALF {
         let m = i as f64 - HALF as f64 - frac;
-        let sinc = if m == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m) };
+        let sinc = if m == 0.0 {
+            2.0 * fc
+        } else {
+            (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m)
+        };
         let r = m / HALF as f64;
         let w = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
         h.push(sinc * w);
@@ -99,12 +103,18 @@ impl Dts96Encoder {
         core.set_aux_downmix(cfg.aux.clone());
         let n = core.frame_samples() * 2;
         let l48: usize = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-        let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+        let phase: f64 = std::env::var("SW_PHASE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.5);
         let frac = phase - phase.floor();
         let phase = phase.floor() as usize;
         let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
         let ext_delay = ext[0].delay();
-        let ext_shift: isize = std::env::var("SW_X96_SHIFT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let ext_shift: isize = std::env::var("SW_X96_SHIFT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let lookahead = (2 * (l48 + 1) + phase + HALF + 2).max(ext_delay + 64 * cfg.blocks + 64);
         Ok(Dts96Encoder {
             core,
@@ -122,7 +132,10 @@ impl Dts96Encoder {
             lookahead,
             ext_delay,
             ext_shift,
-            ext_adj: std::env::var("SW_X96_ADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            ext_adj: std::env::var("SW_X96_ADJ")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             timing: [std::time::Duration::ZERO; 4],
             hra: None,
         })
@@ -161,7 +174,10 @@ impl Dts96Encoder {
             out.push(self.next_frame());
         }
         if std::env::var_os("SW_TIMING").is_some() {
-            eprintln!("dts96 timing: decimate {:?}, core {:?}, ext analysis {:?}, x96 coding {:?}", self.timing[0], self.timing[1], self.timing[2], self.timing[3]);
+            eprintln!(
+                "dts96 timing: decimate {:?}, core {:?}, ext analysis {:?}, x96 coding {:?}",
+                self.timing[0], self.timing[1], self.timing[2], self.timing[3]
+            );
         }
         out
     }
@@ -202,32 +218,47 @@ impl Dts96Encoder {
         // extension analysis of the programme, aligned with what the decoder's synthesis outputs (one
         // thread per channel: the analysis banks are independent)
         let blocks = self.core.frame_samples() / 32;
-        let (f_off, n, delay, shift, adj, dropped) = (f * self.n, self.n, self.ext_delay, self.ext_shift, self.ext_adj, self.dropped);
+        let (f_off, n, delay, shift, adj, dropped) = (
+            f * self.n,
+            self.n,
+            self.ext_delay,
+            self.ext_shift,
+            self.ext_adj,
+            self.dropped,
+        );
         let _ = n;
         let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); self.nprim];
         let deq = &self.core.last_deq;
         {
             use rayon::prelude::*;
             let bufs = &self.buf;
-            self.ext.par_iter_mut().zip(resid.par_iter_mut()).enumerate().for_each(|(ch, (ana, out))| {
-                let src = &bufs[ch];
-                let start = f_off as isize + delay as isize + 64 * shift + adj - dropped as isize;
-                let input: Vec<f64> = (0..blocks * 64)
-                    .map(|i| {
-                        let idx = start + i as isize;
-                        if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] } else { 0.0 }
-                    })
-                    .collect();
-                let mut bands = ana.analyse_blocks(&input);
-                debug_assert_eq!(bands.len(), BANDS64);
-                // lower half: what the core did not capture
-                for band in 0..32 {
-                    for b in 0..blocks {
-                        bands[band][b] -= deq[ch][band][b] as f64;
+            self.ext
+                .par_iter_mut()
+                .zip(resid.par_iter_mut())
+                .enumerate()
+                .for_each(|(ch, (ana, out))| {
+                    let src = &bufs[ch];
+                    let start = f_off as isize + delay as isize + 64 * shift + adj - dropped as isize;
+                    let input: Vec<f64> = (0..blocks * 64)
+                        .map(|i| {
+                            let idx = start + i as isize;
+                            if idx >= 0 && (idx as usize) < src.len() {
+                                src[idx as usize]
+                            } else {
+                                0.0
+                            }
+                        })
+                        .collect();
+                    let mut bands = ana.analyse_blocks(&input);
+                    debug_assert_eq!(bands.len(), BANDS64);
+                    // lower half: what the core did not capture
+                    for band in 0..32 {
+                        for b in 0..blocks {
+                            bands[band][b] -= deq[ch][band][b] as f64;
+                        }
                     }
-                }
-                *out = bands;
-            });
+                    *out = bands;
+                });
         }
         self.timing[2] += t0.elapsed();
         let t0 = std::time::Instant::now();

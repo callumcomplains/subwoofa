@@ -30,7 +30,11 @@ impl Analysis64 {
                 resp[band].extend(out.iter().map(|v| *v as f64 / AMP as f64));
             }
         }
-        let last = resp.iter().map(|r| r.iter().rposition(|v| v.abs() > 1e-6).unwrap_or(0)).max().unwrap_or(0);
+        let last = resp
+            .iter()
+            .map(|r| r.iter().rposition(|v| v.abs() > 1e-6).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
         let len = (last + 1).div_ceil(BANDS) * BANDS;
         for r in resp.iter_mut() {
             r.truncate(len);
@@ -39,7 +43,11 @@ impl Analysis64 {
                 *v /= e;
             }
         }
-        Analysis64 { resp, len, hist: vec![0.0; len] }
+        Analysis64 {
+            resp,
+            len,
+            hist: vec![0.0; len],
+        }
     }
 
     /// Samples between the input and the decoder output the analysed subbands produce.

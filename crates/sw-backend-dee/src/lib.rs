@@ -34,7 +34,11 @@ pub enum Error {
 pub fn find_dee(configured: Option<&Path>) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(p) = configured {
-        candidates.push(if p.is_dir() { p.join(exe_name()) } else { p.to_path_buf() });
+        candidates.push(if p.is_dir() {
+            p.join(exe_name())
+        } else {
+            p.to_path_buf()
+        });
     }
     if let Some(p) = std::env::var_os("SUBWOOFA_DEE") {
         let p = PathBuf::from(p);
@@ -74,10 +78,18 @@ pub enum InputKind {
 impl InputKind {
     /// Work out the kind from the file name and, for `.wav`/`.bw64`, from the chunks inside.
     pub fn detect(path: &Path) -> Result<InputKind, Error> {
-        let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
         match ext.as_str() {
             "atmos" => Ok(InputKind::Damf),
-            "wav" | "bw64" | "rf64" | "bwf" => Ok(if has_adm_chunks(path)? { InputKind::Adm } else { InputKind::Wav }),
+            "wav" | "bw64" | "rf64" | "bwf" => Ok(if has_adm_chunks(path)? {
+                InputKind::Adm
+            } else {
+                InputKind::Wav
+            }),
             "mxf" | "ec3" | "ac3" | "mp4" => Err(Error::Invalid(format!("'{ext}' files are not Atmos masters"))),
             _ => Ok(InputKind::AtmosMezz),
         }
@@ -155,7 +167,11 @@ impl std::str::FromStr for Drc {
             "music_light" => Drc::MusicLight,
             "speech" => Drc::Speech,
             "none" => Drc::None,
-            _ => return Err(format!("'{s}': use film_standard, film_light, music_standard, music_light, speech or none")),
+            _ => {
+                return Err(format!(
+                    "'{s}': use film_standard, film_light, music_standard, music_light, speech or none"
+                ))
+            }
         })
     }
 }
@@ -184,7 +200,15 @@ pub struct TrueHdOptions {
 
 impl Default for TrueHdOptions {
     fn default() -> Self {
-        TrueHdOptions { drc: Drc::FilmLight, spatial_clusters: 12, legacy_authoring: true, presentation_8ch: None, presentation_6ch: None, presentation_2ch: None, optimize_data_rate: false }
+        TrueHdOptions {
+            drc: Drc::FilmLight,
+            spatial_clusters: 12,
+            legacy_authoring: true,
+            presentation_8ch: None,
+            presentation_6ch: None,
+            presentation_2ch: None,
+            optimize_data_rate: false,
+        }
     }
 }
 
@@ -205,7 +229,16 @@ pub struct DdpOptions {
 
 impl Default for DdpOptions {
     fn default() -> Self {
-        DdpOptions { data_rate_kbps: 768, drc_line: Drc::FilmLight, drc_rf: Drc::FilmLight, loro_center: "-3".into(), loro_surround: "-3".into(), ltrt_center: "-3".into(), ltrt_surround: "-3".into(), preferred_downmix: "loro".into() }
+        DdpOptions {
+            data_rate_kbps: 768,
+            drc_line: Drc::FilmLight,
+            drc_rf: Drc::FilmLight,
+            loro_center: "-3".into(),
+            loro_surround: "-3".into(),
+            ltrt_center: "-3".into(),
+            ltrt_surround: "-3".into(),
+            preferred_downmix: "loro".into(),
+        }
     }
 }
 
@@ -215,7 +248,9 @@ pub enum Target {
     TrueHd(TrueHdOptions),
     Ddp(DdpOptions),
     /// Convert a master between `adm`, `damf` and `mxf_iab` (no encoding).
-    Convert { format: String },
+    Convert {
+        format: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,12 +275,27 @@ pub struct AtmosJob {
 
 impl AtmosJob {
     pub fn new(input: impl Into<PathBuf>, output: impl Into<PathBuf>, target: Target) -> AtmosJob {
-        AtmosJob { input: input.into(), kind: None, output: output.into(), target, frame_rate: None, start: None, end: None, metering: None, custom_dialnorm: None, prepend_silence: None, append_silence: None }
+        AtmosJob {
+            input: input.into(),
+            kind: None,
+            output: output.into(),
+            target,
+            frame_rate: None,
+            start: None,
+            end: None,
+            metering: None,
+            custom_dialnorm: None,
+            prepend_silence: None,
+            append_silence: None,
+        }
     }
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn path_str(p: &Path) -> String {
@@ -258,7 +308,19 @@ fn el(name: &str, value: &str) -> String {
 }
 
 fn valid_rate(v: &str) -> bool {
-    ["23.976", "24", "25", "29.97", "30", "48", "50", "59.94", "60", "not_indicated"].contains(&v)
+    [
+        "23.976",
+        "24",
+        "25",
+        "29.97",
+        "30",
+        "48",
+        "50",
+        "59.94",
+        "60",
+        "not_indicated",
+    ]
+    .contains(&v)
 }
 
 /// DEE's job file for `job`, with `temp_dir` as its scratch folder.
@@ -270,8 +332,16 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     if kind == InputKind::Wav && matches!(job.target, Target::TrueHd(_)) {
         return Err(Error::Invalid("TrueHD Atmos needs an Atmos master (DAMF or ADM BWF); a plain channel WAV only makes Dolby Digital Plus Atmos".into()));
     }
-    let dir = job.input.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let file = job.input.file_name().and_then(|f| f.to_str()).ok_or_else(|| Error::Invalid("the input has no file name".into()))?;
+    let dir = job
+        .input
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file = job
+        .input
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| Error::Invalid("the input has no file name".into()))?;
     let storage = |d: &Path| format!("<storage><local>{}</local></storage>", el("path", &path_str(d)));
     if let Some(r) = &job.frame_rate {
         if !valid_rate(r) {
@@ -287,8 +357,15 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
         InputKind::Adm | InputKind::Damf | InputKind::AtmosMezz => ("atmos_mezz", String::new()),
     };
     let fname = el("file_name", file);
-    let rate = job.frame_rate.as_ref().map(|r| el("timecode_frame_rate", r)).unwrap_or_default();
-    x.push_str(&format!("<input><audio><{tag} version=\"1\">{fname}{rate}{extra}{}</{tag}></audio></input>\n", storage(dir)));
+    let rate = job
+        .frame_rate
+        .as_ref()
+        .map(|r| el("timecode_frame_rate", r))
+        .unwrap_or_default();
+    x.push_str(&format!(
+        "<input><audio><{tag} version=\"1\">{fname}{rate}{extra}{}</{tag}></audio></input>\n",
+        storage(dir)
+    ));
     // ---- filter
     let mut common = String::new();
     if let Some(r) = &job.frame_rate {
@@ -309,7 +386,9 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     let filter = match &job.target {
         Target::Convert { format } => {
             if !["adm", "damf", "mxf_iab"].contains(&format.as_str()) {
-                return Err(Error::Invalid(format!("conversion target '{format}': use adm, damf or mxf_iab")));
+                return Err(Error::Invalid(format!(
+                    "conversion target '{format}': use adm, damf or mxf_iab"
+                )));
             }
             if kind == InputKind::Wav {
                 return Err(Error::Invalid("a plain channel WAV is not an Atmos master".into()));
@@ -325,25 +404,48 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
             }
             let mut f = String::new();
             if let Some(m) = &job.metering {
-                f.push_str(&format!("<loudness_measurement>{}</loudness_measurement>", el("metering_mode", m)));
+                f.push_str(&format!(
+                    "<loudness_measurement>{}</loudness_measurement>",
+                    el("metering_mode", m)
+                ));
             }
             f.push_str(&common);
             f.push_str(&format!(
                 "<atmos_presentation>{}{}{}</atmos_presentation>",
                 el("drc_profile", o.drc.tag()),
                 el("spatial_clusters", &o.spatial_clusters.to_string()),
-                el("legacy_authoring_compatibility", if o.legacy_authoring { "true" } else { "false" })
+                el(
+                    "legacy_authoring_compatibility",
+                    if o.legacy_authoring { "true" } else { "false" }
+                )
             ));
-            for (name, p) in [("presentation_8ch", &o.presentation_8ch), ("presentation_6ch", &o.presentation_6ch)] {
+            for (name, p) in [
+                ("presentation_8ch", &o.presentation_8ch),
+                ("presentation_6ch", &o.presentation_6ch),
+            ] {
                 if let Some(p) = p {
-                    f.push_str(&format!("<{name}>{}{}</{name}>", el("drc_profile", p.drc.tag()), el("surround_3db_attenuation", if p.surround_3db { "true" } else { "false" })));
+                    f.push_str(&format!(
+                        "<{name}>{}{}</{name}>",
+                        el("drc_profile", p.drc.tag()),
+                        el(
+                            "surround_3db_attenuation",
+                            if p.surround_3db { "true" } else { "false" }
+                        )
+                    ));
                 }
             }
             if let Some((drc, default_on, format)) = &o.presentation_2ch {
                 if !["stereo", "dolby_surround_encoded", "dolby_headphone_encoded"].contains(&format.as_str()) {
-                    return Err(Error::Invalid(format!("stereo format '{format}' is not one DEE accepts")));
+                    return Err(Error::Invalid(format!(
+                        "stereo format '{format}' is not one DEE accepts"
+                    )));
                 }
-                f.push_str(&format!("<presentation_2ch>{}{}{}</presentation_2ch>", el("drc_profile", drc.tag()), el("drc_default_on", if *default_on { "true" } else { "false" }), el("format", format)));
+                f.push_str(&format!(
+                    "<presentation_2ch>{}{}{}</presentation_2ch>",
+                    el("drc_profile", drc.tag()),
+                    el("drc_default_on", if *default_on { "true" } else { "false" }),
+                    el("format", format)
+                ));
             }
             if o.optimize_data_rate {
                 f.push_str(&el("optimize_data_rate", "true"));
@@ -355,15 +457,24 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
         }
         Target::Ddp(o) => {
             if ![384u32, 448, 576, 640, 768, 1024].contains(&o.data_rate_kbps) {
-                return Err(Error::Invalid("Dolby Digital Plus Atmos data rate must be 384, 448, 576, 640, 768 or 1024 kbps".into()));
+                return Err(Error::Invalid(
+                    "Dolby Digital Plus Atmos data rate must be 384, 448, 576, 640, 768 or 1024 kbps".into(),
+                ));
             }
             let mut f = String::new();
             if let Some(m) = &job.metering {
-                f.push_str(&format!("<loudness><measure_only>{}</measure_only></loudness>", el("metering_mode", m)));
+                f.push_str(&format!(
+                    "<loudness><measure_only>{}</measure_only></loudness>",
+                    el("metering_mode", m)
+                ));
             }
             f.push_str(&el("data_rate", &o.data_rate_kbps.to_string()));
             f.push_str(&common);
-            f.push_str(&format!("<drc>{}{}</drc>", el("line_mode_drc_profile", o.drc_line.tag()), el("rf_mode_drc_profile", o.drc_rf.tag())));
+            f.push_str(&format!(
+                "<drc>{}{}</drc>",
+                el("line_mode_drc_profile", o.drc_line.tag()),
+                el("rf_mode_drc_profile", o.drc_rf.tag())
+            ));
             f.push_str(&format!(
                 "<downmix>{}{}{}{}{}</downmix>",
                 el("loro_center_mix_level", &o.loro_center),
@@ -383,15 +494,30 @@ pub fn profile_xml(job: &AtmosJob, temp_dir: &Path) -> Result<String, Error> {
     };
     x.push_str(&format!("<filter><audio>{filter}</audio></filter>\n"));
     // ---- output
-    let out_dir = job.output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let out_file = job.output.file_name().and_then(|f| f.to_str()).ok_or_else(|| Error::Invalid("the output has no file name".into()))?;
+    let out_dir = job
+        .output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let out_file = job
+        .output
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| Error::Invalid("the output has no file name".into()))?;
     let out_tag = match job.target {
         Target::TrueHd(_) => "mlp",
         Target::Ddp(_) => "ec3",
         Target::Convert { .. } => "atmos_mezz",
     };
-    x.push_str(&format!("<output><{out_tag} version=\"1\">{}{}</{out_tag}></output>\n", el("file_name", out_file), storage(out_dir)));
-    x.push_str(&format!("<misc><temp_dir><clean_temp>true</clean_temp>{}</temp_dir></misc>\n</job_config>\n", el("path", &path_str(temp_dir))));
+    x.push_str(&format!(
+        "<output><{out_tag} version=\"1\">{}{}</{out_tag}></output>\n",
+        el("file_name", out_file),
+        storage(out_dir)
+    ));
+    x.push_str(&format!(
+        "<misc><temp_dir><clean_temp>true</clean_temp>{}</temp_dir></misc>\n</job_config>\n",
+        el("path", &path_str(temp_dir))
+    ));
     Ok(x)
 }
 
@@ -437,7 +563,12 @@ fn make_alias(input: &Path, output: &Path, work: &Path) -> Result<Alias, Error> 
         }
     }
     // the output's folder first: it is writable, and usually on the master's drive
-    let dirs: Vec<PathBuf> = [output.parent(), input.parent()].into_iter().flatten().filter(|d| !has_space(d)).map(Path::to_path_buf).collect();
+    let dirs: Vec<PathBuf> = [output.parent(), input.parent()]
+        .into_iter()
+        .flatten()
+        .filter(|d| !has_space(d))
+        .map(Path::to_path_buf)
+        .collect();
     'dirs: for dir in &dirs {
         let mut made: Vec<PathBuf> = Vec::new();
         for (src, target) in &sources {
@@ -451,11 +582,17 @@ fn make_alias(input: &Path, output: &Path, work: &Path) -> Result<Alias, Error> 
             }
             made.push(dst);
         }
-        return Ok(Alias { input: dir.join(&alias_name), made });
+        return Ok(Alias {
+            input: dir.join(&alias_name),
+            made,
+        });
     }
     // no hard link possible (another volume, or a file system without them): a copy in the work folder
     if has_space(work) {
-        return Err(Error::Invalid(format!("DEE cannot read a master whose path has spaces ({}); move or rename it to a folder without spaces", input.display())));
+        return Err(Error::Invalid(format!(
+            "DEE cannot read a master whose path has spaces ({}); move or rename it to a folder without spaces",
+            input.display()
+        )));
     }
     let mut made = Vec::new();
     for (src, target) in &sources {
@@ -463,7 +600,10 @@ fn make_alias(input: &Path, output: &Path, work: &Path) -> Result<Alias, Error> 
         std::fs::copy(src, &dst)?;
         made.push(dst);
     }
-    Ok(Alias { input: work.join(&alias_name), made })
+    Ok(Alias {
+        input: work.join(&alias_name),
+        made,
+    })
 }
 
 /// What a finished job leaves behind.
@@ -478,7 +618,14 @@ pub struct Finished {
 }
 
 /// Run the job. `progress` receives 0.0 to 1.0, `line` every log line worth showing; `cancel` stops the engine.
-pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut(f32), line: &mut dyn FnMut(&str), cancel: &AtomicBool) -> Result<Finished, Error> {
+pub fn run(
+    dee: &Path,
+    job: &AtmosJob,
+    work_dir: &Path,
+    progress: &mut dyn FnMut(f32),
+    line: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<Finished, Error> {
     if !job.input.is_file() {
         return Err(Error::Invalid(format!("{} does not exist", job.input.display())));
     }
@@ -492,7 +639,11 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
         Some(k) => k,
         None => InputKind::detect(&job.input)?,
     };
-    let alias = if kind != InputKind::Wav && needs_alias(&job.input) { Some(make_alias(&job.input, &job.output, work_dir)?) } else { None };
+    let alias = if kind != InputKind::Wav && needs_alias(&job.input) {
+        Some(make_alias(&job.input, &job.output, work_dir)?)
+    } else {
+        None
+    };
     if let Some(a) = &alias {
         job.input = a.input.clone();
         job.kind = Some(kind);
@@ -502,9 +653,18 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
     let staged = has_space(&job.output);
     if staged {
         if has_space(work_dir) {
-            return Err(Error::Invalid(format!("DEE cannot write to a path with spaces ({}), and the work folder has spaces too", final_output.display())));
+            return Err(Error::Invalid(format!(
+                "DEE cannot write to a path with spaces ({}), and the work folder has spaces too",
+                final_output.display()
+            )));
         }
-        let name: String = final_output.file_name().and_then(|f| f.to_str()).unwrap_or("out").chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect();
+        let name: String = final_output
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("out")
+            .chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect();
         let dir = work_dir.join("staging");
         std::fs::create_dir_all(&dir)?;
         job.output = dir.join(name);
@@ -517,9 +677,21 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
     let mut done = result?;
     if staged {
         // the output and DEE's reports beside it (<name>.log, <name>.mll...) go to the real folder under the real name
-        let staged_name = job.output.file_name().and_then(|f| f.to_str()).unwrap_or_default().to_string();
-        let final_name = final_output.file_name().and_then(|f| f.to_str()).unwrap_or_default().to_string();
-        let final_dir = final_output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let staged_name = job
+            .output
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let final_name = final_output
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let final_dir = final_output
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         std::fs::create_dir_all(final_dir)?;
         for entry in std::fs::read_dir(job.output.parent().unwrap())? {
             let entry = entry?;
@@ -543,7 +715,14 @@ pub fn run(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut
     Ok(done)
 }
 
-fn run_inner(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnMut(f32), line: &mut dyn FnMut(&str), cancel: &AtomicBool) -> Result<Finished, Error> {
+fn run_inner(
+    dee: &Path,
+    job: &AtmosJob,
+    work_dir: &Path,
+    progress: &mut dyn FnMut(f32),
+    line: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<Finished, Error> {
     let temp = work_dir.join("temp");
     std::fs::create_dir_all(&temp)?;
     if let Some(d) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -635,11 +814,21 @@ fn run_inner(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnM
     }
     if !status.success() {
         let errors: Vec<String> = messages.iter().filter(|m| m.contains("ERROR")).cloned().collect();
-        return Err(Error::Failed { code: status.code().unwrap_or(-1), messages: if errors.is_empty() { messages.join("\n") } else { errors.join("\n") } });
+        return Err(Error::Failed {
+            code: status.code().unwrap_or(-1),
+            messages: if errors.is_empty() {
+                messages.join("\n")
+            } else {
+                errors.join("\n")
+            },
+        });
     }
     progress(1.0);
     if !job.output.is_file() {
-        return Err(Error::Failed { code: 0, messages: "DEE reported success but wrote no output file".into() });
+        return Err(Error::Failed {
+            code: 0,
+            messages: "DEE reported success but wrote no output file".into(),
+        });
     }
     let report = {
         let mut name = job.output.as_os_str().to_os_string();
@@ -647,7 +836,12 @@ fn run_inner(dee: &Path, job: &AtmosJob, work_dir: &Path, progress: &mut dyn FnM
         let p = PathBuf::from(name);
         p.is_file().then_some(p)
     };
-    Ok(Finished { output: job.output.clone(), report, seconds: started.elapsed().as_secs_f64(), messages })
+    Ok(Finished {
+        output: job.output.clone(),
+        report,
+        seconds: started.elapsed().as_secs_f64(),
+        messages,
+    })
 }
 
 /// What DEE's `atmos_info` tool says about an Atmos master (beds, objects, length, whether it passes validation).
@@ -657,7 +851,9 @@ pub fn master_info(dee: &Path, file: &Path) -> Result<String, Error> {
         return Err(Error::Invalid("atmos_info was not found next to dee".into()));
     }
     let mut cmd = Command::new(&tool);
-    cmd.current_dir(dee.parent().unwrap_or(Path::new("."))).arg("--input").arg(std::path::absolute(file)?);
+    cmd.current_dir(dee.parent().unwrap_or(Path::new(".")))
+        .arg("--input")
+        .arg(std::path::absolute(file)?);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -666,21 +862,38 @@ pub fn master_info(dee: &Path, file: &Path) -> Result<String, Error> {
     let out = cmd.output()?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok(text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with("AtmosInfo Tool")).collect::<Vec<_>>().join("
-"))
+    Ok(text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with("AtmosInfo Tool"))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        ))
 }
 
 /// "Overall progress: 37.5." in a framework line.
 fn parse_progress(l: &str) -> Option<f32> {
     let i = l.find("Overall progress:")?;
-    l[i + "Overall progress:".len()..].trim().trim_end_matches('.').parse().ok()
+    l[i + "Overall progress:".len()..]
+        .trim()
+        .trim_end_matches('.')
+        .parse()
+        .ok()
 }
 
 /// The lines worth showing: not the component loading chatter, not resource sampling, not the licence's
 /// feature list (it names the licence, which is nobody else's business).
 fn relevant(l: &str) -> Option<String> {
     let t = l.trim();
-    if t.is_empty() || t.contains("INTERNAL_INFO") || t.contains("CPU:") || t.contains("Features enabled by the license") || t.contains("Max MEM") || t.contains("Average CPU") || t.contains("Average MEM") {
+    if t.is_empty()
+        || t.contains("INTERNAL_INFO")
+        || t.contains("CPU:")
+        || t.contains("Features enabled by the license")
+        || t.contains("Max MEM")
+        || t.contains("Average CPU")
+        || t.contains("Average MEM")
+    {
         return None;
     }
     Some(t.to_string())
@@ -691,7 +904,11 @@ mod tests {
     use super::*;
 
     fn ddp_job(kind: InputKind) -> AtmosJob {
-        let mut j = AtmosJob::new("D:/masters/film.atmos", "D:/out/film.ec3", Target::Ddp(DdpOptions::default()));
+        let mut j = AtmosJob::new(
+            "D:/masters/film.atmos",
+            "D:/out/film.ec3",
+            Target::Ddp(DdpOptions::default()),
+        );
         j.kind = Some(kind);
         j
     }
@@ -700,23 +917,37 @@ mod tests {
     fn ddp_profile_names_the_right_filter_per_input() {
         let temp = Path::new("D:/tmp");
         let wav = profile_xml(&ddp_job(InputKind::Wav), temp).unwrap();
-        assert!(wav.contains("<pcm_to_atmos_ddp version=\"3\">") && wav.contains("<wav version=\"1\">") && wav.contains("<ec3 version=\"1\">"));
+        assert!(
+            wav.contains("<pcm_to_atmos_ddp version=\"3\">")
+                && wav.contains("<wav version=\"1\">")
+                && wav.contains("<ec3 version=\"1\">")
+        );
         assert!(wav.contains("<data_rate>768</data_rate>"));
         // masters of every kind go in as Atmos mezzanines
         for kind in [InputKind::Damf, InputKind::Adm, InputKind::AtmosMezz] {
             let x = profile_xml(&ddp_job(kind), temp).unwrap();
-            assert!(x.contains("<atmos_mezz_to_atmos_ddp version=\"3\">") && x.contains("<atmos_mezz version=\"1\">"), "{kind:?}");
+            assert!(
+                x.contains("<atmos_mezz_to_atmos_ddp version=\"3\">") && x.contains("<atmos_mezz version=\"1\">"),
+                "{kind:?}"
+            );
         }
         let c = AtmosJob::new("D:/m/a.atmos", "D:/o/a.wav", Target::Convert { format: "adm".into() });
         let x = profile_xml(&c, temp).unwrap();
-        assert!(x.contains("<convert_atmos_mezz version=\"2\"><target_format>adm</target_format>") && x.contains("<atmos_mezz version=\"1\"><file_name>a.wav"), "{x}");
+        assert!(
+            x.contains("<convert_atmos_mezz version=\"2\"><target_format>adm</target_format>")
+                && x.contains("<atmos_mezz version=\"1\"><file_name>a.wav"),
+            "{x}"
+        );
     }
 
     #[test]
     fn truehd_profile_carries_the_presentations() {
         let mut o = TrueHdOptions::default();
         o.spatial_clusters = 16;
-        o.presentation_6ch = Some(Presentation { drc: Drc::Speech, surround_3db: false });
+        o.presentation_6ch = Some(Presentation {
+            drc: Drc::Speech,
+            surround_3db: false,
+        });
         o.presentation_2ch = Some((Drc::FilmStandard, true, "dolby_surround_encoded".into()));
         let mut j = AtmosJob::new("D:/m/film.atmos", "D:/o/film.thd", Target::TrueHd(o));
         j.kind = Some(InputKind::Damf);
@@ -737,12 +968,20 @@ mod tests {
         assert!(profile_xml(&j, Path::new("t")).is_err());
         let mut t = AtmosJob::new("a.wav", "b.thd", Target::TrueHd(TrueHdOptions::default()));
         t.kind = Some(InputKind::Wav);
-        assert!(profile_xml(&t, Path::new("t")).is_err(), "TrueHD Atmos from a plain WAV");
+        assert!(
+            profile_xml(&t, Path::new("t")).is_err(),
+            "TrueHD Atmos from a plain WAV"
+        );
     }
 
     #[test]
     fn progress_and_noise_lines() {
-        assert_eq!(parse_progress("[2026] INFO: framework: Stage: audio filter, Stage progress: 50.0, Overall progress: 37.5."), Some(37.5));
+        assert_eq!(
+            parse_progress(
+                "[2026] INFO: framework: Stage: audio filter, Stage progress: 50.0, Overall progress: 37.5."
+            ),
+            Some(37.5)
+        );
         assert!(relevant("[x] INFO: Features enabled by the license:  something").is_none());
         assert!(relevant("[x] INTERNAL_INFO: Loading library").is_none());
         assert!(relevant("[x] ERROR: something broke").is_some());
@@ -758,7 +997,11 @@ mod tests {
         std::fs::write(dir.join("My Film - Master.atmos.audio"), b"x").unwrap();
         assert!(needs_alias(&master));
         let a = make_alias(&master, &dir.join("out").join("o.thd"), &dir).unwrap();
-        assert!(!has_space(&a.input), "the alias folder must have no spaces: {}", a.input.display());
+        assert!(
+            !has_space(&a.input),
+            "the alias folder must have no spaces: {}",
+            a.input.display()
+        );
         let name = a.input.file_name().unwrap().to_str().unwrap().to_string();
         assert!(!name.contains(' ') && name.ends_with(".atmos"));
         assert_eq!(std::fs::read(&a.input).unwrap(), b"a");
@@ -772,7 +1015,11 @@ mod tests {
 
     #[test]
     fn paths_with_spaces_and_markup_are_escaped() {
-        let mut j = AtmosJob::new("D:/My Masters/a&b.atmos", "D:/o/<x>.ec3", Target::Ddp(DdpOptions::default()));
+        let mut j = AtmosJob::new(
+            "D:/My Masters/a&b.atmos",
+            "D:/o/<x>.ec3",
+            Target::Ddp(DdpOptions::default()),
+        );
         j.kind = Some(InputKind::Damf);
         let x = profile_xml(&j, Path::new("D:/t")).unwrap();
         assert!(x.contains("a&amp;b.atmos") && x.contains("&lt;x&gt;.ec3") && x.contains("D:/My Masters"));

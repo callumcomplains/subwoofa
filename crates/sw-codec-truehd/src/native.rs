@@ -1,6 +1,8 @@
 //! File-level driver: stems in, raw `.thd` elementary stream out.
 
-use crate::{default_downmix, map_layout, map_layout_mlp, Config, Encoder, Error, LayoutMap, Mlp, DEFAULT_RESTART_INTERVAL};
+use crate::{
+    default_downmix, map_layout, map_layout_mlp, Config, Encoder, Error, LayoutMap, Mlp, DEFAULT_RESTART_INTERVAL,
+};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,16 +55,42 @@ pub fn encode_to_file(
     let rate = stems.sample_rate;
     let (map, mlp) = if req.mlp {
         let (arrangement, source_index) = map_layout_mlp(req.layout)?;
-        let bits = match stems.bits as u32 { 0..=16 => 16, 17..=20 => 20, _ => 24 };
-        (LayoutMap { chanmap: 0, source_index }, Some(Mlp { arrangement, bits }))
+        let bits = match stems.bits as u32 {
+            0..=16 => 16,
+            17..=20 => 20,
+            _ => 24,
+        };
+        (
+            LayoutMap {
+                chanmap: 0,
+                source_index,
+            },
+            Some(Mlp { arrangement, bits }),
+        )
     } else {
         (map_layout(req.layout)?, None)
     };
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: map.chanmap, channels: map.source_index.len(), restart_interval: DEFAULT_RESTART_INTERVAL, downmix: if req.downmix && mlp.is_none() { default_downmix(req.layout, &map) } else { None }, decorrelate: std::env::var_os("SW_NODECOR").is_none(), mlp })?;
+    let mut enc = Encoder::new(Config {
+        sample_rate: rate,
+        chanmap: map.chanmap,
+        channels: map.source_index.len(),
+        restart_interval: DEFAULT_RESTART_INTERVAL,
+        downmix: if req.downmix && mlp.is_none() {
+            default_downmix(req.layout, &map)
+        } else {
+            None
+        },
+        decorrelate: std::env::var_os("SW_NODECOR").is_none(),
+        mlp,
+    })?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(NativeError::Empty);
     }
@@ -74,7 +102,11 @@ pub fn encode_to_file(
     let mut bytes = 0u64;
     let nch = map.source_index.len();
     let mut chans: Vec<Vec<i32>> = vec![vec![0; chunk]; nch];
-    let (mut t_read, mut t_conv, mut t_enc) = (std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
+    let (mut t_read, mut t_conv, mut t_enc) = (
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
@@ -105,8 +137,15 @@ pub fn encode_to_file(
     }
     out.flush()?;
     if std::env::var_os("SW_TIMING").is_some() {
-        eprintln!("truehd timing: read {:?}, convert {:?}, encode {:?}", t_read, t_conv, t_enc);
+        eprintln!(
+            "truehd timing: read {:?}, convert {:?}, encode {:?}",
+            t_read, t_conv, t_enc
+        );
     }
     on_progress(1.0);
-    Ok(Stats { frames: want, bytes, downmix_overflows: enc.downmix_overflows })
+    Ok(Stats {
+        frames: want,
+        bytes,
+        downmix_overflows: enc.downmix_overflows,
+    })
 }

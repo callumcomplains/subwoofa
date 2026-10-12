@@ -74,7 +74,9 @@ impl EncodeSpec {
     pub fn log_path(&self) -> String {
         let p = std::path::Path::new(&self.output);
         let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("encode");
-        p.with_file_name(format!("{stem}_log.txt")).to_string_lossy().into_owned()
+        p.with_file_name(format!("{stem}_log.txt"))
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -108,7 +110,12 @@ impl From<ff::Error> for Failure {
 }
 
 fn fmt_secs(s: f64) -> String {
-    format!("{:02}:{:02}:{:06.3}", (s / 3600.0) as u64, ((s % 3600.0) / 60.0) as u64, s % 60.0)
+    format!(
+        "{:02}:{:02}:{:06.3}",
+        (s / 3600.0) as u64,
+        ((s % 3600.0) / 60.0) as u64,
+        s % 60.0
+    )
 }
 
 pub fn execute(
@@ -126,7 +133,10 @@ pub fn execute(
         Err(Failure::Canceled) => "RESULT: canceled".to_string(),
         Err(Failure::Error(m)) => format!("RESULT: FAILED\n{m}"),
     };
-    log.push_str(&format!("\n{status}\nTotal time: {:.1} s\n", t0.elapsed().as_secs_f64()));
+    log.push_str(&format!(
+        "\n{status}\nTotal time: {:.1} s\n",
+        t0.elapsed().as_secs_f64()
+    ));
     let _ = std::fs::write(spec.log_path(), log);
     result
 }
@@ -169,23 +179,57 @@ fn execute_inner(
         stems.set_downmix(sw_core::downmix::Matrix::pan(src_layout.channels, layout.channels));
     }
     if !spec.unlocked && stems.sample_rate != spec.sample_rate {
-        return Err(format!("input files are {} Hz but the encode is set to {} Hz", stems.sample_rate, spec.sample_rate).into());
+        return Err(format!(
+            "input files are {} Hz but the encode is set to {} Hz",
+            stems.sample_rate, spec.sample_rate
+        )
+        .into());
     }
     let start = spec.start.unwrap_or(0.0);
     let total_src = stems.frames as f64 / stems.sample_rate as f64;
-    let span = spec.duration.unwrap_or(total_src - start).min(total_src - start).max(0.0);
+    let span = spec
+        .duration
+        .unwrap_or(total_src - start)
+        .min(total_src - start)
+        .max(0.0);
     if span <= 0.0 {
         return Err("nothing to encode: the start time is at or past the end of the input".into());
     }
 
     log.push_str("Subwoofa encode log\n");
     log.push_str(&format!("Output:       {}\n", spec.output));
-    log.push_str(&format!("Format:       {} / {} / {}\n", dest.display_name(), stream.display_name(), layout.name));
-    log.push_str(&format!("Sample rate:  {} Hz   Source bit depth: {}-bit   Bit rate: {}\n", spec.sample_rate, stems.bits, spec.bitrate.map(|b| format!("{b} kbps")).unwrap_or_else(|| "variable".into())));
-    log.push_str(&format!("Dialnorm:     {}\n", spec.dialnorm.map(|d| format!("-{d} dBFS")).unwrap_or_else(|| "n/a".into())));
-    log.push_str(&format!("Span:         start {}  length {}  (source {})\n", fmt_secs(start), fmt_secs(span), fmt_secs(total_src)));
+    log.push_str(&format!(
+        "Format:       {} / {} / {}\n",
+        dest.display_name(),
+        stream.display_name(),
+        layout.name
+    ));
+    log.push_str(&format!(
+        "Sample rate:  {} Hz   Source bit depth: {}-bit   Bit rate: {}\n",
+        spec.sample_rate,
+        stems.bits,
+        spec.bitrate
+            .map(|b| format!("{b} kbps"))
+            .unwrap_or_else(|| "variable".into())
+    ));
+    log.push_str(&format!(
+        "Dialnorm:     {}\n",
+        spec.dialnorm
+            .map(|d| format!("-{d} dBFS"))
+            .unwrap_or_else(|| "n/a".into())
+    ));
+    log.push_str(&format!(
+        "Span:         start {}  length {}  (source {})\n",
+        fmt_secs(start),
+        fmt_secs(span),
+        fmt_secs(total_src)
+    ));
     if let Some(t) = stems.time_reference {
-        log.push_str(&format!("Broadcast time reference: {} samples ({})\n", t, fmt_secs(t as f64 / stems.sample_rate as f64)));
+        log.push_str(&format!(
+            "Broadcast time reference: {} samples ({})\n",
+            t,
+            fmt_secs(t as f64 / stems.sample_rate as f64)
+        ));
     }
     log.push_str(&format!("Unlocked:     {}\n", spec.unlocked));
     for ch in src_layout.channels {
@@ -193,7 +237,11 @@ fn execute_inner(
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
     }
-    for line in sw_codec_dts::mixmeta::describe(&spec.bitstream, span, stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary) {
+    for line in sw_codec_dts::mixmeta::describe(
+        &spec.bitstream,
+        span,
+        stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary,
+    ) {
         log.push_str(&line);
         log.push('\n');
     }
@@ -207,7 +255,11 @@ fn execute_inner(
     if ffmpeg.is_none() && !native {
         return Err("FFmpeg was not found. Set it up under Settings > Engines (see docs/ENGINES.md).".into());
     }
-    let slots = if downmixed { Vec::new() } else { sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())? };
+    let slots = if downmixed {
+        Vec::new()
+    } else {
+        sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())?
+    };
     let job = ff::Job {
         stream,
         layout,
@@ -222,14 +274,35 @@ fn execute_inner(
         slots: Some(slots),
         ffmpeg: ffmpeg.clone().unwrap_or_default(),
     };
-    log.push_str(&format!("Engine:       {}\n", if native { "Subwoofa native encoder" } else { "FFmpeg" }));
+    log.push_str(&format!(
+        "Engine:       {}\n",
+        if native { "Subwoofa native encoder" } else { "FFmpeg" }
+    ));
 
     if stream.is_audio_file() {
         // for DSD the setting is the DSD rate ("dsd64", "dsd128"); for the rest the sample format
         let is_dsd = matches!(stream, StreamType::DsdDsf | StreamType::DsdDff);
-        let dsd_multiplier = if is_dsd { match spec.pcm_format.as_str() { "" | "dsd64" => 64, "dsd128" => 128, other => return Err(format!("unknown DSD rate '{other}' (use dsd64 or dsd128)").into()) } } else { 0 };
+        let dsd_multiplier = if is_dsd {
+            match spec.pcm_format.as_str() {
+                "" | "dsd64" => 64,
+                "dsd128" => 128,
+                other => return Err(format!("unknown DSD rate '{other}' (use dsd64 or dsd128)").into()),
+            }
+        } else {
+            0
+        };
         let is_dcp = stream == StreamType::DcpAudio;
-        let format = if is_dsd || is_dcp || spec.pcm_format.is_empty() { Some(sw_codec_pcm::SampleFormat::Int24) } else { sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format) }.ok_or_else(|| format!("unknown sample format '{}' (use s16, s24, s32, f32 or f64)", spec.pcm_format))?;
+        let format = if is_dsd || is_dcp || spec.pcm_format.is_empty() {
+            Some(sw_codec_pcm::SampleFormat::Int24)
+        } else {
+            sw_codec_pcm::SampleFormat::from_id(&spec.pcm_format)
+        }
+        .ok_or_else(|| {
+            format!(
+                "unknown sample format '{}' (use s16, s24, s32, f32 or f64)",
+                spec.pcm_format
+            )
+        })?;
         let container = match stream {
             StreamType::PcmWav => sw_codec_pcm::Container::Wav,
             StreamType::PcmAiff => sw_codec_pcm::Container::Aiff,
@@ -246,18 +319,42 @@ fn execute_inner(
             _ => sw_codec_pcm::Container::Flac,
         };
         if is_dsd {
-            log.push_str(&format!("DSD rate: DSD{} ({} Hz), one-bit, fifth-order sigma-delta
-", dsd_multiplier, 44_100 * dsd_multiplier));
+            log.push_str(&format!(
+                "DSD rate: DSD{} ({} Hz), one-bit, fifth-order sigma-delta
+",
+                dsd_multiplier,
+                44_100 * dsd_multiplier
+            ));
         } else {
-            log.push_str(&format!("Sample format: {} ({}-bit {})
-", format.id(), format.bits(), if format.is_float() { "floating point" } else { "integer" }));
+            log.push_str(&format!(
+                "Sample format: {} ({}-bit {})
+",
+                format.id(),
+                format.bits(),
+                if format.is_float() { "floating point" } else { "integer" }
+            ));
         }
-        let dcp = if is_dcp { sw_codec_pcm::DcpOptions::parse(&spec.pcm_format)? } else { Default::default() };
-        let req = sw_codec_pcm::Request { layout, container, format, start_secs: start, duration_secs: Some(span), output: std::path::Path::new(&spec.output), dsd_multiplier, dcp };
-        sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
-            sw_codec_pcm::PcmError::Canceled => Failure::Canceled,
-            other => Failure::Error(other.to_string()),
-        })?;
+        let dcp = if is_dcp {
+            sw_codec_pcm::DcpOptions::parse(&spec.pcm_format)?
+        } else {
+            Default::default()
+        };
+        let req = sw_codec_pcm::Request {
+            layout,
+            container,
+            format,
+            start_secs: start,
+            duration_secs: Some(span),
+            output: std::path::Path::new(&spec.output),
+            dsd_multiplier,
+            dcp,
+        };
+        sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+            |e| match e {
+                sw_codec_pcm::PcmError::Canceled => Failure::Canceled,
+                other => Failure::Error(other.to_string()),
+            },
+        )?;
     } else if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
         let req = sw_codec_truehd::native::Request {
             layout,
@@ -267,13 +364,24 @@ fn execute_inner(
             downmix: spec.downmix,
             mlp: stream == StreamType::Mlp,
         };
-        let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
+        let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel)
+            .map_err(|e| match e {
             sw_codec_truehd::native::NativeError::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
         })?;
-        log.push_str(&format!("TrueHD stereo downmix substream: {}\n", if spec.downmix && layout.channel_count() > 2 { "yes" } else { "no" }));
+        log.push_str(&format!(
+            "TrueHD stereo downmix substream: {}\n",
+            if spec.downmix && layout.channel_count() > 2 {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
         if stats.downmix_overflows > 0 {
-            log.push_str(&format!("Warning: {} stereo-presentation samples exceed 24 bits; stereo-only decoders will clip them\n", stats.downmix_overflows));
+            log.push_str(&format!(
+                "Warning: {} stereo-presentation samples exceed 24 bits; stereo-only decoders will clip them\n",
+                stats.downmix_overflows
+            ));
         }
     } else if native && stream == StreamType::DtsExpress {
         let req = sw_codec_dts::lbr_native::LbrRequest {
@@ -285,18 +393,26 @@ fn execute_inner(
             secondary: dest == Destination::BluRaySecondary,
             bitstream: spec.bitstream.clone(),
         };
-        sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
-            sw_codec_dts::lbr_native::LbrError::Canceled => Failure::Canceled,
-            other => Failure::Error(other.to_string()),
-        })?;
+        sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+            |e| match e {
+                sw_codec_dts::lbr_native::LbrError::Canceled => Failure::Canceled,
+                other => Failure::Error(other.to_string()),
+            },
+        )?;
     } else if native && stream == StreamType::DtsHdMa {
         if spec.sample_rate > 96_000 && layout.channels.len() > 6 && spec.bitrate != Some(0) {
-            log.push_str("Note: above 96 kHz with more than 6 channels the stream is lossless only (no DTS core is written).
-");
+            log.push_str(
+                "Note: above 96 kHz with more than 6 channels the stream is lossless only (no DTS core is written).
+",
+            );
         }
         let req = sw_codec_dts::ma_native::MaRequest {
             layout,
-            core_bitrate_kbps: match spec.bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
+            core_bitrate_kbps: match spec.bitrate {
+                Some(0) => None,
+                Some(b) => Some(b),
+                None => Some(1509),
+            },
             dialnorm: dts_dialnorm(spec.dialnorm),
             start_secs: start,
             duration_secs: Some(span),
@@ -305,29 +421,52 @@ fn execute_inner(
             x96: spec.core_x96,
             bitstream: spec.bitstream.clone(),
         };
-        sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
-            sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
-            other => Failure::Error(other.to_string()),
-        })?;
-    } else if native && matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624) {
+        sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+            |e| match e {
+                sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
+                other => Failure::Error(other.to_string()),
+            },
+        )?;
+    } else if native
+        && matches!(
+            stream,
+            StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624
+        )
+    {
         let req = sw_codec_dts::native::Request {
             layout,
-            bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { spec.bitrate.unwrap_or(1509) },
+            bitrate_kbps: if stream == StreamType::DtsHdHra {
+                1509
+            } else {
+                spec.bitrate.unwrap_or(1509)
+            },
             x96: stream == StreamType::Dts9624,
             bitstream: spec.bitstream.clone(),
             dvd: dest == Destination::DvdVideo,
-            hra_kbps: if stream == StreamType::DtsHdHra { Some(spec.bitrate.unwrap_or(3018)) } else { None },
+            hra_kbps: if stream == StreamType::DtsHdHra {
+                Some(spec.bitrate.unwrap_or(3018))
+            } else {
+                None
+            },
             dialnorm: dts_dialnorm(spec.dialnorm),
             pcm_bits: (stems.bits as u32).clamp(16, 24),
             start_secs: start,
             duration_secs: Some(span),
             output: std::path::Path::new(&spec.output),
-            es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (matches!(stream, StreamType::DtsHdHra | StreamType::Dts9624) && layout.id.starts_with("6.")), layout, spec.es_phase_shift, spec.rear_minus_3db),
+            es: sw_codec_dts::es_options(
+                stream == StreamType::DtsEs
+                    || (matches!(stream, StreamType::DtsHdHra | StreamType::Dts9624) && layout.id.starts_with("6.")),
+                layout,
+                spec.es_phase_shift,
+                spec.rear_minus_3db,
+            ),
         };
-        sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
-            sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,
-            other => Failure::Error(other.to_string()),
-        })?;
+        sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+            |e| match e {
+                sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,
+                other => Failure::Error(other.to_string()),
+            },
+        )?;
     } else if native {
         let req = sw_codec_ac3::native::Request {
             layout,
@@ -338,10 +477,12 @@ fn execute_inner(
             output: std::path::Path::new(&spec.output),
             eac3: stream == StreamType::Eac3,
         };
-        sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(|e| match e {
-            sw_codec_ac3::native::NativeError::Canceled => Failure::Canceled,
-            other => Failure::Error(other.to_string()),
-        })?;
+        sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+            |e| match e {
+                sw_codec_ac3::native::NativeError::Canceled => Failure::Canceled,
+                other => Failure::Error(other.to_string()),
+            },
+        )?;
     } else {
         ff::run_progress(&job, span, cancel, &mut |p| on_progress(p, false))?;
     }
@@ -349,39 +490,83 @@ fn execute_inner(
     let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
     let peak_note = peak_bit_rate_note(&spec.output);
-    log.push_str(&format!("\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n", fmt_secs(span), enc_secs, span / enc_secs.max(0.001), size as f64 / 1e6, avg_kbps));
+    log.push_str(&format!(
+        "\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n",
+        fmt_secs(span),
+        enc_secs,
+        span / enc_secs.max(0.001),
+        size as f64 / 1e6,
+        avg_kbps
+    ));
     log.push_str(&peak_note);
 
     if !verify || downmixed {
-        return Ok(Outcome { message: format!("encoded {:.1} MB", size as f64 / 1e6), verified: false });
+        return Ok(Outcome {
+            message: format!("encoded {:.1} MB", size as f64 / 1e6),
+            verified: false,
+        });
     }
     if stream.is_audio_file() {
         // the FFmpeg check compares a decode with the source sample for sample, which cannot hold for files that
         // reorder channels, round to a smaller sample format or are one-bit: use the native file check instead
         on_progress(1.0, true);
-        let options = sw_verify::Options { deep: ffmpeg.is_some(), ffmpeg: ffmpeg.clone(), reference_verifier: None };
-        let report = sw_verify::verify(std::path::Path::new(&spec.output), &options).map_err(|e| Failure::Error(e.to_string()))?;
-        let failed: Vec<String> = report.checks.iter().filter(|c| c.status == sw_verify::Status::Fail).map(|c| format!("{}: {}", c.name, c.detail)).collect();
+        let options = sw_verify::Options {
+            deep: ffmpeg.is_some(),
+            ffmpeg: ffmpeg.clone(),
+            reference_verifier: None,
+        };
+        let report = sw_verify::verify(std::path::Path::new(&spec.output), &options)
+            .map_err(|e| Failure::Error(e.to_string()))?;
+        let failed: Vec<String> = report
+            .checks
+            .iter()
+            .filter(|c| c.status == sw_verify::Status::Fail)
+            .map(|c| format!("{}: {}", c.name, c.detail))
+            .collect();
         if !report.passed {
-            log.push_str(&format!("Verify: FAILED: {}
-", failed.join("; ")));
-            return Err(Failure::Error(format!("the encoded file failed verification: {}", failed.join("; "))));
+            log.push_str(&format!(
+                "Verify: FAILED: {}
+",
+                failed.join("; ")
+            ));
+            return Err(Failure::Error(format!(
+                "the encoded file failed verification: {}",
+                failed.join("; ")
+            )));
         }
-        let msg = if ffmpeg.is_some() { "file structure and a full decode check out".to_string() } else { "file structure checks out (not decoded: no ffmpeg)".to_string() };
-        log.push_str(&format!("Verify: {msg}
-"));
-        return Ok(Outcome { message: msg, verified: true });
+        let msg = if ffmpeg.is_some() {
+            "file structure and a full decode check out".to_string()
+        } else {
+            "file structure checks out (not decoded: no ffmpeg)".to_string()
+        };
+        log.push_str(&format!(
+            "Verify: {msg}
+"
+        ));
+        return Ok(Outcome {
+            message: msg,
+            verified: true,
+        });
     }
     if ffmpeg.is_none() {
         log.push_str("Verify: skipped (ffmpeg not available to decode the result)\n");
-        return Ok(Outcome { message: format!("encoded {:.1} MB (not verified: no decoder available)", size as f64 / 1e6), verified: false });
+        return Ok(Outcome {
+            message: format!(
+                "encoded {:.1} MB (not verified: no decoder available)",
+                size as f64 / 1e6
+            ),
+            verified: false,
+        });
     }
     on_progress(1.0, true);
     let bits = stems.bits;
     match ff::verify(&job, bits, span) {
         Ok(msg) => {
             log.push_str(&format!("Verify: {msg}\n"));
-            Ok(Outcome { message: msg, verified: true })
+            Ok(Outcome {
+                message: msg,
+                verified: true,
+            })
         }
         Err(e) => Err(Failure::from(e)),
     }
@@ -390,9 +575,16 @@ fn execute_inner(
 /// Peak bit rate of a finished stream (the figure disc authoring checks), or nothing if the file is not a
 /// stream StreamTools can index.
 fn peak_bit_rate_note(path: &str) -> String {
-    let Ok(st) = sw_tools::Stream::open(std::path::Path::new(path)) else { return String::new() };
+    let Ok(st) = sw_tools::Stream::open(std::path::Path::new(path)) else {
+        return String::new();
+    };
     let win = st.pbr(1.0);
-    let (Some(top), Some(busiest)) = (win.iter().max_by(|a, b| a.peak_kbps.total_cmp(&b.peak_kbps)), win.iter().max_by(|a, b| a.mean_kbps.total_cmp(&b.mean_kbps))) else { return String::new() };
+    let (Some(top), Some(busiest)) = (
+        win.iter().max_by(|a, b| a.peak_kbps.total_cmp(&b.peak_kbps)),
+        win.iter().max_by(|a, b| a.mean_kbps.total_cmp(&b.mean_kbps)),
+    ) else {
+        return String::new();
+    };
     format!(
         "Peak bit rate: {:.0} kbps in a single frame (at {}), busiest second {:.0} kbps (at {}), {} frames.\n",
         top.peak_kbps,

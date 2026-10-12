@@ -69,7 +69,13 @@ fn kind_name(k: dee::InputKind) -> &'static str {
 
 #[tauri::command]
 pub fn atmos_locate(configured: Option<String>) -> Option<String> {
-    dee::find_dee(configured.as_deref().filter(|s| !s.is_empty()).map(std::path::Path::new)).map(|p| p.display().to_string())
+    dee::find_dee(
+        configured
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(std::path::Path::new),
+    )
+    .map(|p| p.display().to_string())
 }
 
 #[tauri::command]
@@ -108,11 +114,17 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
             return Err("an Atmos job is already running".into());
         }
     }
-    let d = dee::find_dee(req.dee.as_deref().filter(|s| !s.is_empty()).map(std::path::Path::new)).ok_or_else(|| dee::Error::NotFound.to_string())?;
+    let d = dee::find_dee(req.dee.as_deref().filter(|s| !s.is_empty()).map(std::path::Path::new))
+        .ok_or_else(|| dee::Error::NotFound.to_string())?;
     let drc: dee::Drc = req.drc.parse()?;
     let target = match req.format.as_str() {
         "truehd" => {
-            let pres = |on: bool| on.then_some(dee::Presentation { drc, surround_3db: true });
+            let pres = |on: bool| {
+                on.then_some(dee::Presentation {
+                    drc,
+                    surround_3db: true,
+                })
+            };
             dee::Target::TrueHd(dee::TrueHdOptions {
                 drc,
                 spatial_clusters: req.clusters,
@@ -123,7 +135,12 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
                 optimize_data_rate: req.optimize,
             })
         }
-        "ddp" => dee::Target::Ddp(dee::DdpOptions { data_rate_kbps: req.bitrate, drc_line: drc, drc_rf: drc, ..Default::default() }),
+        "ddp" => dee::Target::Ddp(dee::DdpOptions {
+            data_rate_kbps: req.bitrate,
+            drc_line: drc,
+            drc_rf: drc,
+            ..Default::default()
+        }),
         other => return Err(format!("unknown format '{other}'")),
     };
     let mut job = dee::AtmosJob::new(&req.input, &req.output, target);
@@ -137,7 +154,10 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
 
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
-    *state.status.lock().unwrap() = Status { running: true, ..Default::default() };
+    *state.status.lock().unwrap() = Status {
+        running: true,
+        ..Default::default()
+    };
     let status = state.status.clone();
     std::thread::spawn(move || {
         let work = std::env::temp_dir().join(format!("subwoofa_atmos_{}", std::process::id()));
@@ -160,12 +180,18 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
         s.running = false;
         match result {
             Ok(done) => {
-                let verify = sw_verify::verify(&done.output, &sw_verify::Options::default()).ok().map(|r| {
-                    let text = r.to_text();
-                    crate::VerifyOut { report: r, text }
-                });
+                let verify = sw_verify::verify(&done.output, &sw_verify::Options::default())
+                    .ok()
+                    .map(|r| {
+                        let text = r.to_text();
+                        crate::VerifyOut { report: r, text }
+                    });
                 s.progress = 1.0;
-                s.done = Some(Done { output: done.output.display().to_string(), seconds: done.seconds, verify });
+                s.done = Some(Done {
+                    output: done.output.display().to_string(),
+                    seconds: done.seconds,
+                    verify,
+                });
             }
             Err(e) => s.error = Some(e.to_string()),
         }

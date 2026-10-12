@@ -9,12 +9,12 @@ use crate::tables::{QUANT_LEVELS, SCALE_7};
 use crate::xll::crc16;
 
 pub const SYNC_XBR: u32 = 0x655E_315E;
-const BANDS: usize = 32;
 const MAX_ABITS: usize = 26;
 
 /// Quantizer step sizes of the lossless family, 22-bit fractions (clause D.2.2).
 const STEP_LOSSLESS: [u32; 27] = [
-    0, 4194304, 2097152, 1384120, 1048576, 696254, 524288, 348127, 262144, 131072, 65431, 33026, 16450, 8208, 4100, 2049, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1,
+    0, 4194304, 2097152, 1384120, 1048576, 696254, 524288, 348127, 262144, 131072, 65431, 33026, 16450, 8208, 4100,
+    2049, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1,
 ];
 /// Bits of one block code word (4 samples) for abits 1..=7.
 const BLOCK_BITS: [u32; 7] = [7, 10, 12, 13, 15, 17, 19];
@@ -28,7 +28,11 @@ fn max_q(k: usize) -> i32 {
 }
 
 fn sample_bits(k: usize, nsamples: usize) -> usize {
-    if k <= 7 { nsamples / 4 * BLOCK_BITS[k - 1] as usize } else { nsamples * (k - 3) }
+    if k <= 7 {
+        nsamples / 4 * BLOCK_BITS[k - 1] as usize
+    } else {
+        nsamples * (k - 3)
+    }
 }
 
 /// One candidate coding of a band.
@@ -45,7 +49,13 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
     let n = r.len();
     let energy: f64 = r.iter().map(|v| v * v).sum();
     let peak = r.iter().fold(0f64, |m, v| m.max(v.abs()));
-    let mut out = vec![Cand { abits: 0, scale: 0, bits: 0, dist: energy, q: Vec::new() }];
+    let mut out = vec![Cand {
+        abits: 0,
+        scale: 0,
+        bits: 0,
+        dist: energy,
+        q: Vec::new(),
+    }];
     if peak < 0.25 {
         return out;
     }
@@ -59,7 +69,13 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
         let delta = SCALE_7[idx] as f64 * st;
         let q: Vec<i32> = r.iter().map(|v| ((v / delta).round() as i32).clamp(-mq, mq)).collect();
         let dist: f64 = r.iter().zip(&q).map(|(v, qi)| (v - *qi as f64 * delta).powi(2)).sum();
-        out.push(Cand { abits: k, scale: idx, bits: sample_bits(k, n), dist, q });
+        out.push(Cand {
+            abits: k,
+            scale: idx,
+            bits: sample_bits(k, n),
+            dist,
+            q,
+        });
         if dist < 1e-3 * n as f64 {
             break; // finer quantizers cannot help: the decoder works with integers
         }
@@ -70,7 +86,12 @@ fn candidates(r: &[f64]) -> Vec<Cand> {
 /// Keep only the candidates on the lower convex hull of (bits, distortion): the Lagrangian search never
 /// picks any other.
 fn prune<T: Clone>(mut c: Vec<T>, bits: impl Fn(&T) -> f64, dist: impl Fn(&T) -> f64) -> Vec<T> {
-    c.sort_by(|a, b| bits(a).partial_cmp(&bits(b)).unwrap().then(dist(a).partial_cmp(&dist(b)).unwrap()));
+    c.sort_by(|a, b| {
+        bits(a)
+            .partial_cmp(&bits(b))
+            .unwrap()
+            .then(dist(a).partial_cmp(&dist(b)).unwrap())
+    });
     let mut h: Vec<T> = Vec::new();
     for p in c {
         if let Some(last) = h.last() {
@@ -118,7 +139,10 @@ impl XbrEncoder {
         assert_eq!(sets.iter().sum::<usize>(), residual.len());
         let cands: Vec<Vec<Vec<Cand>>> = {
             use rayon::prelude::*;
-            residual.par_iter().map(|c| c.iter().map(|b| candidates(b)).collect()).collect()
+            residual
+                .par_iter()
+                .map(|c| c.iter().map(|b| candidates(b)).collect())
+                .collect()
         };
         // Lagrangian search: smallest distortion for at most `budget` bytes
         let fits = |p: &Vec<Vec<usize>>| self.size(&cands, p, sets) <= budget;
@@ -181,7 +205,12 @@ impl XbrEncoder {
             let chosen: Vec<&Cand> = pick[ch].iter().enumerate().map(|(b, &i)| &cands[ch][b][i]).collect();
             let active = chosen.iter().rposition(|c| c.abits > 0).map_or(1, |p| p + 1);
             let max_a = chosen.iter().map(|c| c.abits).max().unwrap_or(0);
-            let max_s = chosen.iter().filter(|c| c.abits > 0).map(|c| c.scale).max().unwrap_or(0);
+            let max_s = chosen
+                .iter()
+                .filter(|c| c.abits > 0)
+                .map(|c| c.scale)
+                .max()
+                .unwrap_or(0);
             let nab = bits_for(max_a).clamp(2, 5) as usize;
             let mut bits = 2 + nab * active + 3;
             bits += chosen.iter().take(active).filter(|c| c.abits > 0).count() * bits_for(max_s) as usize;
@@ -209,7 +238,12 @@ impl XbrEncoder {
             let chosen: Vec<&Cand> = pick[ch].iter().enumerate().map(|(b, &i)| &cands[ch][b][i]).collect();
             active.push(chosen.iter().rposition(|c| c.abits > 0).map_or(1, |p| p + 1));
             let max_a = chosen.iter().map(|c| c.abits).max().unwrap_or(0);
-            let max_s = chosen.iter().filter(|c| c.abits > 0).map(|c| c.scale).max().unwrap_or(0);
+            let max_s = chosen
+                .iter()
+                .filter(|c| c.abits > 0)
+                .map(|c| c.scale)
+                .max()
+                .unwrap_or(0);
             nab.push(bits_for(max_a).clamp(2, 5));
             nscale.push(bits_for(max_s));
         }

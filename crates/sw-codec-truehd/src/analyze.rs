@@ -25,7 +25,11 @@ impl<'a> Bits<'a> {
     }
     fn get_signed(&mut self, n: usize) -> i32 {
         let v = self.get(n) as i32;
-        if n == 0 { 0 } else { (v << (32 - n)) >> (32 - n) }
+        if n == 0 {
+            0
+        } else {
+            (v << (32 - n)) >> (32 - n)
+        }
     }
     fn left(&self) -> usize {
         self.d.len() * 8 - self.pos.min(self.d.len() * 8)
@@ -114,10 +118,16 @@ pub struct Report {
     pub blocksizes: BTreeMap<usize, u64>,
 }
 
-const GROUPS: [&str; 13] = ["LR", "C", "LFE", "LRs", "LRvh", "LRc", "LRrs", "Cs", "Ts", "LRsd", "LRw", "Cvh", "LFE2"];
+const GROUPS: [&str; 13] = [
+    "LR", "C", "LFE", "LRs", "LRvh", "LRc", "LRrs", "Cs", "Ts", "LRsd", "LRw", "Cvh", "LFE2",
+];
 
 fn groups(map: u32) -> String {
-    (0..13).filter(|g| map >> g & 1 == 1).map(|g| GROUPS[g]).collect::<Vec<_>>().join("+")
+    (0..13)
+        .filter(|g| map >> g & 1 == 1)
+        .map(|g| GROUPS[g])
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 fn huff_symbol(b: &mut Bits, codebook: u32) -> Option<u32> {
@@ -165,7 +175,10 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         pos += words * 2;
     }
     let data = &data[start.unwrap_or(0)..end];
-    let mut r = Report { bytes: data.len() as u64, ..Default::default() };
+    let mut r = Report {
+        bytes: data.len() as u64,
+        ..Default::default()
+    };
     let mut states: Vec<SubState> = Vec::new();
     let mut pos = 0usize;
     let mut last_major_au = 0u64;
@@ -222,7 +235,8 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         let mut ends = Vec::new();
         for _ in 0..nsub {
             if off + 2 > au.len() {
-                r.errors.push(format!("substream directory runs past the access unit at byte {pos}"));
+                r.errors
+                    .push(format!("substream directory runs past the access unit at byte {pos}"));
                 break;
             }
             let h = u16::from_be_bytes([au[off], au[off + 1]]);
@@ -247,7 +261,14 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
             let sub = &au[from..(off + end).min(au.len()).max(from)];
             r.subs[si].bytes += sub.len() as u64;
             if !(atmos && si == 3) {
-                analyze_substream(sub, &mut states[si], &mut r.subs[si], &mut r.blocksizes, &mut r.errors, si);
+                analyze_substream(
+                    sub,
+                    &mut states[si],
+                    &mut r.subs[si],
+                    &mut r.blocksizes,
+                    &mut r.errors,
+                    si,
+                );
             }
             start = end;
         }
@@ -257,7 +278,14 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
     r
 }
 
-fn analyze_substream(data: &[u8], st: &mut SubState, stats: &mut SubStats, blocksizes: &mut BTreeMap<usize, u64>, errors: &mut Vec<String>, si: usize) {
+fn analyze_substream(
+    data: &[u8],
+    st: &mut SubState,
+    stats: &mut SubStats,
+    blocksizes: &mut BTreeMap<usize, u64>,
+    errors: &mut Vec<String>,
+    si: usize,
+) {
     if data.len() < 2 {
         return;
     }
@@ -298,7 +326,10 @@ fn analyze_substream(data: &[u8], st: &mut SubState, stats: &mut SubStats, block
                 st.blocksize = 8;
                 st.quant = [0; 16];
                 for c in &mut st.ch {
-                    *c = ChState { huff_lsbs: 24, ..Default::default() };
+                    *c = ChState {
+                        huff_lsbs: 24,
+                        ..Default::default()
+                    };
                 }
             }
             if !st.seen_restart {
@@ -398,7 +429,12 @@ fn parse_params(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
             if st.noise_type == 1 {
                 b.get(4);
             }
-            let _ = write!(desc, "[out {out}{} {}] ", if byp == 1 { " +lsb" } else { "" }, coeffs.join(" "));
+            let _ = write!(
+                desc,
+                "[out {out}{} {}] ",
+                if byp == 1 { " +lsb" } else { "" },
+                coeffs.join(" ")
+            );
             st.matrices.push((out, frac, byp));
         }
         if stats.matrices.is_empty() {
@@ -423,7 +459,16 @@ fn parse_params(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
                 let mut f = Fir::default();
                 parse_filter(b, &mut f);
                 if std::env::var_os("SW_DUMP_FIR").is_some() {
-                    eprintln!("ch{ch} FIR shift {} bits {} cs {} : {:?}", f.shift, f.coeff_bits, f.coeff_shift, f.coeffs.iter().map(|c| *c as f64 / (1u64 << f.shift) as f64).collect::<Vec<_>>());
+                    eprintln!(
+                        "ch{ch} FIR shift {} bits {} cs {} : {:?}",
+                        f.shift,
+                        f.coeff_bits,
+                        f.coeff_shift,
+                        f.coeffs
+                            .iter()
+                            .map(|c| *c as f64 / (1u64 << f.shift) as f64)
+                            .collect::<Vec<_>>()
+                    );
                 }
                 st.ch[ch].fir = f;
                 stats.fir_updates += 1;
@@ -432,7 +477,14 @@ fn parse_params(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
                 let mut f = Fir::default();
                 parse_filter(b, &mut f);
                 if std::env::var_os("SW_DUMP_FIR").is_some() {
-                    eprintln!("ch{ch} IIR shift {} : {:?}", f.shift, f.coeffs.iter().map(|c| *c as f64 / (1u64 << f.shift) as f64).collect::<Vec<_>>());
+                    eprintln!(
+                        "ch{ch} IIR shift {} : {:?}",
+                        f.shift,
+                        f.coeffs
+                            .iter()
+                            .map(|c| *c as f64 / (1u64 << f.shift) as f64)
+                            .collect::<Vec<_>>()
+                    );
                 }
                 st.ch[ch].iir_order = f.order;
                 stats.iir_updates += 1;
@@ -447,7 +499,9 @@ fn parse_params(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
         *stats.fir_orders.entry(c.fir.order).or_default() += 1;
         *stats.iir_orders.entry(c.iir_order).or_default() += 1;
         *stats.fir_shifts.entry(c.fir.shift).or_default() += 1;
-        if c.huff_offset != 0 { stats.huff_offsets += 1; }
+        if c.huff_offset != 0 {
+            stats.huff_offsets += 1;
+        }
         *stats.codebooks.entry(c.codebook).or_default() += 1;
         *stats.lsbs.entry(c.huff_lsbs.saturating_sub(st.quant[ch])).or_default() += 1;
     }
@@ -466,14 +520,47 @@ impl Report {
             10 => 176_400,
             _ => 0,
         };
-        let _ = writeln!(s, "TrueHD stream: {:.1} MB, {} access units of {} samples at {} Hz ({:.1} s)", self.bytes as f64 / 1e6, self.access_units, self.au_samples, rate, self.access_units as f64 * self.au_samples as f64 / rate.max(1) as f64);
-        let _ = writeln!(s, "Presentations: 6ch = {} ({}), 8ch = {} ({}); modifiers 2/6/8 = {:?}; substream info {:#04x}", self.arrangement6, groups(self.arrangement6), self.arrangement8, groups(self.arrangement8), self.mods, self.substream_info);
-        let avg = if self.major_interval.is_empty() { 0.0 } else { self.major_interval.iter().sum::<u64>() as f64 / self.major_interval.len() as f64 };
-        let _ = writeln!(s, "Major syncs: {} (every {:.1} access units on average); AU/substream headers {:.2}% of the stream", self.major_syncs, avg, 100.0 * self.header_bytes as f64 / self.bytes.max(1) as f64);
+        let _ = writeln!(
+            s,
+            "TrueHD stream: {:.1} MB, {} access units of {} samples at {} Hz ({:.1} s)",
+            self.bytes as f64 / 1e6,
+            self.access_units,
+            self.au_samples,
+            rate,
+            self.access_units as f64 * self.au_samples as f64 / rate.max(1) as f64
+        );
+        let _ = writeln!(
+            s,
+            "Presentations: 6ch = {} ({}), 8ch = {} ({}); modifiers 2/6/8 = {:?}; substream info {:#04x}",
+            self.arrangement6,
+            groups(self.arrangement6),
+            self.arrangement8,
+            groups(self.arrangement8),
+            self.mods,
+            self.substream_info
+        );
+        let avg = if self.major_interval.is_empty() {
+            0.0
+        } else {
+            self.major_interval.iter().sum::<u64>() as f64 / self.major_interval.len() as f64
+        };
+        let _ = writeln!(
+            s,
+            "Major syncs: {} (every {:.1} access units on average); AU/substream headers {:.2}% of the stream",
+            self.major_syncs,
+            avg,
+            100.0 * self.header_bytes as f64 / self.bytes.max(1) as f64
+        );
         let _ = writeln!(s, "Block sizes used: {:?}", self.blocksizes);
         for (i, sub) in self.subs.iter().enumerate() {
             let total_bits = (sub.bytes * 8).max(1) as f64;
-            let _ = writeln!(s, "\nSubstream {i}: channels {}  {:.1} MB ({:.1}% of stream)", sub.channels, sub.bytes as f64 / 1e6, 100.0 * sub.bytes as f64 / self.bytes.max(1) as f64);
+            let _ = writeln!(
+                s,
+                "\nSubstream {i}: channels {}  {:.1} MB ({:.1}% of stream)",
+                sub.channels,
+                sub.bytes as f64 / 1e6,
+                100.0 * sub.bytes as f64 / self.bytes.max(1) as f64
+            );
             let _ = writeln!(s, "  bits: residual data {:.1}% (Huffman {:.1}%, raw LSBs {:.1}%, bypass {:.2}%), parameter blocks {:.2}% ({} of {} blocks), restart headers {:.2}%",
                 100.0 * sub.data_bits as f64 / total_bits, 100.0 * sub.huff_bits as f64 / total_bits, 100.0 * sub.lsb_bits as f64 / total_bits, 100.0 * sub.bypass_bits as f64 / total_bits,
                 100.0 * sub.param_bits as f64 / total_bits, sub.param_blocks, sub.blocks, 100.0 * sub.restart_bits as f64 / total_bits);
@@ -481,13 +568,21 @@ impl Report {
                 let _ = writeln!(s, "  matrices: {}", sub.matrices);
             }
             let hist = |m: &BTreeMap<u32, u64>| m.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(" ");
-            let _ = writeln!(s, "  FIR order histogram (per channel per params block): {}", hist(&sub.fir_orders));
+            let _ = writeln!(
+                s,
+                "  FIR order histogram (per channel per params block): {}",
+                hist(&sub.fir_orders)
+            );
             let _ = writeln!(s, "  IIR order histogram: {}   FIR shift histogram: {}   nonzero huff offsets: {}   updates: channel {} fir {} iir {}", hist(&sub.iir_orders), hist(&sub.fir_shifts), sub.huff_offsets, sub.chan_updates, sub.fir_updates, sub.iir_updates);
             let _ = writeln!(s, "  codebook histogram: {}", hist(&sub.codebooks));
             let _ = writeln!(s, "  raw LSB count histogram: {}", hist(&sub.lsbs));
             let _ = writeln!(s, "  quantizer step histogram: {}", hist(&sub.quant));
             for (ch, (n, bits)) in &sub.per_channel {
-                let _ = writeln!(s, "  channel {ch}: {:.2} bits/sample", *bits as f64 / (*n).max(1) as f64);
+                let _ = writeln!(
+                    s,
+                    "  channel {ch}: {:.2} bits/sample",
+                    *bits as f64 / (*n).max(1) as f64
+                );
             }
         }
         for e in &self.errors {

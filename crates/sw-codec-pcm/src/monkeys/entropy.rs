@@ -16,7 +16,9 @@ const STARTS: [u16; 22] = [
 ];
 
 /// Width of each of those intervals.
-const WIDTHS: [u16; 21] = [19578, 16582, 12257, 7906, 4576, 2366, 1170, 536, 261, 119, 65, 31, 19, 10, 6, 3, 3, 2, 1, 1, 1];
+const WIDTHS: [u16; 21] = [
+    19578, 16582, 12257, 7906, 4576, 2366, 1170, 536, 261, 119, 65, 31, 19, 10, 6, 3, 3, 2, 1, 1, 1,
+];
 
 /// Counts of 21 and above share the last 43 slots of 65536, one slot each.
 const FIRST_TAIL_SLOT: u32 = 65493 - 21;

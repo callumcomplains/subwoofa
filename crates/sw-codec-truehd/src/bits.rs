@@ -10,7 +10,11 @@ pub struct BitWriter {
 
 impl BitWriter {
     pub fn new() -> Self {
-        BitWriter { buf: Vec::with_capacity(2048), acc: 0, nacc: 0 }
+        BitWriter {
+            buf: Vec::with_capacity(2048),
+            acc: 0,
+            nacc: 0,
+        }
     }
 
     /// Append the low `n` bits of `v`, `n <= 32`.
@@ -113,7 +117,9 @@ pub fn checksum8(data: &[u8]) -> u8 {
 pub fn major_sync_checksum(header26: &[u8]) -> u16 {
     let t = crc16_table(0x002D);
     let body = &header26[..24];
-    let crc = body.iter().fold(0u16, |c, b| t[((c >> 8) as u8 ^ b) as usize] ^ (c << 8));
+    let crc = body
+        .iter()
+        .fold(0u16, |c, b| t[((c >> 8) as u8 ^ b) as usize] ^ (c << 8));
     // the reference implementation yields the standard CRC with its bytes swapped
     crc.swap_bytes() ^ u16::from_le_bytes([header26[24], header26[25]])
 }
@@ -172,7 +178,9 @@ mod tests {
     }
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]

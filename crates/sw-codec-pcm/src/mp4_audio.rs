@@ -35,7 +35,10 @@ pub(crate) fn write_start<W: Write>(out: &mut W, major_brand: &[u8; 4]) -> std::
     out.write_all(&1u32.to_be_bytes())?;
     out.write_all(b"mdat")?;
     out.write_all(&0u64.to_be_bytes())?;
-    Ok(Start { data_start: ftyp.len() as u64 + 16, mdat_size_at: ftyp.len() as u64 + 8 })
+    Ok(Start {
+        data_start: ftyp.len() as u64 + 16,
+        mdat_size_at: ftyp.len() as u64 + 8,
+    })
 }
 
 /// Writes the `moov` box and patches the `mdat` size. Returns the size of the whole file.

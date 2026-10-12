@@ -140,17 +140,41 @@ impl StreamType {
     }
 
     pub const fn is_dts(self) -> bool {
-        matches!(self, StreamType::DtsHdMa | StreamType::DtsHdHra | StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround | StreamType::DtsExpress)
+        matches!(
+            self,
+            StreamType::DtsHdMa
+                | StreamType::DtsHdHra
+                | StreamType::DtsEs
+                | StreamType::Dts9624
+                | StreamType::DtsDigitalSurround
+                | StreamType::DtsExpress
+        )
     }
 
     pub const fn is_lossless(self) -> bool {
-        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp) || (self.is_audio_file() && !matches!(self, StreamType::DsdDsf | StreamType::DsdDff))
+        matches!(self, StreamType::DtsHdMa | StreamType::TrueHd | StreamType::Mlp)
+            || (self.is_audio_file() && !matches!(self, StreamType::DsdDsf | StreamType::DsdDff))
     }
 
     /// A plain audio file (WAV, AIFF, CAF, FLAC) rather than a codec stream. These have a sample format setting
     /// instead of a bit rate.
     pub const fn is_audio_file(self) -> bool {
-        matches!(self, StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DcpAudio | StreamType::DsdDsf | StreamType::DsdDff)
+        matches!(
+            self,
+            StreamType::PcmWav
+                | StreamType::PcmAiff
+                | StreamType::PcmCaf
+                | StreamType::Flac
+                | StreamType::OggFlac
+                | StreamType::Alac
+                | StreamType::Tta
+                | StreamType::WavPack
+                | StreamType::MonkeysAudio
+                | StreamType::MpegAls
+                | StreamType::DcpAudio
+                | StreamType::DsdDsf
+                | StreamType::DsdDff
+        )
     }
 
     /// Whether Subwoofa has its own encoder for the stream (every stream type does; the FFmpeg engine is an
@@ -196,7 +220,16 @@ impl StreamType {
             StreamType::Eac3 => &[32_000, 44_100, 48_000],
             StreamType::TrueHd => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
             StreamType::Mlp => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
-            StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
+            StreamType::PcmWav
+            | StreamType::PcmAiff
+            | StreamType::PcmCaf
+            | StreamType::Flac
+            | StreamType::OggFlac
+            | StreamType::Alac
+            | StreamType::Tta
+            | StreamType::WavPack
+            | StreamType::MonkeysAudio
+            | StreamType::MpegAls => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
             StreamType::DcpAudio => &[48_000, 96_000],
             // the PCM rate of the source: the DSD rate is a separate setting
             StreamType::DsdDsf | StreamType::DsdDff => &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
@@ -252,7 +285,21 @@ impl Destination {
             Destination::BluRaySecondary => &[DtsExpress],
             Destination::DvdVideo | Destination::DtsMusicDisc => &[DtsEs, Dts9624, DtsDigitalSurround],
             Destination::Generic => &[Ac3, Eac3, TrueHd, Mlp, DtsDigitalSurround],
-            Destination::Files => &[PcmWav, PcmAiff, PcmCaf, Flac, OggFlac, Alac, Tta, WavPack, MonkeysAudio, MpegAls, DcpAudio, DsdDsf, DsdDff],
+            Destination::Files => &[
+                PcmWav,
+                PcmAiff,
+                PcmCaf,
+                Flac,
+                OggFlac,
+                Alac,
+                Tta,
+                WavPack,
+                MonkeysAudio,
+                MpegAls,
+                DcpAudio,
+                DsdDsf,
+                DsdDff,
+            ],
         }
     }
 
@@ -296,17 +343,32 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
     let base = match stream {
         // immersive layouts (up to NHK 22.2) fit a lossless stream at 44.1 and 48 kHz, up to 12 channels at 96 kHz
         StreamType::DtsHdMa => {
-            if sample_rate >= 192_000 { 6 } else if sample_rate >= 96_000 { 12 } else { 24 }
+            if sample_rate >= 192_000 {
+                6
+            } else if sample_rate >= 96_000 {
+                12
+            } else {
+                24
+            }
         }
         StreamType::DtsHdHra => {
-            if sample_rate >= 192_000 { 6 } else { 8 }
+            if sample_rate >= 192_000 {
+                6
+            } else {
+                8
+            }
         }
         StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround => 7,
         StreamType::DtsExpress => 6,
         StreamType::Ac3 => 6,
         StreamType::Eac3 => 8, // up to 7.1 via independent+dependent substreams
         StreamType::TrueHd | StreamType::Mlp => 8,
-        StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MpegAls => 8,
+        StreamType::Flac
+        | StreamType::OggFlac
+        | StreamType::Alac
+        | StreamType::Tta
+        | StreamType::WavPack
+        | StreamType::MpegAls => 8,
         StreamType::MonkeysAudio => 2,
         StreamType::DcpAudio => 16,
         StreamType::DsdDsf | StreamType::DsdDff => 6,
@@ -315,7 +377,11 @@ fn max_channels(dest: Destination, stream: StreamType, sample_rate: u32) -> usiz
     if dest == Destination::DtsMusicDisc && stream == StreamType::Dts9624 {
         return 3; // stereo, with an LFE
     }
-    if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) { base.min(7) } else { base }
+    if matches!(dest, Destination::DvdVideo | Destination::DtsMusicDisc) {
+        base.min(7)
+    } else {
+        base
+    }
 }
 
 /// Inclusive supported constant bit-rate range (kbps) for the (core) stream, or `None` for
@@ -333,7 +399,11 @@ pub fn bitrate_range_kbps(
         StreamType::DtsEs | StreamType::Dts9624 | StreamType::DtsDigitalSurround => {
             let lo = if layout.main_channels() >= 5 { 754 } else { 255 };
             // a DTS CD carries the stream at the CD data rate (1411.2 kbit/s) or at half of it
-            Some(if dest == Destination::DtsMusicDisc { (754, 1411) } else { (lo, 1509) })
+            Some(if dest == Destination::DtsMusicDisc {
+                (754, 1411)
+            } else {
+                (lo, 1509)
+            })
         }
         StreamType::DtsExpress => {
             // the native encoder needs about 56 kbps per channel pair (6 kHz bandwidth), 30 for a lone channel, 3 for the LFE
@@ -345,18 +415,25 @@ pub fn bitrate_range_kbps(
         StreamType::Ac3 => Some((32, 640)),
         StreamType::Eac3 => Some((32, if dest == Destination::Generic { 6144 } else { 1024 })),
         StreamType::TrueHd | StreamType::Mlp => None,
-        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DcpAudio | StreamType::DsdDsf | StreamType::DsdDff => None,
+        StreamType::PcmWav
+        | StreamType::PcmAiff
+        | StreamType::PcmCaf
+        | StreamType::Flac
+        | StreamType::OggFlac
+        | StreamType::Alac
+        | StreamType::Tta
+        | StreamType::WavPack
+        | StreamType::MonkeysAudio
+        | StreamType::MpegAls
+        | StreamType::DcpAudio
+        | StreamType::DsdDsf
+        | StreamType::DsdDff => None,
     }
 }
 
 /// Common bit rates (kbps) worth offering as one-click presets, clipped to the legal range.
 /// Users can still type any value; these are shortcuts, not limits.
-pub fn bitrate_presets(
-    dest: Destination,
-    stream: StreamType,
-    layout: &ChannelLayout,
-    sample_rate: u32,
-) -> Vec<u32> {
+pub fn bitrate_presets(dest: Destination, stream: StreamType, layout: &ChannelLayout, sample_rate: u32) -> Vec<u32> {
     let Some((lo, hi)) = bitrate_range_kbps(dest, stream, layout, sample_rate) else {
         return Vec::new();
     };
@@ -396,15 +473,24 @@ pub fn sample_rates_for(dest: Destination, stream: StreamType) -> &'static [u32]
 
 /// Layouts expressible as AC-3 audio coding modes (acmod) with optional LFE.
 const AC3_LAYOUTS: &[&str] = &[
-    "5.1", "5.0", "4.1-lcrs", "4.1-quad", "4.0-quad", "4.0-lcrs", "3.1", "3.1-lrs", "3.0", "3.0-lrs",
-    "2.1", "2.0", "2.0-ltrt", "1.0",
+    "5.1", "5.0", "4.1-lcrs", "4.1-quad", "4.0-quad", "4.0-lcrs", "3.1", "3.1-lrs", "3.0", "3.0-lrs", "2.1", "2.0",
+    "2.0-ltrt", "1.0",
 ];
 
 /// Layouts E-AC-3 carries beyond the AC-3 modes: side/rear surround pairs in a dependent substream.
 const EAC3_EXTENDED_LAYOUTS: &[&str] = &["7.1-side-rear", "7.1-ls-rs-lsr-rsr", "7.0-side-rear"];
 
 /// Layouts Apple Lossless has a channel arrangement for.
-const ALAC_LAYOUTS: &[&str] = &["1.0", "2.0", "3.0", "4.0-lcrs", "5.0", "5.1", "6.1-discrete", "7.1-wide"];
+const ALAC_LAYOUTS: &[&str] = &[
+    "1.0",
+    "2.0",
+    "3.0",
+    "4.0-lcrs",
+    "5.0",
+    "5.1",
+    "6.1-discrete",
+    "7.1-wide",
+];
 
 /// Layouts the DSD file formats define a channel arrangement for.
 const DSD_LAYOUTS: &[&str] = &["1.0", "2.0", "3.0", "3.1", "4.0-quad", "5.0", "5.1"];
@@ -486,8 +572,14 @@ mod tests {
     #[test]
     fn hra_5760_needs_96k() {
         let lay = l("5.1");
-        assert_eq!(bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 96_000), Some((2046, 5760)));
-        assert_eq!(bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 48_000), Some((2046, 5376)));
+        assert_eq!(
+            bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 96_000),
+            Some((2046, 5760))
+        );
+        assert_eq!(
+            bitrate_range_kbps(Destination::BluRayPrimary, StreamType::DtsHdHra, lay, 48_000),
+            Some((2046, 5376))
+        );
     }
 
     #[test]
@@ -510,7 +602,10 @@ mod tests {
 
     #[test]
     fn core_only_dts_is_a_bare_dts_stream_and_the_rest_a_container() {
-        assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsDigitalSurround), "dts");
+        assert_eq!(
+            Destination::BluRayPrimary.extension(StreamType::DtsDigitalSurround),
+            "dts"
+        );
         assert_eq!(Destination::DigitalDelivery.extension(StreamType::DtsEs), "dts");
         assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsHdMa), "dtshd");
         assert_eq!(Destination::BluRayPrimary.extension(StreamType::DtsHdHra), "dtshd");

@@ -21,13 +21,27 @@ impl CafWriter {
         let mut out = BufWriter::new(File::create(path)?);
         out.write_all(&header)?;
         let file_bytes = header.len() as u64;
-        Ok(CafWriter { out, params, scratch: Vec::new(), data_bytes, written: 0, file_bytes })
+        Ok(CafWriter {
+            out,
+            params,
+            scratch: Vec::new(),
+            data_bytes,
+            written: 0,
+            file_bytes,
+        })
     }
 }
 
 impl BlockWriter for CafWriter {
     fn write_block(&mut self, planar: &[Vec<f32>], frames: usize) -> std::io::Result<()> {
-        interleave(planar, &self.params.order, frames, self.params.format, false, &mut self.scratch);
+        interleave(
+            planar,
+            &self.params.order,
+            frames,
+            self.params.format,
+            false,
+            &mut self.scratch,
+        );
         self.out.write_all(&self.scratch)?;
         self.written += self.scratch.len() as u64;
         Ok(())
@@ -35,7 +49,10 @@ impl BlockWriter for CafWriter {
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if self.written != self.data_bytes {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the input ended before the planned length"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the input ended before the planned length",
+            ));
         }
         self.out.flush()?;
         Ok(self.file_bytes + self.data_bytes)

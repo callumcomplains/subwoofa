@@ -31,7 +31,9 @@ pub fn direct(codes: &[u8; 8]) -> [f64; 8] {
 /// The code of the table entry nearest to a reflection coefficient.
 fn nearest_code(k: f64) -> u8 {
     // the extreme codes (about +-0.996) make a synthesis filter that rings and overloads the quantizer
-    (1..15).min_by(|&a, &b| (table(a) - k).abs().partial_cmp(&(table(b) - k).abs()).unwrap()).unwrap() as u8
+    (1..15)
+        .min_by(|&a, &b| (table(a) - k).abs().partial_cmp(&(table(b) - k).abs()).unwrap())
+        .unwrap() as u8
 }
 
 /// Reflection codes of the best eight-tap predictor of a stretch of samples. Each coefficient is quantized before

@@ -20,14 +20,21 @@ pub struct Cell {
 
 impl Cell {
     const fn off() -> Cell {
-        Cell { gain_db: OFF, invert: false }
+        Cell {
+            gain_db: OFF,
+            invert: false,
+        }
     }
     pub fn linear(&self) -> f32 {
         if self.gain_db == OFF {
             0.0
         } else {
             let g = 10f32.powf(self.gain_db / 20.0);
-            if self.invert { -g } else { g }
+            if self.invert {
+                -g
+            } else {
+                g
+            }
         }
     }
 }
@@ -78,13 +85,20 @@ impl Matrix {
     /// Sum of linear gains feeding each output (worst-case amplitude if every input is full scale
     /// and in phase). Anything over 1.0 can clip.
     pub fn worst_case_gain(&self) -> Vec<f32> {
-        self.cells.iter().map(|r| r.iter().map(|c| c.linear().abs()).sum()).collect()
+        self.cells
+            .iter()
+            .map(|r| r.iter().map(|c| c.linear().abs()).sum())
+            .collect()
     }
 
     /// Attenuation in dB (<= 0) that guarantees no clipping from full-scale inputs.
     pub fn safe_trim_db(&self) -> f32 {
         let worst = self.worst_case_gain().into_iter().fold(0.0f32, f32::max);
-        if worst <= 1.0 { 0.0 } else { -20.0 * worst.log10() }
+        if worst <= 1.0 {
+            0.0
+        } else {
+            -20.0 * worst.log10()
+        }
     }
 
     /// Apply a uniform trim to every connected cell.
@@ -180,7 +194,16 @@ pub struct SatEvent {
 impl SaturationCheck {
     pub fn new(channels: usize) -> Self {
         // The legacy tool treats three consecutive samples at 0 dBFS as a saturation.
-        SaturationCheck { channels, min_run: 3, run: vec![0; channels], frame: 0, peak: vec![0.0; channels], events: Vec::new(), event_count: 0, max_events: 200 }
+        SaturationCheck {
+            channels,
+            min_run: 3,
+            run: vec![0; channels],
+            frame: 0,
+            peak: vec![0.0; channels],
+            events: Vec::new(),
+            event_count: 0,
+            max_events: 200,
+        }
     }
 
     /// Feed interleaved frames.
@@ -196,7 +219,10 @@ impl SaturationCheck {
                     if self.run[c] == self.min_run {
                         self.event_count += 1;
                         if self.events.len() < self.max_events {
-                            self.events.push(SatEvent { channel: c, frame: self.frame });
+                            self.events.push(SatEvent {
+                                channel: c,
+                                frame: self.frame,
+                            });
                         }
                     }
                 } else {
@@ -212,7 +238,10 @@ impl SaturationCheck {
     }
 
     pub fn peak_db(&self) -> Vec<f32> {
-        self.peak.iter().map(|p| if *p <= 0.0 { OFF } else { 20.0 * p.log10() }).collect()
+        self.peak
+            .iter()
+            .map(|p| if *p <= 0.0 { OFF } else { 20.0 * p.log10() })
+            .collect()
     }
 }
 
@@ -230,7 +259,10 @@ mod tests {
         // L, R, C, LFE, Ls, Rs
         let mut out = [0.0; 2];
         m.apply(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &mut out);
-        assert!((out[0] - 1.0).abs() < 1e-6 && out[1] == 0.0, "LFE must be dropped: {out:?}");
+        assert!(
+            (out[0] - 1.0).abs() < 1e-6 && out[1] == 0.0,
+            "LFE must be dropped: {out:?}"
+        );
         m.apply(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], &mut out);
         assert!((out[0] - 0.7071).abs() < 1e-3 && (out[1] - 0.7071).abs() < 1e-3);
     }
@@ -254,7 +286,11 @@ mod tests {
         assert!((m.cells[ls][m.in_idx(Lsr).unwrap()].gain_db - M3).abs() < 1e-3);
         // 5.1 passes through untouched
         let id = Matrix::to_51(lay("5.1"));
-        assert!(id.cells.iter().enumerate().all(|(o, row)| row.iter().enumerate().all(|(i, c)| (c.gain_db == 0.0) == (o == i))));
+        assert!(id
+            .cells
+            .iter()
+            .enumerate()
+            .all(|(o, row)| row.iter().enumerate().all(|(i, c)| (c.gain_db == 0.0) == (o == i))));
     }
 
     #[test]
@@ -320,7 +356,11 @@ impl Matrix {
         let wide_front = inputs.contains(&Tfc);
         let mut spk: Vec<(f32, Channel)> = outputs
             .iter()
-            .filter_map(|&o| position(o, false).filter(|p| p.1 == 0.0).map(|p| (p.0.rem_euclid(360.0), o)))
+            .filter_map(|&o| {
+                position(o, false)
+                    .filter(|p| p.1 == 0.0)
+                    .map(|p| (p.0.rem_euclid(360.0), o))
+            })
             .collect();
         spk.sort_by(|a, b| a.0.total_cmp(&b.0));
         let lfe_n = inputs.iter().filter(|c| matches!(c, Lfe | Lfe2)).count();
@@ -357,7 +397,10 @@ impl Matrix {
             }
             let span = (a_hi - a_lo).rem_euclid(360.0);
             let t = ((az - a_lo).rem_euclid(360.0) / span).clamp(0.0, 1.0);
-            let (g_lo, g_hi) = ((t * std::f32::consts::FRAC_PI_2).cos(), (t * std::f32::consts::FRAC_PI_2).sin());
+            let (g_lo, g_hi) = (
+                (t * std::f32::consts::FRAC_PI_2).cos(),
+                (t * std::f32::consts::FRAC_PI_2).sin(),
+            );
             for (o, g) in [(spk[lo].1, g_lo), (spk[hi].1, g_hi)] {
                 if g > 1e-4 {
                     m.set(o, ch, 20.0 * g.log10() + trim);

@@ -36,7 +36,14 @@ pub(crate) struct Filter {
 impl Filter {
     pub fn new(spec: Spec) -> Filter {
         let size = spec.order + SLACK;
-        Filter { spec, coeffs: vec![0; spec.order], outputs: vec![0; size], adapt: vec![0; size], start: 0, average: 0 }
+        Filter {
+            spec,
+            coeffs: vec![0; spec.order],
+            outputs: vec![0; size],
+            adapt: vec![0; size],
+            start: 0,
+            average: 0,
+        }
     }
 
     /// Takes the output the decoder must produce and returns the input that gets it there.
@@ -93,7 +100,10 @@ impl Filter {
 
 /// Sum of products, wrapping at 32 bits as the format does.
 fn dot(coeffs: &[i16], outputs: &[i16]) -> i32 {
-    coeffs.iter().zip(outputs).fold(0i32, |acc, (&c, &o)| acc.wrapping_add(c as i32 * o as i32))
+    coeffs
+        .iter()
+        .zip(outputs)
+        .fold(0i32, |acc, (&c, &o)| acc.wrapping_add(c as i32 * o as i32))
 }
 
 /// Moves every coefficient by the adapt value of its output, towards the sign of the input.
@@ -112,7 +122,9 @@ pub(crate) struct Chain {
 
 impl Chain {
     pub fn new(specs: &[Spec]) -> Chain {
-        Chain { filters: specs.iter().map(|&s| Filter::new(s)).collect() }
+        Chain {
+            filters: specs.iter().map(|&s| Filter::new(s)).collect(),
+        }
     }
 
     /// The residual that goes to the entropy coder for a predictor output (last filter first).
@@ -146,7 +158,9 @@ mod tests {
     #[test]
     fn filter_round_trip() {
         let spec = Spec { order: 16, shift: 11 };
-        let signal: Vec<i32> = (0..30_000).map(|n| ((n as f64 * 0.02).sin() * 12_000.0) as i32 + (n * 31 % 7) as i32).collect();
+        let signal: Vec<i32> = (0..30_000)
+            .map(|n| ((n as f64 * 0.02).sin() * 12_000.0) as i32 + (n * 31 % 7) as i32)
+            .collect();
         let mut f = Filter::new(spec);
         let inputs: Vec<i32> = signal.iter().map(|&s| f.encode(s)).collect();
         assert_eq!(decode(spec, &inputs), signal);

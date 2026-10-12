@@ -48,9 +48,16 @@ pub(crate) struct Coded {
 }
 
 pub(crate) fn encode(residuals: &[i32], stereo: bool, medians: [Medians; 2]) -> Coded {
-    let mut coder = Coder { bits: LeBitWriter::default(), medians, pending: None };
+    let mut coder = Coder {
+        bits: LeBitWriter::default(),
+        medians,
+        pending: None,
+    };
     coder.run(residuals, stereo);
-    Coded { bytes: coder.bits.finish(), medians: coder.medians }
+    Coded {
+        bytes: coder.bits.finish(),
+        medians: coder.medians,
+    }
 }
 
 struct Coder {
@@ -137,7 +144,13 @@ impl Coder {
                 (band, base, third - 1)
             }
         };
-        Placed { band, offset: magnitude - base, span, negative, hold: Hold::Fresh }
+        Placed {
+            band,
+            offset: magnitude - base,
+            span,
+            negative,
+            hold: Hold::Fresh,
+        }
     }
 
     /// Takes the next value in line. The one before it can now be written, because its code depends on this band.
@@ -226,7 +239,11 @@ mod tests {
 
     #[test]
     fn louder_costs_more() {
-        let wave = |amp: i32| -> Vec<i32> { (0..4000).map(|n| ((n as f64 * 0.3).sin() * amp as f64) as i32).collect() };
+        let wave = |amp: i32| -> Vec<i32> {
+            (0..4000)
+                .map(|n| ((n as f64 * 0.3).sin() * amp as f64) as i32)
+                .collect()
+        };
         let quiet = encode(&wave(50), false, [[0; 3]; 2]).bytes.len();
         let loud = encode(&wave(5000), false, [[0; 3]; 2]).bytes.len();
         assert!(quiet < loud);
@@ -237,7 +254,11 @@ mod tests {
         // span 4 has five offsets: the first three take 2 bits, the last two take 3
         let lengths: Vec<usize> = (0..5)
             .map(|offset| {
-                let mut c = Coder { bits: LeBitWriter::default(), medians: [[0; 3]; 2], pending: None };
+                let mut c = Coder {
+                    bits: LeBitWriter::default(),
+                    medians: [[0; 3]; 2],
+                    pending: None,
+                };
                 c.put_offset(offset, 4);
                 c.bits.bit_len()
             })
@@ -248,7 +269,11 @@ mod tests {
     #[test]
     fn counts_grow_as_gamma_codes() {
         let bits_for = |count: u32| {
-            let mut c = Coder { bits: LeBitWriter::default(), medians: [[0; 3]; 2], pending: None };
+            let mut c = Coder {
+                bits: LeBitWriter::default(),
+                medians: [[0; 3]; 2],
+                pending: None,
+            };
             c.put_count(count);
             c.bits.finish().len()
         };

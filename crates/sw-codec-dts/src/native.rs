@@ -39,7 +39,14 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
 /// result refer to `channels`).
 pub fn map_channels(channels: &[Channel], name: &str) -> Result<LayoutMap, Error> {
     use Channel::*;
-    let canon: Vec<Channel> = channels.iter().map(|c| match c { Lss => Ls, Rss => Rs, c => *c }).collect();
+    let canon: Vec<Channel> = channels
+        .iter()
+        .map(|c| match c {
+            Lss => Ls,
+            Rss => Rs,
+            c => *c,
+        })
+        .collect();
     let pos = |c: Channel| canon.iter().position(|x| *x == c);
     let lfe = pos(Lfe);
     let main: Vec<Channel> = canon.iter().copied().filter(|c| *c != Lfe).collect();
@@ -67,9 +74,16 @@ pub fn map_channels(channels: &[Channel], name: &str) -> Result<LayoutMap, Error
     } else if want(&[L, R, C, Ls, Rs]) {
         (9, &[C, L, R, Ls, Rs])
     } else {
-        return Err(Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", name)));
+        return Err(Error::Unsupported(format!(
+            "layout '{}' needs the DTS extension channels (not implemented yet)",
+            name
+        )));
     };
-    Ok(LayoutMap { amode, order: order.iter().map(|c| pos(*c).unwrap()).collect(), lfe })
+    Ok(LayoutMap {
+        amode,
+        order: order.iter().map(|c| pos(*c).unwrap()).collect(),
+        lfe,
+    })
 }
 
 pub struct Request<'a> {
@@ -106,7 +120,12 @@ pub fn core_bitrate(req: &Request) -> u32 {
     }
 }
 
-pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
     if req.hra_kbps.is_some() && stems.sample_rate > 48_000 {
         if let Some(m) = crate::hra96::hra96_map(req.layout) {
             return crate::hra96::encode_to_file(stems, req, m, on_progress, cancel);
@@ -122,14 +141,28 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     }
     // channels that go into the core (a separate Cs is folded into the surrounds first)
     let mix_cs = req.es.map_or(false, |e| e.mix_cs);
-    let core_idx: Vec<usize> = (0..req.layout.channels.len()).filter(|&i| !(mix_cs && req.layout.channels[i] == Channel::Cs)).collect();
+    let core_idx: Vec<usize> = (0..req.layout.channels.len())
+        .filter(|&i| !(mix_cs && req.layout.channels[i] == Channel::Cs))
+        .collect();
     let core_chs: Vec<Channel> = core_idx.iter().map(|&i| req.layout.channels[i]).collect();
     let cmap = map_channels(&core_chs, req.layout.id)?;
-    let map = LayoutMap { amode: cmap.amode, order: cmap.order.iter().map(|&i| core_idx[i]).collect(), lfe: cmap.lfe.map(|i| core_idx[i]) };
+    let map = LayoutMap {
+        amode: cmap.amode,
+        order: cmap.order.iter().map(|&i| core_idx[i]).collect(),
+        lfe: cmap.lfe.map(|i| core_idx[i]),
+    };
     let xch = req.es.map_or(false, |e| e.xch);
-    let cs_slot = req.layout.channels.iter().position(|c| *c == Channel::Cs).filter(|_| xch);
+    let cs_slot = req
+        .layout
+        .channels
+        .iter()
+        .position(|c| *c == Channel::Cs)
+        .filter(|_| xch);
     let mut mixer = match req.es {
-        Some(o) if o.mix_cs || o.phase_shift || o.rear_minus_3db => Some(EsMixer::new(o, req.layout.channels).ok_or_else(|| Error::Unsupported("the ES options need a layout with surround channels".into()))?),
+        Some(o) if o.mix_cs || o.phase_shift || o.rear_minus_3db => Some(
+            EsMixer::new(o, req.layout.channels)
+                .ok_or_else(|| Error::Unsupported("the ES options need a layout with surround channels".into()))?,
+        ),
         _ => None,
     };
     let mix_delay = req.es.map_or(0, |e| e.delay());
@@ -141,21 +174,61 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     let cd14 = wav && rate == 44_100 && matches!(req.bitrate_kbps, 1411 | 1234 | 1235);
     let bitrate = if cd14 { 1_234_800 } else { core_bitrate(req) };
     // 512-sample frames up to 1.5 Mbit/s are what players expect; longer frames for low rates
-    let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 { 16 } else { 32 };
-    let make_config = || Config { sample_rate: rate, amode: map.amode, channels: nch, lfe: map.lfe.is_some(), bitrate, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, es: req.es.map_or(false, |e| e.flag), xch, perfect: false, blocks };
+    let blocks = if (bitrate >= 700_000 || rate > 48_000) && !cd14 {
+        16
+    } else {
+        32
+    };
+    let make_config = || Config {
+        sample_rate: rate,
+        amode: map.amode,
+        channels: nch,
+        lfe: map.lfe.is_some(),
+        bitrate,
+        dialnorm: req.dialnorm,
+        pcm_bits: req.pcm_bits,
+        es: req.es.map_or(false, |e| e.flag),
+        xch,
+        perfect: false,
+        blocks,
+    };
     let aux = crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), xch);
     let mut enc = Encoder::new(make_config())?;
     enc.set_aux_downmix(aux.clone());
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
     let make_hra = |kbps: u32| {
-        let ex = crate::exss::ExssParams { sample_rate: rate, channels: nch + usize::from(map.lfe.is_some()) + usize::from(xch), bit_res: req.pcm_bits, spk_mask: crate::ma::map_layout(req.layout).exss_mask & !(if req.es.map_or(false, |e| e.mix_cs && !e.xch) { crate::ma::exss_bit(sw_core::Channel::Cs) } else { 0 }), with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: xch, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, ..Default::default() } };
+        let ex = crate::exss::ExssParams {
+            sample_rate: rate,
+            channels: nch + usize::from(map.lfe.is_some()) + usize::from(xch),
+            bit_res: req.pcm_bits,
+            spk_mask: crate::ma::map_layout(req.layout).exss_mask
+                & !(if req.es.map_or(false, |e| e.mix_cs && !e.xch) {
+                    crate::ma::exss_bit(sw_core::Channel::Cs)
+                } else {
+                    0
+                }),
+            with_core: true,
+            dialnorm: (-req.dialnorm) as u32,
+            frame_duration_code: 0,
+            x96_in_core: false,
+            xch_in_core: xch,
+            secondary: false,
+            extras: crate::exss::ExssExtras {
+                min_header: 28,
+                ..Default::default()
+            },
+        };
         crate::hra::HraStage::new(kbps, rate, n, blocks, ex)
     };
     let mut hra = req.hra_kbps.map(|kbps| {
@@ -167,17 +240,31 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         }
         h
     });
-    let container = hra.is_some() && req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = hra.is_some()
+        && req
+            .output
+            .extension()
+            .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     // The decoder's filter bank delays its output. In a .dtshd file the stream starts with silence so the delay
     // comes to 1024 samples (what the commercial encoder does) and the file says so: decoders that honour the
     // field drop exactly that many samples and every source sample is kept. A raw stream has nowhere to say it,
     // so there the encoder starts that many samples into the source and the decoded audio lines up (losing
     // the first few milliseconds, which fall in the decoder's start-up).
     let delay = enc.delay() + mix_delay;
-    let (skip, lead) = if container { (0usize, 1024usize.saturating_sub(delay)) } else { (delay.min(want as usize), 0) };
+    let (skip, lead) = if container {
+        (0usize, 1024usize.saturating_sub(delay))
+    } else {
+        (delay.min(want as usize), 0)
+    };
     let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let mut hd = if container {
-        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, crate::ma::map_layout(req.layout).exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        let mut i = crate::dtshd::DtsHdInfo::new(
+            rate,
+            n as u16,
+            want,
+            crate::ma::map_layout(req.layout).exss_mask as u16,
+            crate::dtshd::Kind::CoreAndExtension,
+        );
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = bitrate / 1000;
         i.core_payload = core_payload;
@@ -186,7 +273,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
     } else {
         None
     };
-    let mut out = if container { None } else { Some(std::io::BufWriter::new(std::fs::File::create(req.output)?)) };
+    let mut out = if container {
+        None
+    } else {
+        Some(std::io::BufWriter::new(std::fs::File::create(req.output)?))
+    };
     if wav {
         out.as_mut().unwrap().write_all(&wav_header(rate, 0))?;
     }
@@ -324,7 +415,6 @@ pub(crate) fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
     h.extend_from_slice(&(data_len.min(u32::MAX as u64) as u32).to_le_bytes());
     h
 }
-
 
 /// The 14-bit DTS stream format: the bit stream is cut into 14-bit groups, each stored sign-extended in a 16-bit
 /// little-endian word (a frame whose size is a multiple of 14 bytes fills whole words).

@@ -16,7 +16,10 @@ struct Tables {
 fn tables() -> &'static Tables {
     static TABLES: OnceLock<Tables> = OnceLock::new();
     TABLES.get_or_init(|| {
-        let mut t = Tables { exp: [0; 256], log: [0; 256] };
+        let mut t = Tables {
+            exp: [0; 256],
+            log: [0; 256],
+        };
         for i in 0..256 {
             let x = i as f64 / 256.0;
             t.exp[i] = (256.0 * (2f64.powf(x) - 1.0)).round() as u8;
@@ -34,7 +37,11 @@ pub(crate) fn log2(value: u32) -> i32 {
         _ => {
             let value = value + (value >> 9);
             let bits = 32 - value.leading_zeros() as i32;
-            let index = if bits < 9 { value << (9 - bits) } else { value >> (bits - 9) };
+            let index = if bits < 9 {
+                value << (9 - bits)
+            } else {
+                value >> (bits - 9)
+            };
             (bits << 8) + tables().log[(index & 0xFF) as usize] as i32
         }
     }
@@ -46,7 +53,11 @@ pub(crate) fn exp2(log: i32) -> i32 {
     let log = log.abs();
     let mantissa = tables().exp[(log & 0xFF) as usize] as i32 | 0x100;
     let shift = log >> 8;
-    let value = if shift > 9 { mantissa << (shift - 9) } else { mantissa >> (9 - shift) };
+    let value = if shift > 9 {
+        mantissa << (shift - 9)
+    } else {
+        mantissa >> (9 - shift)
+    };
     if negative {
         -value
     } else {

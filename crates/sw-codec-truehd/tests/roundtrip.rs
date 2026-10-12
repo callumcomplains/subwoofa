@@ -5,7 +5,11 @@ use std::process::Command;
 use sw_codec_truehd::{Config, Downmix, Encoder};
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Copy)]
@@ -42,7 +46,11 @@ fn signal(kind: Kind, ch: usize, n: usize) -> Vec<i32> {
                 }
                 Kind::Loud => white * 1.98,
                 Kind::Gappy => {
-                    if (n / 3..n / 2).contains(&i) { (2.0 * std::f64::consts::PI * 440.0 * t).sin() * 0.5 } else { 0.0 }
+                    if (n / 3..n / 2).contains(&i) {
+                        (2.0 * std::f64::consts::PI * 440.0 * t).sin() * 0.5
+                    } else {
+                        0.0
+                    }
                 }
                 Kind::PureTone => {
                     let noise = (white * 2.0 * 8_388_608.0 / 40.0) / 8_388_608.0;
@@ -64,13 +72,31 @@ fn run(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_order: &[us
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_interval(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_order: &[usize], kind: Kind, n: usize, interval: usize) {
+fn run_interval(
+    name: &str,
+    rate: u32,
+    chanmap: u16,
+    channels: usize,
+    decoded_order: &[usize],
+    kind: Kind,
+    n: usize,
+    interval: usize,
+) {
     if !have_ffmpeg() {
         eprintln!("ffmpeg missing, skipping");
         return;
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap, channels, restart_interval: interval, downmix: None, decorrelate: true, mlp: None }).unwrap();
+    let mut enc = Encoder::new(Config {
+        sample_rate: rate,
+        chanmap,
+        channels,
+        restart_interval: interval,
+        downmix: None,
+        decorrelate: true,
+        mlp: None,
+    })
+    .unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -98,15 +124,31 @@ fn run_interval(name: &str, rate: u32, chanmap: u16, channels: usize, decoded_or
         .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{name}: decoder failed: {}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.stderr.is_empty(), "{name}: decoder complained: {}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(out.stdout.len(), n * channels * 3, "{name}: decoded length differs ({} samples expected)", n);
+    assert!(
+        out.status.success(),
+        "{name}: decoder failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "{name}: decoder complained: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        out.stdout.len(),
+        n * channels * 3,
+        "{name}: decoded length differs ({} samples expected)",
+        n
+    );
 
     for (d, &coded) in decoded_order.iter().enumerate() {
         for i in 0..n {
             let o = (i * channels + d) * 3;
             let got = i32::from_le_bytes([out.stdout[o], out.stdout[o + 1], out.stdout[o + 2], 0]) << 8 >> 8;
-            assert_eq!(got, sigs[coded][i], "{name}: channel {coded} (decoded {d}) differs at sample {i}");
+            assert_eq!(
+                got, sigs[coded][i],
+                "{name}: channel {coded} (decoded {d}) differs at sample {i}"
+            );
         }
     }
     let ratio = stream.len() as f64 / (n * channels * 3) as f64;
@@ -140,7 +182,15 @@ fn stereo_silence_gaps() {
 
 #[test]
 fn stereo_16_bit_source() {
-    run("stereo_16bit", 48_000, STEREO, 2, &[0, 1], Kind::SixteenBit, 48_000 + 123);
+    run(
+        "stereo_16bit",
+        48_000,
+        STEREO,
+        2,
+        &[0, 1],
+        Kind::SixteenBit,
+        48_000 + 123,
+    );
 }
 
 #[test]
@@ -161,17 +211,43 @@ fn five_one_96k() {
 #[test]
 fn seven_one_music() {
     // coded order: L R C LFE Ls Rs Lrs Rrs; the decoder emits FL FR FC LFE BL BR SL SR
-    run("seven_one", 48_000, SEVEN_ONE, 8, &[0, 1, 2, 3, 6, 7, 4, 5], Kind::Music, 48_000 + 19);
+    run(
+        "seven_one",
+        48_000,
+        SEVEN_ONE,
+        8,
+        &[0, 1, 2, 3, 6, 7, 4, 5],
+        Kind::Music,
+        48_000 + 19,
+    );
 }
 
 #[test]
 fn stereo_music_default_interval() {
-    run_interval("stereo_128", 48_000, STEREO, 2, &[0, 1], Kind::Music, 48_000 * 3 + 17, 128);
+    run_interval(
+        "stereo_128",
+        48_000,
+        STEREO,
+        2,
+        &[0, 1],
+        Kind::Music,
+        48_000 * 3 + 17,
+        128,
+    );
 }
 
 #[test]
 fn stereo_music_interval_32() {
-    run_interval("stereo_32", 48_000, STEREO, 2, &[0, 1], Kind::Music, 48_000 * 3 + 17, 32);
+    run_interval(
+        "stereo_32",
+        48_000,
+        STEREO,
+        2,
+        &[0, 1],
+        Kind::Music,
+        48_000 * 3 + 17,
+        32,
+    );
 }
 
 #[test]
@@ -239,8 +315,17 @@ fn decode(path: &std::path::Path, stereo_only: bool) -> (std::process::Output, V
     if stereo_only {
         cmd.args(["-downmix", "stereo"]);
     }
-    let out = cmd.arg("-i").arg(path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
-    let samples = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    let out = cmd
+        .arg("-i")
+        .arg(path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
+    let samples = out
+        .stdout
+        .chunks_exact(3)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8)
+        .collect();
     (out, samples)
 }
 
@@ -249,13 +334,38 @@ fn run_downmix(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize
 }
 
 /// `zero_bits` low bits of every source sample are cleared (16/18-bit material in a 24-bit file).
-fn run_downmix_bits(name: &str, chanmap: u16, channels: usize, decoded_order: &[usize], dm: Downmix, n: usize, kind: Kind, zero_bits: u32) {
+fn run_downmix_bits(
+    name: &str,
+    chanmap: u16,
+    channels: usize,
+    decoded_order: &[usize],
+    dm: Downmix,
+    n: usize,
+    kind: Kind,
+    zero_bits: u32,
+) {
     if !have_ffmpeg() {
         eprintln!("ffmpeg missing, skipping");
         return;
     }
-    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n).into_iter().map(|v| (v >> zero_bits) << zero_bits).collect()).collect();
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, chanmap, channels, restart_interval: 16, downmix: Some(dm.clone()), decorrelate: true, mlp: None }).unwrap();
+    let sigs: Vec<Vec<i32>> = (0..channels)
+        .map(|c| {
+            signal(kind, c, n)
+                .into_iter()
+                .map(|v| (v >> zero_bits) << zero_bits)
+                .collect()
+        })
+        .collect();
+    let mut enc = Encoder::new(Config {
+        sample_rate: 48_000,
+        chanmap,
+        channels,
+        restart_interval: 16,
+        downmix: Some(dm.clone()),
+        decorrelate: true,
+        mlp: None,
+    })
+    .unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
@@ -279,25 +389,51 @@ fn run_downmix_bits(name: &str, chanmap: u16, channels: usize, decoded_order: &[
 
     // full presentation: every channel exactly as it went in
     let (out, full) = decode(&path, false);
-    assert!(out.status.success() && out.stderr.is_empty(), "{name}: full decode: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{name}: full decode: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(full.len(), n * channels, "{name}: full decode length");
     for (d, &coded) in decoded_order.iter().enumerate() {
         for i in 0..n {
-            assert_eq!(full[i * channels + d], sigs[coded][i], "{name}: channel {coded} differs at sample {i}");
+            assert_eq!(
+                full[i * channels + d],
+                sigs[coded][i],
+                "{name}: channel {coded} differs at sample {i}"
+            );
         }
     }
 
     // stereo presentation: substream 0 alone must equal the downmix formula
     let (out, st) = decode(&path, true);
-    assert!(out.status.success() && out.stderr.is_empty(), "{name}: stereo decode: {}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(st.len(), n * 2, "{name}: stereo decode length (is the downmix substream really decoded alone?)");
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{name}: stereo decode: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        st.len(),
+        n * 2,
+        "{name}: stereo decode length (is the downmix substream really decoded alone?)"
+    );
     let (lo, ro) = expected_stereo(&sigs, &dm, n);
     // with unused low bits the stereo pair is coded on a coarser grid (error below about one grid step,
     // plus the difference between the exact 1/2 scale used there and the 16383/32768-ish scale of the formula)
     let tol = if zero_bits > 0 { (3i32 << zero_bits) / 2 + 2 } else { 0 };
     for i in 0..n {
-        assert!((st[i * 2] - lo[i]).abs() <= tol + lo[i].abs() / 20_000, "{name}: Lo differs at sample {i}: {} vs {}", st[i * 2], lo[i]);
-        assert!((st[i * 2 + 1] - ro[i]).abs() <= tol + ro[i].abs() / 20_000, "{name}: Ro differs at sample {i}: {} vs {}", st[i * 2 + 1], ro[i]);
+        assert!(
+            (st[i * 2] - lo[i]).abs() <= tol + lo[i].abs() / 20_000,
+            "{name}: Lo differs at sample {i}: {} vs {}",
+            st[i * 2],
+            lo[i]
+        );
+        assert!(
+            (st[i * 2 + 1] - ro[i]).abs() <= tol + ro[i].abs() / 20_000,
+            "{name}: Ro differs at sample {i}: {} vs {}",
+            st[i * 2 + 1],
+            ro[i]
+        );
     }
 }
 
@@ -305,19 +441,50 @@ const C707: i32 = 11585; // -3 dB in 2.14
 
 fn five_one_downmix() -> Downmix {
     //                 L  R  C     LFE Ls    Rs
-    Downmix { lo: vec![0, 0, C707, 0, C707, 0], ro: vec![0, 0, C707, 0, 0, C707], fold: 0, dest: 32767 }
+    Downmix {
+        lo: vec![0, 0, C707, 0, C707, 0],
+        ro: vec![0, 0, C707, 0, 0, C707],
+        fold: 0,
+        dest: 32767,
+    }
 }
 
 #[test]
 fn downmix_five_one() {
-    run_downmix("dm51", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 * 2 + 29, Kind::Music);
+    run_downmix(
+        "dm51",
+        FIVE_ONE,
+        6,
+        &ID6,
+        five_one_downmix(),
+        48_000 * 2 + 29,
+        Kind::Music,
+    );
 }
 
 #[test]
 fn downmix_five_one_on_a_coarse_grid() {
     // 18-bit material: the stereo pair drops five bits, the 5.1 decode is still exact
-    run_downmix_bits("dm51_coarse", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 * 2 + 29, Kind::Music, 6);
-    run_downmix_bits("dm51_coarse1", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 + 7, Kind::Music, 1);
+    run_downmix_bits(
+        "dm51_coarse",
+        FIVE_ONE,
+        6,
+        &ID6,
+        five_one_downmix(),
+        48_000 * 2 + 29,
+        Kind::Music,
+        6,
+    );
+    run_downmix_bits(
+        "dm51_coarse1",
+        FIVE_ONE,
+        6,
+        &ID6,
+        five_one_downmix(),
+        48_000 + 7,
+        Kind::Music,
+        1,
+    );
 }
 
 #[test]
@@ -330,7 +497,15 @@ fn downmix_unity_on_a_coarse_grid() {
 #[test]
 fn downmix_five_one_loud() {
     // loud material makes the downmix channels exceed 24 bits
-    run_downmix("dm51_loud", FIVE_ONE, 6, &ID6, five_one_downmix(), 48_000 + 5, Kind::Loud);
+    run_downmix(
+        "dm51_loud",
+        FIVE_ONE,
+        6,
+        &ID6,
+        five_one_downmix(),
+        48_000 + 5,
+        Kind::Loud,
+    );
 }
 
 #[test]
@@ -344,14 +519,40 @@ fn downmix_five_one_with_lfe_in_the_mix() {
 #[test]
 fn downmix_five_zero_and_three_zero() {
     // 3.0 (L R C): only the centre feeds the downmix
-    run_downmix("dm30", 0b11, 3, &[0, 1, 2], Downmix { lo: vec![0, 0, C707], ro: vec![0, 0, C707], fold: 0, dest: 32767 }, 48_000 + 3, Kind::Music);
+    run_downmix(
+        "dm30",
+        0b11,
+        3,
+        &[0, 1, 2],
+        Downmix {
+            lo: vec![0, 0, C707],
+            ro: vec![0, 0, C707],
+            fold: 0,
+            dest: 32767,
+        },
+        48_000 + 3,
+        Kind::Music,
+    );
 }
 
 #[test]
 fn downmix_seven_one() {
     // coded: L R C LFE Ls Rs Lrs Rrs; decoder emits FL FR FC LFE BL BR SL SR
-    let dm = Downmix { lo: vec![0, 0, C707, 0, C707, 0, 0, 0], ro: vec![0, 0, C707, 0, 0, C707, 0, 0], fold: C707, dest: 32767 };
-    run_downmix("dm71", SEVEN_ONE, 8, &[0, 1, 2, 3, 6, 7, 4, 5], dm, 48_000 + 19, Kind::Music);
+    let dm = Downmix {
+        lo: vec![0, 0, C707, 0, C707, 0, 0, 0],
+        ro: vec![0, 0, C707, 0, 0, C707, 0, 0],
+        fold: C707,
+        dest: 32767,
+    };
+    run_downmix(
+        "dm71",
+        SEVEN_ONE,
+        8,
+        &[0, 1, 2, 3, 6, 7, 4, 5],
+        dm,
+        48_000 + 19,
+        Kind::Music,
+    );
 }
 
 #[test]
@@ -389,14 +590,32 @@ fn run_mlp(name: &str, arrangement: u8, channels: usize, rate: u32, bits: u32) {
         return;
     }
     let n = rate as usize * 2;
-    let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(if bits == 16 { Kind::SixteenBit } else { Kind::Music }, c, n)).collect();
-    let mut enc = Encoder::new(Config { sample_rate: rate, chanmap: 0, channels, restart_interval: 16, downmix: None, decorrelate: true, mlp: Some(sw_codec_truehd::Mlp { arrangement, bits }) }).unwrap();
+    let sigs: Vec<Vec<i32>> = (0..channels)
+        .map(|c| signal(if bits == 16 { Kind::SixteenBit } else { Kind::Music }, c, n))
+        .collect();
+    let mut enc = Encoder::new(Config {
+        sample_rate: rate,
+        chanmap: 0,
+        channels,
+        restart_interval: 16,
+        downmix: None,
+        decorrelate: true,
+        mlp: Some(sw_codec_truehd::Mlp { arrangement, bits }),
+    })
+    .unwrap();
     let chunk = enc.interval_samples();
     let mut stream = Vec::new();
     let mut pos = 0;
     while pos < n {
         let len = chunk.min(n - pos);
-        let part: Vec<Vec<i32>> = sigs.iter().map(|s| { let mut v = vec![0i32; chunk]; v[..len].copy_from_slice(&s[pos..pos + len]); v }).collect();
+        let part: Vec<Vec<i32>> = sigs
+            .iter()
+            .map(|s| {
+                let mut v = vec![0i32; chunk];
+                v[..len].copy_from_slice(&s[pos..pos + len]);
+                v
+            })
+            .collect();
         pos += len;
         stream.extend(enc.encode_interval(&part, len, pos >= n));
     }
@@ -404,9 +623,22 @@ fn run_mlp(name: &str, arrangement: u8, channels: usize, rate: u32, bits: u32) {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.mlp");
     std::fs::write(&path, &stream).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.stdout.len() >= n * channels * 3, "{name}: decoded {} bytes", out.stdout.len());
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{name}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.len() >= n * channels * 3,
+        "{name}: decoded {} bytes",
+        out.stdout.len()
+    );
     for c in 0..channels {
         for i in 0..n {
             let o = (i * channels + c) * 3;

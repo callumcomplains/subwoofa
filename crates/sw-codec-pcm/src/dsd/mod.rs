@@ -43,7 +43,13 @@ impl ChannelChain {
             (input_rate as f64, input_rate as f64)
         } else if input_rate % 48_000 == 0 {
             let target = input_rate as f64 * 147.0 / 160.0;
-            stages.push(Resampler::new(input_rate as f64, 147, 160, 0.9 * target / 2.0, target / 2.0));
+            stages.push(Resampler::new(
+                input_rate as f64,
+                147,
+                160,
+                0.9 * target / 2.0,
+                target / 2.0,
+            ));
             (target, target)
         } else {
             return Err(format!("{input_rate} Hz is not a multiple of 44.1 or 48 kHz"));
@@ -58,7 +64,13 @@ impl ChannelChain {
             rate *= 2.0;
         }
         let delay: f64 = stages.iter().map(|s| s.delay_seconds()).sum();
-        Ok(ChannelChain { stages, modulator: Modulator::new(), skip: (delay * dsd_rate as f64).round() as usize, produced: 0, total_bits })
+        Ok(ChannelChain {
+            stages,
+            modulator: Modulator::new(),
+            skip: (delay * dsd_rate as f64).round() as usize,
+            produced: 0,
+            total_bits,
+        })
     }
 
     /// Converts input samples to bits (as 0/1 bytes), up to the total the file wants.
@@ -105,11 +117,22 @@ pub fn dsd_layout(layout: &sw_core::ChannelLayout) -> Option<DsdLayout> {
         4 if layout.channels.contains(&Lfe) => (&[L, R, C, Lfe], 5, vec![b"MLFT", b"MRGT", b"C   ", b"LFE "]),
         4 => (&[L, R, Ls, Rs], 4, vec![b"MLFT", b"MRGT", b"LS  ", b"RS  "]),
         5 => (&[L, R, C, Ls, Rs], 6, vec![b"MLFT", b"MRGT", b"C   ", b"LS  ", b"RS  "]),
-        6 => (&[L, R, C, Lfe, Ls, Rs], 7, vec![b"MLFT", b"MRGT", b"C   ", b"LFE ", b"LS  ", b"RS  "]),
+        6 => (
+            &[L, R, C, Lfe, Ls, Rs],
+            7,
+            vec![b"MLFT", b"MRGT", b"C   ", b"LFE ", b"LS  ", b"RS  "],
+        ),
         _ => return None,
     };
-    let order: Option<Vec<usize>> = wanted.iter().map(|w| layout.channels.iter().position(|c| c == w)).collect();
-    order.map(|order| DsdLayout { order, dsf_type, dff_ids: ids })
+    let order: Option<Vec<usize>> = wanted
+        .iter()
+        .map(|w| layout.channels.iter().position(|c| c == w))
+        .collect();
+    order.map(|order| DsdLayout {
+        order,
+        dsf_type,
+        dff_ids: ids,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,11 +153,20 @@ pub struct DsdWriter {
 }
 
 impl DsdWriter {
-    pub fn create(path: &Path, params: Params, file: DsdFile, layout: &DsdLayout, multiplier: u32) -> std::io::Result<DsdWriter> {
+    pub fn create(
+        path: &Path,
+        params: Params,
+        file: DsdFile,
+        layout: &DsdLayout,
+        multiplier: u32,
+    ) -> std::io::Result<DsdWriter> {
         let dsd_rate = BASE_RATE * multiplier;
-        let total_bits = (params.total_frames as u128 * dsd_rate as u128 + params.rate as u128 / 2) as u128 / params.rate as u128;
+        let total_bits =
+            (params.total_frames as u128 * dsd_rate as u128 + params.rate as u128 / 2) as u128 / params.rate as u128;
         let total_bits = total_bits as usize;
-        let chains: Result<Vec<ChannelChain>, String> = (0..params.channels()).map(|_| ChannelChain::new(params.rate, dsd_rate, total_bits)).collect();
+        let chains: Result<Vec<ChannelChain>, String> = (0..params.channels())
+            .map(|_| ChannelChain::new(params.rate, dsd_rate, total_bits))
+            .collect();
         let chains = chains.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         let mut out = BufWriter::new(File::create(path)?);
         let header = match file {
@@ -143,7 +175,15 @@ impl DsdWriter {
         };
         out.write_all(&header)?;
         let channels = params.channels();
-        Ok(DsdWriter { out, file, params, chains, queues: vec![Vec::new(); channels], bytes_written: 0, header_len: header.len() as u64 })
+        Ok(DsdWriter {
+            out,
+            file,
+            params,
+            chains,
+            queues: vec![Vec::new(); channels],
+            bytes_written: 0,
+            header_len: header.len() as u64,
+        })
     }
 
     /// Writes whatever whole blocks (DSF) or bytes (DSDIFF) the queues hold; with `last`, pads the rest with idle bits
@@ -169,7 +209,11 @@ impl DsdWriter {
                 }
             }
             DsdFile::Dff => {
-                let take = if last { self.queues[0].len().div_ceil(8) } else { self.queues.iter().map(|q| q.len()).min().unwrap_or(0) / 8 };
+                let take = if last {
+                    self.queues[0].len().div_ceil(8)
+                } else {
+                    self.queues.iter().map(|q| q.len()).min().unwrap_or(0) / 8
+                };
                 for q in self.queues.iter_mut() {
                     while last && q.len() < take * 8 {
                         let n = q.len();
@@ -196,7 +240,10 @@ impl DsdWriter {
     /// One DSF block per channel: 4096 bytes, the first sample in the lowest bit.
     fn write_dsf_block(&mut self, block_bits: usize) -> std::io::Result<()> {
         for q in self.queues.iter_mut() {
-            let bytes: Vec<u8> = q[..block_bits].chunks(8).map(|b| b.iter().enumerate().fold(0u8, |acc, (i, &bit)| acc | (bit << i))).collect();
+            let bytes: Vec<u8> = q[..block_bits]
+                .chunks(8)
+                .map(|b| b.iter().enumerate().fold(0u8, |acc, (i, &bit)| acc | (bit << i)))
+                .collect();
             q.drain(..block_bits);
             self.out.write_all(&bytes)?;
             self.bytes_written += bytes.len() as u64;

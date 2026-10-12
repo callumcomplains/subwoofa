@@ -43,8 +43,18 @@ pub struct Adpcm {
     moves: &'static [i8],
 }
 
-pub const NARROW: Adpcm = Adpcm { start_bits: 16, code_bits: 4, steps: &LFE_STEP_SIZE_16, moves: &LFE_DELTA_INDEX_16 };
-pub const WIDE: Adpcm = Adpcm { start_bits: 24, code_bits: 6, steps: &LFE_STEP_SIZE_24, moves: &LFE_DELTA_INDEX_24 };
+pub const NARROW: Adpcm = Adpcm {
+    start_bits: 16,
+    code_bits: 4,
+    steps: &LFE_STEP_SIZE_16,
+    moves: &LFE_DELTA_INDEX_16,
+};
+pub const WIDE: Adpcm = Adpcm {
+    start_bits: 24,
+    code_bits: 6,
+    steps: &LFE_STEP_SIZE_24,
+    moves: &LFE_DELTA_INDEX_24,
+};
 
 impl Adpcm {
     fn magnitude_bits(&self) -> u32 {
@@ -86,7 +96,11 @@ impl LfeEncoder {
         let mut taps: Vec<f64> = (0..n)
             .map(|i| {
                 let x = i as f64 - HALF as f64;
-                let sinc = if x == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * x).sin() / (std::f64::consts::PI * x) };
+                let sinc = if x == 0.0 {
+                    2.0 * fc
+                } else {
+                    (2.0 * std::f64::consts::PI * fc * x).sin() / (std::f64::consts::PI * x)
+                };
                 let w = 0.5 + 0.5 * (std::f64::consts::PI * x / (HALF as f64 + 1.0)).cos();
                 sinc * w
             })
@@ -97,7 +111,13 @@ impl LfeEncoder {
         }
         // a constant input of 1.0 must come out as 1.0: the pulse train carries value*DECIM per pulse
         let unit = DECODER_SCALE * pulse_gain();
-        LfeEncoder { adpcm: if wide { &WIDE } else { &NARROW }, taps, unit, value: 0.0, step_i: 0 }
+        LfeEncoder {
+            adpcm: if wide { &WIDE } else { &NARROW },
+            taps,
+            unit,
+            value: 0.0,
+            step_i: 0,
+        }
     }
 
     /// Samples of history the filter needs on each side of a coded sample.
@@ -112,8 +132,15 @@ impl LfeEncoder {
         let mut w = BitsLe::new();
         let start = self.value.clamp(-1.0, 1.0);
         let mag = (start.abs() * a.start_max()).round() as u32;
-        w.put(mag | if start < 0.0 { 1 << (a.start_bits - 1) } else { 0 }, a.start_bits);
-        self.value = if start < 0.0 { -(mag as f64) / a.start_max() } else { mag as f64 / a.start_max() };
+        w.put(
+            mag | if start < 0.0 { 1 << (a.start_bits - 1) } else { 0 },
+            a.start_bits,
+        );
+        self.value = if start < 0.0 {
+            -(mag as f64) / a.start_max()
+        } else {
+            mag as f64 / a.start_max()
+        };
         w.put(self.step_i as u32, 8);
         for j in 0..64usize {
             let centre = (j * DECIM) as isize;
@@ -127,7 +154,11 @@ impl LfeEncoder {
             let mut best = (f64::MAX, 0u32, self.value);
             for code in 0..(1u32 << a.code_bits) {
                 let delta = a.delta(code & (sign_bit - 1), step);
-                let v = if code & sign_bit != 0 { (self.value - delta).max(-3.0) } else { (self.value + delta).min(3.0) };
+                let v = if code & sign_bit != 0 {
+                    (self.value - delta).max(-3.0)
+                } else {
+                    (self.value + delta).min(3.0)
+                };
                 let e = (v - target).abs();
                 if e < best.0 {
                     best = (e, code, v);

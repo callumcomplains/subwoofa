@@ -7,7 +7,9 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Tail of the sub-format GUIDs, shared by PCM and IEEE float (the first two bytes are the format tag).
-const GUID_TAIL: [u8; 14] = [0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71];
+const GUID_TAIL: [u8; 14] = [
+    0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71,
+];
 
 pub struct WavWriter {
     out: BufWriter<File>,
@@ -25,13 +27,27 @@ impl WavWriter {
         let header = header(&params, data_bytes);
         out.write_all(&header)?;
         let file_bytes = header.len() as u64;
-        Ok(WavWriter { out, params, scratch: Vec::new(), data_bytes, written: 0, file_bytes })
+        Ok(WavWriter {
+            out,
+            params,
+            scratch: Vec::new(),
+            data_bytes,
+            written: 0,
+            file_bytes,
+        })
     }
 }
 
 impl BlockWriter for WavWriter {
     fn write_block(&mut self, planar: &[Vec<f32>], frames: usize) -> std::io::Result<()> {
-        interleave(planar, &self.params.order, frames, self.params.format, false, &mut self.scratch);
+        interleave(
+            planar,
+            &self.params.order,
+            frames,
+            self.params.format,
+            false,
+            &mut self.scratch,
+        );
         self.out.write_all(&self.scratch)?;
         self.written += self.scratch.len() as u64;
         Ok(())
@@ -40,7 +56,10 @@ impl BlockWriter for WavWriter {
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         // the header was written for the planned length; a shorter source would leave it wrong
         if self.written != self.data_bytes {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the input ended before the planned length"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the input ended before the planned length",
+            ));
         }
         pad_even(&mut self.out, self.data_bytes)?;
         self.out.flush()?;
@@ -66,7 +85,11 @@ fn header(p: &Params, data_bytes: u64) -> Vec<u8> {
         chunk(&mut chunks, b"bext", &bext(reference));
     }
     chunk(&mut chunks, b"fmt ", &fmt(p));
-    let data_header = [b"data".as_slice(), &(if rf64 { u32::MAX } else { data_bytes as u32 }).to_le_bytes()].concat();
+    let data_header = [
+        b"data".as_slice(),
+        &(if rf64 { u32::MAX } else { data_bytes as u32 }).to_le_bytes(),
+    ]
+    .concat();
     let riff_size = 4 + chunks.len() as u64 + data_header.len() as u64 + data_bytes + data_bytes % 2;
     if rf64 {
         // patch the RIFF size into ds64 (its first eight bytes after the chunk header)
@@ -134,14 +157,25 @@ mod tests {
     use crate::SampleFormat;
 
     fn params(frames: u64) -> Params {
-        Params { rate: 48_000, format: SampleFormat::Int24, total_frames: frames, order: (0..6).collect(), mask: 0x3F, labels: Vec::new(), time_reference: None }
+        Params {
+            rate: 48_000,
+            format: SampleFormat::Int24,
+            total_frames: frames,
+            order: (0..6).collect(),
+            mask: 0x3F,
+            labels: Vec::new(),
+            time_reference: None,
+        }
     }
 
     #[test]
     fn short_files_are_plain_riff() {
         let h = header(&params(48_000), 48_000 * 6 * 3);
         assert_eq!(&h[..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()) as usize, h.len() - 8 + 48_000 * 6 * 3);
+        assert_eq!(
+            u32::from_le_bytes(h[4..8].try_into().unwrap()) as usize,
+            h.len() - 8 + 48_000 * 6 * 3
+        );
     }
 
     #[test]

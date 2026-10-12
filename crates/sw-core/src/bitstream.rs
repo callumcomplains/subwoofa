@@ -76,12 +76,21 @@ fn default_attenuation() -> f64 {
 }
 
 fn default_mono_map() -> MonoMap {
-    MonoMap { c: Some(0.0), ..MonoMap::default() }
+    MonoMap {
+        c: Some(0.0),
+        ..MonoMap::default()
+    }
 }
 
 impl Default for SecondaryAudio {
     fn default() -> Self {
-        SecondaryAudio { attenuation_db: 6.0, fade_down_secs: 0.0, fade_up_secs: 0.0, dialog_mode: false, mono_map: default_mono_map() }
+        SecondaryAudio {
+            attenuation_db: 6.0,
+            fade_down_secs: 0.0,
+            fade_up_secs: 0.0,
+            dialog_mode: false,
+            mono_map: default_mono_map(),
+        }
     }
 }
 
@@ -151,7 +160,16 @@ fn stereo_b() -> [Level; 6] {
 
 impl Default for Downmix {
     fn default() -> Self {
-        Downmix { primary: primary_51(), extra_a: extra_a(), extra_b: extra_b(), stereo_a: stereo_a(), stereo_b: stereo_b(), embed_stereo: false, stereo_matrix: false, lt_rt: false }
+        Downmix {
+            primary: primary_51(),
+            extra_a: extra_a(),
+            extra_b: extra_b(),
+            stereo_a: stereo_a(),
+            stereo_b: stereo_b(),
+            embed_stereo: false,
+            stereo_matrix: false,
+            lt_rt: false,
+        }
     }
 }
 
@@ -159,13 +177,23 @@ impl Downmix {
     /// Update levels from `L=3,Ls=inf,...` (names from `DOWNMIX_CHANNELS`, case-insensitive; `inf` or `off` for none).
     pub fn parse_levels(table: &mut [Level; 6], text: &str) -> Result<(), String> {
         for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let (name, value) = part.split_once('=').ok_or_else(|| format!("'{part}': expected CHANNEL=dB"))?;
-            let idx = DOWNMIX_CHANNELS.iter().position(|c| c.eq_ignore_ascii_case(name.trim())).ok_or_else(|| format!("unknown channel '{}' (use C, L, R, Ls, Rs or LFE)", name.trim()))?;
+            let (name, value) = part
+                .split_once('=')
+                .ok_or_else(|| format!("'{part}': expected CHANNEL=dB"))?;
+            let idx = DOWNMIX_CHANNELS
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name.trim()))
+                .ok_or_else(|| format!("unknown channel '{}' (use C, L, R, Ls, Rs or LFE)", name.trim()))?;
             let value = value.trim();
             table[idx] = if value.eq_ignore_ascii_case("inf") || value.eq_ignore_ascii_case("off") {
                 None
             } else {
-                Some(value.parse::<f64>().map_err(|_| format!("'{value}' is not a number of dB"))?.clamp(0.0, 90.0))
+                Some(
+                    value
+                        .parse::<f64>()
+                        .map_err(|_| format!("'{value}' is not a number of dB"))?
+                        .clamp(0.0, 90.0),
+                )
             };
         }
         Ok(())
@@ -181,9 +209,18 @@ mod tests {
         let json = r#"{"downmix":{"primary":[3,3,3,3,3,3],"extra_a":[null,null,null,3,null,null],"extra_b":[null,null,null,null,3,null],
             "stereo_a":[6,3,null,6,null,null],"stereo_b":[6,null,3,null,6,null],"embed_stereo":true,"stereo_matrix":false,"lt_rt":false}}"#;
         let o: BitstreamOptions = serde_json::from_str(json).unwrap();
-        assert_eq!(o.downmix, Downmix { embed_stereo: true, ..Downmix::default() });
+        assert_eq!(
+            o.downmix,
+            Downmix {
+                embed_stereo: true,
+                ..Downmix::default()
+            }
+        );
         // leaving it out gives the original encoder's defaults
-        assert_eq!(serde_json::from_str::<BitstreamOptions>("{}").unwrap().downmix, Downmix::default());
+        assert_eq!(
+            serde_json::from_str::<BitstreamOptions>("{}").unwrap().downmix,
+            Downmix::default()
+        );
     }
 
     #[test]

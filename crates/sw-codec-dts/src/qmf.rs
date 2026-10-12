@@ -45,7 +45,12 @@ impl Synthesis {
         for k in 0..16 {
             cos_mod.push(-0.25 / (2.0 * ((2 * k + 1) as f64 * PI / 128.0).sin()));
         }
-        Synthesis { coeff: prototype(perfect), cos_mod, x: [0.0; TAPS], z: [0.0; 64] }
+        Synthesis {
+            coeff: prototype(perfect),
+            cos_mod,
+            x: [0.0; TAPS],
+            z: [0.0; 64],
+        }
     }
 
     /// One time step: `sub` holds one sample of every subband (bands >= `active` count as zero).
@@ -116,7 +121,11 @@ impl Analysis {
                 resp[band][blk * 32..blk * 32 + 32].copy_from_slice(&out);
             }
         }
-        let last = resp.iter().map(|r| r.iter().rposition(|v| v.abs() > 1e-12).unwrap_or(0)).max().unwrap_or(0);
+        let last = resp
+            .iter()
+            .map(|r| r.iter().rposition(|v| v.abs() > 1e-12).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
         let len = (last + 1).div_ceil(32) * 32;
         for r in resp.iter_mut() {
             r.truncate(len);
@@ -125,7 +134,11 @@ impl Analysis {
                 *v /= e;
             }
         }
-        Analysis { resp, len, hist: vec![0.0; len] }
+        Analysis {
+            resp,
+            len,
+            hist: vec![0.0; len],
+        }
     }
 
     /// Delay in samples between input and the synthesis output of the analysed subbands.

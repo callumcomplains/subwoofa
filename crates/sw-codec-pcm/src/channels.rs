@@ -83,7 +83,10 @@ pub fn wav_order(layout: &ChannelLayout) -> MaskOrder {
         order.sort_by_key(|&i| bits[i].unwrap());
         MaskOrder { order, mask }
     } else {
-        MaskOrder { order: (0..layout.channels.len()).collect(), mask: 0 }
+        MaskOrder {
+            order: (0..layout.channels.len()).collect(),
+            mask: 0,
+        }
     }
 }
 
@@ -129,7 +132,7 @@ mod tests {
     fn five_one_is_the_standard_wav_mask() {
         let m = wav_order(layout("5.1"));
         assert_eq!(m.mask, 0x3F); // FL FR FC LFE BL BR
-        // layout order is L R C LFE Ls Rs: the file wants L R C LFE Ls Rs, i.e. unchanged
+                                  // layout order is L R C LFE Ls Rs: the file wants L R C LFE Ls Rs, i.e. unchanged
         assert_eq!(m.order, vec![0, 1, 2, 3, 4, 5]);
     }
 
@@ -137,7 +140,7 @@ mod tests {
     fn seven_one_side_rear_is_the_standard_wav_mask() {
         let m = wav_order(layout("7.1-side-rear"));
         assert_eq!(m.mask, 0x63F); // FL FR FC LFE BL BR SL SR
-        // file order L R C LFE Lsr Rsr Lss Rss
+                                   // file order L R C LFE Lsr Rsr Lss Rss
         assert_eq!(m.order, vec![0, 1, 2, 3, 6, 7, 4, 5]);
     }
 

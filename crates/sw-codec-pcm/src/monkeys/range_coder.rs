@@ -28,7 +28,13 @@ pub(crate) struct RangeEncoder {
 
 impl RangeEncoder {
     pub fn new() -> RangeEncoder {
-        RangeEncoder { low: 0, range: TOP, waiting: 0, ff_run: 0, out: Vec::new() }
+        RangeEncoder {
+            low: 0,
+            range: TOP,
+            waiting: 0,
+            ff_run: 0,
+            out: Vec::new(),
+        }
     }
 
     /// Codes the interval `[start, start + size)` out of `total` equal parts of the current range.
@@ -97,7 +103,14 @@ mod tests {
         fn new(bytes: &'a [u8]) -> Decoder<'a> {
             // the first byte is skipped, the second starts the code
             let buffer = bytes[1] as u32;
-            Decoder { bytes, at: 2, low: buffer >> 1, range: 1 << 7, buffer, unit: 0 }
+            Decoder {
+                bytes,
+                at: 2,
+                low: buffer >> 1,
+                range: 1 << 7,
+                buffer,
+                unit: 0,
+            }
         }
 
         fn normalize(&mut self) {

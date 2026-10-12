@@ -69,7 +69,13 @@ pub struct PcmReader {
 }
 
 fn io_err(path: &str) -> impl Fn(std::io::Error) -> Error + '_ {
-    move |e| if e.kind() == std::io::ErrorKind::UnexpectedEof { Error::Corrupt(path.to_string()) } else { Error::Io(path.to_string(), e) }
+    move |e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Error::Corrupt(path.to_string())
+        } else {
+            Error::Io(path.to_string(), e)
+        }
+    }
 }
 
 fn rd<const N: usize>(f: &mut impl Read, path: &str) -> Result<[u8; N], Error> {
@@ -216,7 +222,12 @@ impl PcmReader {
                         match &c {
                             b"NONE" | b"twos" => {}
                             b"sowt" => little = true,
-                            other => return Err(Error::Unsupported(name, format!("AIFF-C compression {}", String::from_utf8_lossy(other)))),
+                            other => {
+                                return Err(Error::Unsupported(
+                                    name,
+                                    format!("AIFF-C compression {}", String::from_utf8_lossy(other)),
+                                ))
+                            }
                         }
                     }
                     comm = Some((channels, frames, bits, rate));
@@ -240,13 +251,39 @@ impl PcmReader {
         let stored = ((bits + 7) / 8) * 8;
         check_depth(&name, stored, false)?;
         let frame_bytes = channels as usize * (stored as usize / 8);
-        let info = PcmInfo { container: Container::Aiff, channels, sample_rate, bits: stored, float: false, frames, time_reference: None, channel_mask: None };
+        let info = PcmInfo {
+            container: Container::Aiff,
+            channels,
+            sample_rate,
+            bits: stored,
+            float: false,
+            frames,
+            time_reference: None,
+            channel_mask: None,
+        };
         Self::finish(f, name, info, data_start, !little, frame_bytes)
     }
 
-    fn finish(mut f: BufReader<File>, path: String, info: PcmInfo, data_start: u64, big_endian: bool, frame_bytes: usize) -> Result<PcmReader, Error> {
-        f.seek(SeekFrom::Start(data_start)).map_err(|e| Error::Io(path.clone(), e))?;
-        Ok(PcmReader { path, file: f, info, data_start, big_endian, frame_bytes, pos: 0, scratch: Vec::new() })
+    fn finish(
+        mut f: BufReader<File>,
+        path: String,
+        info: PcmInfo,
+        data_start: u64,
+        big_endian: bool,
+        frame_bytes: usize,
+    ) -> Result<PcmReader, Error> {
+        f.seek(SeekFrom::Start(data_start))
+            .map_err(|e| Error::Io(path.clone(), e))?;
+        Ok(PcmReader {
+            path,
+            file: f,
+            info,
+            data_start,
+            big_endian,
+            frame_bytes,
+            pos: 0,
+            scratch: Vec::new(),
+        })
     }
 
     pub fn info(&self) -> &PcmInfo {
@@ -286,8 +323,19 @@ impl PcmReader {
 }
 
 fn check_depth(name: &str, bits: u16, float: bool) -> Result<(), Error> {
-    let ok = if float { matches!(bits, 32 | 64) } else { matches!(bits, 8 | 16 | 24 | 32) };
-    if ok { Ok(()) } else { Err(Error::Unsupported(name.to_string(), format!("{bits}-bit {}", if float { "float" } else { "integer" }))) }
+    let ok = if float {
+        matches!(bits, 32 | 64)
+    } else {
+        matches!(bits, 8 | 16 | 24 | 32)
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Unsupported(
+            name.to_string(),
+            format!("{bits}-bit {}", if float { "float" } else { "integer" }),
+        ))
+    }
 }
 
 #[inline]
@@ -295,15 +343,27 @@ fn sample_to_f32(s: &[u8], bits: u16, float: bool, be: bool) -> f32 {
     match (bits, float) {
         (8, _) => (s[0] as i32 - 128) as f32 / 128.0, // WAV 8-bit is unsigned
         (16, _) => {
-            let v = if be { i16::from_be_bytes([s[0], s[1]]) } else { i16::from_le_bytes([s[0], s[1]]) };
+            let v = if be {
+                i16::from_be_bytes([s[0], s[1]])
+            } else {
+                i16::from_le_bytes([s[0], s[1]])
+            };
             v as f32 / 32768.0
         }
         (24, _) => {
-            let v = if be { i32::from_be_bytes([s[0], s[1], s[2], 0]) >> 8 } else { i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8 };
+            let v = if be {
+                i32::from_be_bytes([s[0], s[1], s[2], 0]) >> 8
+            } else {
+                i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8
+            };
             v as f32 / 8_388_608.0
         }
         (32, false) => {
-            let v = if be { i32::from_be_bytes([s[0], s[1], s[2], s[3]]) } else { i32::from_le_bytes([s[0], s[1], s[2], s[3]]) };
+            let v = if be {
+                i32::from_be_bytes([s[0], s[1], s[2], s[3]])
+            } else {
+                i32::from_le_bytes([s[0], s[1], s[2], s[3]])
+            };
             v as f32 / 2_147_483_648.0
         }
         (32, true) => f32::from_le_bytes([s[0], s[1], s[2], s[3]]),
@@ -384,8 +444,20 @@ pub fn map_channel_mask(layout: &ChannelLayout, mask: u32) -> Option<Vec<usize>>
             Channel::R | Channel::Rt => vec![FR],
             Channel::C => vec![FC],
             Channel::Lfe => vec![LFE],
-            Channel::Ls => if has_rear { vec![SL] } else { vec![BL, SL] },
-            Channel::Rs => if has_rear { vec![SR] } else { vec![BR, SR] },
+            Channel::Ls => {
+                if has_rear {
+                    vec![SL]
+                } else {
+                    vec![BL, SL]
+                }
+            }
+            Channel::Rs => {
+                if has_rear {
+                    vec![SR]
+                } else {
+                    vec![BR, SR]
+                }
+            }
             Channel::Lss => vec![SL],
             Channel::Rss => vec![SR],
             Channel::Lsr => vec![BL],
@@ -401,14 +473,24 @@ pub fn map_channel_mask(layout: &ChannelLayout, mask: u32) -> Option<Vec<usize>>
             Channel::Tfr => vec![TFR],
             Channel::Tfc => vec![TFC],
             Channel::Tc => vec![TC],
-            Channel::Lfe2 | Channel::Tsl | Channel::Tsr | Channel::Tbl | Channel::Tbr | Channel::Tbc | Channel::Bfc | Channel::Bfl | Channel::Bfr => vec![],
+            Channel::Lfe2
+            | Channel::Tsl
+            | Channel::Tsr
+            | Channel::Tbl
+            | Channel::Tbr
+            | Channel::Tbc
+            | Channel::Bfc
+            | Channel::Bfl
+            | Channel::Bfr => vec![],
         }
     };
     let present: Vec<u32> = (0..32).filter(|b| mask >> b & 1 == 1).collect();
     let mut used = Vec::new();
     let mut out = Vec::new();
     for &ch in layout.channels {
-        let bit = wants(ch).into_iter().find(|b| present.contains(b) && !used.contains(b))?;
+        let bit = wants(ch)
+            .into_iter()
+            .find(|b| present.contains(b) && !used.contains(b))?;
         used.push(bit);
         out.push(present.iter().position(|p| *p == bit)?);
     }
@@ -416,14 +498,20 @@ pub fn map_channel_mask(layout: &ChannelLayout, mask: u32) -> Option<Vec<usize>>
 }
 
 /// Resolved source of each layout channel: file index and channel inside the file.
-fn resolve_sources(layout: &'static ChannelLayout, inputs: &HashMap<Channel, PathBuf>, order: ChannelOrder) -> Result<(Vec<PcmReader>, Vec<Slot>, Vec<PathBuf>), Error> {
+fn resolve_sources(
+    layout: &'static ChannelLayout,
+    inputs: &HashMap<Channel, PathBuf>,
+    order: ChannelOrder,
+) -> Result<(Vec<PcmReader>, Vec<Slot>, Vec<PathBuf>), Error> {
     let mut readers: Vec<PcmReader> = Vec::new();
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut by_path: HashMap<PathBuf, usize> = HashMap::new();
     let mut slots = Vec::new();
     let mut multi: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, ch) in layout.channels.iter().enumerate() {
-        let path = inputs.get(ch).ok_or_else(|| Error::Mismatch(format!("no input file for channel {}", ch.short())))?;
+        let path = inputs
+            .get(ch)
+            .ok_or_else(|| Error::Mismatch(format!("no input file for channel {}", ch.short())))?;
         let idx = match by_path.get(path) {
             Some(&i) => i,
             None => {
@@ -440,7 +528,12 @@ fn resolve_sources(layout: &'static ChannelLayout, inputs: &HashMap<Channel, Pat
             2 => i % 2,
             _ => {
                 if n != layout.channel_count() {
-                    return Err(Error::Mismatch(format!("{}: has {n} channels but layout '{}' needs {}", path.display(), layout.id, layout.channel_count())));
+                    return Err(Error::Mismatch(format!(
+                        "{}: has {n} channels but layout '{}' needs {}",
+                        path.display(),
+                        layout.id,
+                        layout.channel_count()
+                    )));
                 }
                 if !multi.contains_key(&idx) {
                     let info = &readers[idx].info;
@@ -452,16 +545,25 @@ fn resolve_sources(layout: &'static ChannelLayout, inputs: &HashMap<Channel, Pat
                         // the standard 7.1 mask is routinely written over film-ordered audio
                         (ChannelOrder::Auto, Some(0x63F)) | (ChannelOrder::Auto, Some(0x3F)) => positional(),
                         (_, Some(mask)) => map_channel_mask(layout, mask).ok_or_else(|| {
-                            Error::Mismatch(format!("{}: its speaker layout (mask {mask:#x}) does not fit '{}'", path.display(), layout.id))
+                            Error::Mismatch(format!(
+                                "{}: its speaker layout (mask {mask:#x}) does not fit '{}'",
+                                path.display(),
+                                layout.id
+                            ))
                         })?,
-                        (ChannelOrder::Mask, None) => return Err(Error::Mismatch(format!("{}: has no speaker mask", path.display()))),
+                        (ChannelOrder::Mask, None) => {
+                            return Err(Error::Mismatch(format!("{}: has no speaker mask", path.display())))
+                        }
                     };
                     multi.insert(idx, map);
                 }
                 multi[&idx][i]
             }
         };
-        slots.push(Slot { file: idx, ch: ch_in_file });
+        slots.push(Slot {
+            file: idx,
+            ch: ch_in_file,
+        });
     }
     Ok((readers, slots, paths))
 }
@@ -478,7 +580,10 @@ pub fn multichannel_inputs(layout: &'static ChannelLayout, path: &Path) -> Optio
 /// For one multichannel file: its channel count and speaker mask, and the first of `candidates` whose
 /// channels the file can fill (same channel count, and a speaker mask the layout fits; files with no mask or
 /// the common film-order masks are read in file order, so the layout with the film order wins there).
-pub fn suggest_layout(path: &Path, candidates: &[&'static ChannelLayout]) -> Result<(usize, Option<u32>, Option<&'static ChannelLayout>), Error> {
+pub fn suggest_layout(
+    path: &Path,
+    candidates: &[&'static ChannelLayout],
+) -> Result<(usize, Option<u32>, Option<&'static ChannelLayout>), Error> {
     let r = PcmReader::open(path)?;
     let n = r.info().channels as usize;
     let mask = r.info().channel_mask.or_else(|| default_mask(n));
@@ -495,16 +600,43 @@ pub fn suggest_layout(path: &Path, candidates: &[&'static ChannelLayout]) -> Res
         3 => &[Channel::L, Channel::R, Channel::C],
         4 => &[Channel::L, Channel::R, Channel::Ls, Channel::Rs],
         5 => &[Channel::L, Channel::R, Channel::C, Channel::Ls, Channel::Rs],
-        6 => &[Channel::L, Channel::R, Channel::C, Channel::Lfe, Channel::Ls, Channel::Rs],
-        8 => &[Channel::L, Channel::R, Channel::C, Channel::Lfe, Channel::Ls, Channel::Rs, Channel::Lsr, Channel::Rsr],
+        6 => &[
+            Channel::L,
+            Channel::R,
+            Channel::C,
+            Channel::Lfe,
+            Channel::Ls,
+            Channel::Rs,
+        ],
+        8 => &[
+            Channel::L,
+            Channel::R,
+            Channel::C,
+            Channel::Lfe,
+            Channel::Ls,
+            Channel::Rs,
+            Channel::Lsr,
+            Channel::Rsr,
+        ],
         _ => &[],
     };
-    let pick = if positional { fits.iter().copied().find(|l| l.channels == film).or_else(|| fits.first().copied()) } else { fits.first().copied() };
+    let pick = if positional {
+        fits.iter()
+            .copied()
+            .find(|l| l.channels == film)
+            .or_else(|| fits.first().copied())
+    } else {
+        fits.first().copied()
+    };
     Ok((n, mask, pick))
 }
 
 /// Per layout channel: the file and channel index inside it that supplies the channel.
-pub fn slot_map(layout: &'static ChannelLayout, inputs: &HashMap<Channel, PathBuf>, order: ChannelOrder) -> Result<Vec<(PathBuf, usize)>, Error> {
+pub fn slot_map(
+    layout: &'static ChannelLayout,
+    inputs: &HashMap<Channel, PathBuf>,
+    order: ChannelOrder,
+) -> Result<Vec<(PathBuf, usize)>, Error> {
     let (_, slots, paths) = resolve_sources(layout, inputs, order)?;
     Ok(slots.into_iter().map(|s| (paths[s.file].clone(), s.ch)).collect())
 }
@@ -539,21 +671,41 @@ impl StemSet {
     }
 
     /// Like [`StemSet::open`] with an explicit multichannel-file channel order policy.
-    pub fn open_ordered(layout: &'static ChannelLayout, inputs: &HashMap<Channel, PathBuf>, order: ChannelOrder) -> Result<StemSet, Error> {
+    pub fn open_ordered(
+        layout: &'static ChannelLayout,
+        inputs: &HashMap<Channel, PathBuf>,
+        order: ChannelOrder,
+    ) -> Result<StemSet, Error> {
         let (readers, slots, _) = resolve_sources(layout, inputs, order)?;
         let (rate, bits) = (readers[0].info.sample_rate, readers[0].info.bits);
         for r in &readers {
             if r.info.sample_rate != rate {
-                return Err(Error::Mismatch(format!("sample rate mismatch: {} Hz vs {} Hz ({})", rate, r.info.sample_rate, r.path)));
+                return Err(Error::Mismatch(format!(
+                    "sample rate mismatch: {} Hz vs {} Hz ({})",
+                    rate, r.info.sample_rate, r.path
+                )));
             }
             if r.info.bits != bits || r.info.float != readers[0].info.float {
-                return Err(Error::Mismatch(format!("bit depth mismatch between input files ({})", r.path)));
+                return Err(Error::Mismatch(format!(
+                    "bit depth mismatch between input files ({})",
+                    r.path
+                )));
             }
         }
         let frames = readers.iter().map(|r| r.info.frames).max().unwrap_or(0);
         let time_reference = readers.iter().find_map(|r| r.info.time_reference);
         let nfiles = readers.len();
-        Ok(StemSet { layout, readers, slots, sample_rate: rate, bits, frames, time_reference, scratch: vec![Vec::new(); nfiles], mix: None })
+        Ok(StemSet {
+            layout,
+            readers,
+            slots,
+            sample_rate: rate,
+            bits,
+            frames,
+            time_reference,
+            scratch: vec![Vec::new(); nfiles],
+            mix: None,
+        })
     }
 
     /// Mix the layout channels down through `matrix` (inputs in layout order) before they are returned, so
@@ -649,7 +801,8 @@ mod tests {
         let mut f = File::create(&p).unwrap();
         let data: Vec<u8> = (1..=8i16).flat_map(|v| (v * 256).to_le_bytes()).collect();
         f.write_all(b"RIFF").unwrap();
-        f.write_all(&((4 + 8 + 40 + 8 + data.len()) as u32).to_le_bytes()).unwrap();
+        f.write_all(&((4 + 8 + 40 + 8 + data.len()) as u32).to_le_bytes())
+            .unwrap();
         f.write_all(b"WAVEfmt ").unwrap();
         f.write_all(&40u32.to_le_bytes()).unwrap();
         f.write_all(&0xFFFEu16.to_le_bytes()).unwrap();
@@ -661,7 +814,8 @@ mod tests {
         f.write_all(&22u16.to_le_bytes()).unwrap();
         f.write_all(&16u16.to_le_bytes()).unwrap();
         f.write_all(&0x63Fu32.to_le_bytes()).unwrap();
-        f.write_all(&[0x01, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]).unwrap(); // PCM sub-format GUID
+        f.write_all(&[0x01, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71])
+            .unwrap(); // PCM sub-format GUID
         f.write_all(b"data").unwrap();
         f.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
         f.write_all(&data).unwrap();
@@ -675,7 +829,10 @@ mod tests {
             let mut s = StemSet::open_ordered(seven, &inputs, order).unwrap();
             let mut planar = Vec::new();
             assert_eq!(s.read_planar(&mut planar, 4).unwrap(), 1);
-            planar.iter().map(|c| (c[0] * 32768.0).round() as i32 / 256).collect::<Vec<i32>>()
+            planar
+                .iter()
+                .map(|c| (c[0] * 32768.0).round() as i32 / 256)
+                .collect::<Vec<i32>>()
         };
         // Windows convention: file order FL FR FC LFE BL BR SL SR  ->  layout L R C LFE Lss Rss Lsr Rsr
         assert_eq!(read(ChannelOrder::Mask), vec![1, 2, 3, 4, 7, 8, 5, 6]);
@@ -683,9 +840,11 @@ mod tests {
         assert_eq!(read(ChannelOrder::Auto), vec![1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(read(ChannelOrder::File), vec![1, 2, 3, 4, 5, 6, 7, 8]);
         let slots = slot_map(seven, &inputs, ChannelOrder::Mask).unwrap();
-        assert_eq!(slots.iter().map(|(_, c)| *c).collect::<Vec<_>>(), vec![0, 1, 2, 3, 6, 7, 4, 5]);
+        assert_eq!(
+            slots.iter().map(|(_, c)| *c).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 6, 7, 4, 5]
+        );
     }
-
 
     fn write_wav(path: &Path, channels: u16, rate: u32, bits: u16, samples: &[i32]) {
         let bytes = bits as usize / 8;
@@ -698,7 +857,8 @@ mod tests {
         f.write_all(&1u16.to_le_bytes()).unwrap();
         f.write_all(&channels.to_le_bytes()).unwrap();
         f.write_all(&rate.to_le_bytes()).unwrap();
-        f.write_all(&(rate * channels as u32 * bytes as u32).to_le_bytes()).unwrap();
+        f.write_all(&(rate * channels as u32 * bytes as u32).to_le_bytes())
+            .unwrap();
         f.write_all(&(channels * bytes as u16).to_le_bytes()).unwrap();
         f.write_all(&bits.to_le_bytes()).unwrap();
         f.write_all(b"data").unwrap();
@@ -719,7 +879,10 @@ mod tests {
         let p = tmp("a.wav");
         write_wav(&p, 1, 48_000, 24, &[0, 4_194_304, -4_194_304, 8_388_607]);
         let mut r = PcmReader::open(&p).unwrap();
-        assert_eq!((r.info().channels, r.info().sample_rate, r.info().bits, r.info().frames), (1, 48_000, 24, 4));
+        assert_eq!(
+            (r.info().channels, r.info().sample_rate, r.info().bits, r.info().frames),
+            (1, 48_000, 24, 4)
+        );
         let mut v = Vec::new();
         assert_eq!(r.read_f32(&mut v, 100).unwrap(), 4);
         assert_eq!(&v[..3], &[0.0, 0.5, -0.5]);
@@ -769,8 +932,10 @@ mod tests {
     #[test]
     fn aiff_extended_rate() {
         let mut b = [0u8; 10];
-        b[0] = 0x40; b[1] = 0x0E; // 44100 = 0xAC44 * 2^(14-... )
-        b[2] = 0xAC; b[3] = 0x44;
+        b[0] = 0x40;
+        b[1] = 0x0E; // 44100 = 0xAC44 * 2^(14-... )
+        b[2] = 0xAC;
+        b[3] = 0x44;
         assert_eq!(extended_to_f64(b), 44100.0);
     }
 

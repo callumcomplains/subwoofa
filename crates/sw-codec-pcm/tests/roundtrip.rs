@@ -5,7 +5,11 @@ use sw_codec_pcm::{channels, encode_to_file, Container, Request, SampleFormat};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Test signal for channel `k`: a tone plus noise. Channel 1 is silent and channel 2 has its low eight bits clear,
@@ -75,17 +79,59 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: Default::default() };
-    let stats = encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let req = Request {
+        layout,
+        container,
+        format,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        dsd_multiplier: 0,
+        dcp: Default::default(),
+    };
+    let stats = encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
     assert_eq!(stats.frames, frames as u64, "{name}: frames written");
-    assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
+    assert_eq!(
+        stats.bytes,
+        std::fs::metadata(&out).unwrap().len(),
+        "{name}: reported size"
+    );
 
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&out).args(["-f", decode_format(format), "-"]).output().unwrap();
-    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
+    let dec = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-err_detect",
+            "crccheck+explode",
+            "-i",
+        ])
+        .arg(&out)
+        .args(["-f", decode_format(format), "-"])
+        .output()
+        .unwrap();
+    assert!(
+        dec.status.success() && dec.stderr.is_empty(),
+        "{name}: decoder: {}",
+        String::from_utf8_lossy(&dec.stderr)
+    );
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta | Container::WavPack | Container::MonkeysAudio | Container::MpegAls => channels::wav_order(layout).order,
+        Container::Wav
+        | Container::Flac
+        | Container::OggFlac
+        | Container::Alac
+        | Container::Tta
+        | Container::WavPack
+        | Container::MonkeysAudio
+        | Container::MpegAls => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -98,7 +144,9 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
             let got = &dec.stdout[at..at + width];
             let src = sources[layout_ch][i];
             let want: Vec<u8> = match format {
-                SampleFormat::Int16 => ((src as f64 / 8_388_608.0 * 32768.0).round().clamp(-32768.0, 32767.0) as i16).to_le_bytes().to_vec(),
+                SampleFormat::Int16 => ((src as f64 / 8_388_608.0 * 32768.0).round().clamp(-32768.0, 32767.0) as i16)
+                    .to_le_bytes()
+                    .to_vec(),
                 SampleFormat::Int24 => src.to_le_bytes()[..3].to_vec(),
                 SampleFormat::Int32 => (src << 8).to_le_bytes().to_vec(),
                 SampleFormat::Float32 => (src as f32 / 8_388_608.0).to_le_bytes().to_vec(),
@@ -202,8 +250,23 @@ fn flac_refuses_what_it_cannot_hold() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("x.flac");
-    let req = Request { layout, container: Flac, format: Float32, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: Default::default() };
-    assert!(encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).is_err());
+    let req = Request {
+        layout,
+        container: Flac,
+        format: Float32,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        dsd_multiplier: 0,
+        dcp: Default::default(),
+    };
+    assert!(encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false)
+    )
+    .is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -326,28 +389,78 @@ fn check_dcp(name: &str, layout_id: &str, rate: u32, frames: usize, options: sw_
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("out.mxf");
-    let req = Request { layout, container: DcpAudio, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: 0, dcp: options };
-    let stats = encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
-    assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
+    let req = Request {
+        layout,
+        container: DcpAudio,
+        format: Int24,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        dsd_multiplier: 0,
+        dcp: options,
+    };
+    let stats = encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        stats.bytes,
+        std::fs::metadata(&out).unwrap().len(),
+        "{name}: reported size"
+    );
 
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "s24le", "-"]).output().unwrap();
-    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
+    let dec = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&out)
+        .args(["-f", "s24le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        dec.status.success() && dec.stderr.is_empty(),
+        "{name}: decoder: {}",
+        String::from_utf8_lossy(&dec.stderr)
+    );
     let nch = layout.channels.len();
     assert_eq!(dec.stdout.len(), frames * nch * 3, "{name}: decoded length");
     for i in 0..frames {
         for k in 0..nch {
             let at = (i * nch + k) * 3;
-            assert_eq!(&dec.stdout[at..at + 3], &sources[k][i].to_le_bytes()[..3], "{name}: frame {i} channel {k}");
+            assert_eq!(
+                &dec.stdout[at..at + 3],
+                &sources[k][i].to_le_bytes()[..3],
+                "{name}: frame {i} channel {k}"
+            );
         }
     }
 
     if let Some(tools) = std::env::var_os("SW_ASDCP_DIR") {
         let tools = std::path::PathBuf::from(tools);
-        let info = Command::new(tools.join("asdcp-info")).args(["-i", "-d"]).arg(&out).output().unwrap();
-        assert!(info.status.success(), "{name}: asdcp-info: {}{}", String::from_utf8_lossy(&info.stdout), String::from_utf8_lossy(&info.stderr));
+        let info = Command::new(tools.join("asdcp-info"))
+            .args(["-i", "-d"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert!(
+            info.status.success(),
+            "{name}: asdcp-info: {}{}",
+            String::from_utf8_lossy(&info.stdout),
+            String::from_utf8_lossy(&info.stderr)
+        );
         let prefix = dir.join("ref");
-        let extract = Command::new(tools.join("asdcp-test")).arg("-x").arg(&prefix).arg(&out).output().unwrap();
-        assert!(extract.status.success(), "{name}: asdcp-test: {}", String::from_utf8_lossy(&extract.stderr));
+        let extract = Command::new(tools.join("asdcp-test"))
+            .arg("-x")
+            .arg(&prefix)
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert!(
+            extract.status.success(),
+            "{name}: asdcp-test: {}",
+            String::from_utf8_lossy(&extract.stderr)
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -359,7 +472,16 @@ fn dcp_smpte_five_one() {
 
 #[test]
 fn dcp_interop_stereo_at_25_fps() {
-    check_dcp("dcpio", "2.0", 48_000, 96_000, sw_codec_pcm::DcpOptions { frame_rate: (25, 1), smpte: false });
+    check_dcp(
+        "dcpio",
+        "2.0",
+        48_000,
+        96_000,
+        sw_codec_pcm::DcpOptions {
+            frame_rate: (25, 1),
+            smpte: false,
+        },
+    );
 }
 
 #[test]
@@ -382,18 +504,57 @@ fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate:
     let freqs: Vec<f64> = (0..nch).map(|k| 700.0 + 1300.0 * k as f64).collect();
     let mut inputs = HashMap::new();
     for (k, ch) in layout.channels.iter().enumerate() {
-        let tone: Vec<i32> = (0..frames).map(|i| ((2.0 * std::f64::consts::PI * freqs[k] * i as f64 / rate as f64).sin() * 0.8 * 8_388_607.0) as i32).collect();
+        let tone: Vec<i32> = (0..frames)
+            .map(|i| {
+                ((2.0 * std::f64::consts::PI * freqs[k] * i as f64 / rate as f64).sin() * 0.8 * 8_388_607.0) as i32
+            })
+            .collect();
         let path = dir.join(format!("{}.wav", ch.short()));
         write_wav(&path, rate, &tone);
         inputs.insert(*ch, path);
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier, dcp: Default::default() };
-    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&out).args(["-f", "f32le", "-ar", "352800", "-"]).output().unwrap();
-    assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
-    let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let req = Request {
+        layout,
+        container,
+        format: Int24,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        dsd_multiplier: multiplier,
+        dcp: Default::default(),
+    };
+    encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let dec = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-err_detect",
+            "crccheck+explode",
+            "-i",
+        ])
+        .arg(&out)
+        .args(["-f", "f32le", "-ar", "352800", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        dec.status.success() && dec.stderr.is_empty(),
+        "{name}: decoder: {}",
+        String::from_utf8_lossy(&dec.stderr)
+    );
+    let y: Vec<f32> = dec
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     let n = y.len() / nch;
     assert!(n >= 352_800 * seconds - 400, "{name}: decoded {n} samples per channel");
     // the file's channels are in the order of the layout where it has the standard DSD arrangement (L R C LFE Ls Rs)
@@ -410,10 +571,16 @@ fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate:
             2.0 * (sc * sc + ss * ss).sqrt() / (to - from) as f64
         };
         let here = amp(file_ch, freqs[src]);
-        assert!((here - 0.4).abs() < 0.01, "{name}: tone {src} came out at {here:.3} in file channel {file_ch}");
+        assert!(
+            (here - 0.4).abs() < 0.01,
+            "{name}: tone {src} came out at {here:.3} in file channel {file_ch}"
+        );
         for other in (0..nch).filter(|&c| c != file_ch) {
             let leak = amp(other, freqs[src]);
-            assert!(leak < 0.002, "{name}: tone {src} leaks {leak:.4} into file channel {other}");
+            assert!(
+                leak < 0.002,
+                "{name}: tone {src} leaks {leak:.4} into file channel {other}"
+            );
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

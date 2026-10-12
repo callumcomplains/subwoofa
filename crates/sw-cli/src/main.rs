@@ -2,12 +2,16 @@ use clap::{Args, Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use sw_backend_ffmpeg as ff;
-use sw_core::formats::{self, bitrate_range_kbps, Destination, StreamType};
 use sw_core::downmix::Matrix;
+use sw_core::formats::{self, bitrate_range_kbps, Destination, StreamType};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 
 #[derive(Parser)]
-#[command(name = "subwoofa", about = "Every channel, every codec.", disable_version_flag = true)]
+#[command(
+    name = "subwoofa",
+    about = "Every channel, every codec.",
+    disable_version_flag = true
+)]
 struct Cli {
     /// Print the version and exit
     #[allow(dead_code)]
@@ -404,8 +408,13 @@ impl BitstreamArgs {
         if let Some(m) = &self.mono_map {
             let mut map = MonoMap::default();
             for part in m.split(',').filter(|p| !p.trim().is_empty()) {
-                let (name, db) = part.split_once('=').ok_or(format!("--mono-map: '{part}' is not SPEAKER=dB"))?;
-                let db: f64 = db.trim().parse().map_err(|_| format!("--mono-map: '{db}' is not a number"))?;
+                let (name, db) = part
+                    .split_once('=')
+                    .ok_or(format!("--mono-map: '{part}' is not SPEAKER=dB"))?;
+                let db: f64 = db
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("--mono-map: '{db}' is not a number"))?;
                 let slot = match name.trim().to_ascii_lowercase().as_str() {
                     "c" => &mut map.c,
                     "l" => &mut map.l,
@@ -424,7 +433,12 @@ impl BitstreamArgs {
             Some("single") => Seamless::SingleClip,
             Some(path) => {
                 let text = std::fs::read_to_string(path).map_err(|e| format!("--seamless: cannot read {path}: {e}"))?;
-                Seamless::Timecodes(text.lines().map(|l| l.split(',').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect())
+                Seamless::Timecodes(
+                    text.lines()
+                        .map(|l| l.split(',').next().unwrap_or("").trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect(),
+                )
             }
         };
         Ok(o)
@@ -461,18 +475,32 @@ fn run() -> Result<(), String> {
         Cmd::Info { path, start, duration } => {
             let mut r = sw_pcm::PcmReader::open(&path).map_err(|e| e.to_string())?;
             let i = r.info().clone();
-            println!("{:?}  {} ch  {} Hz  {}-bit{}  {} frames ({:.3} s)", i.container, i.channels, i.sample_rate, i.bits, if i.float { " float" } else { "" }, i.frames, i.duration_secs());
+            println!(
+                "{:?}  {} ch  {} Hz  {}-bit{}  {} frames ({:.3} s)",
+                i.container,
+                i.channels,
+                i.sample_rate,
+                i.bits,
+                if i.float { " float" } else { "" },
+                i.frames,
+                i.duration_secs()
+            );
             if let Some(t) = i.start_secs() {
                 println!("broadcast start: {t:.3} s since midnight");
             }
             if start.is_some() || duration.is_some() {
-                r.seek_frame((start.unwrap_or(0.0) * i.sample_rate as f64) as u64).map_err(|e| e.to_string())?;
+                r.seek_frame((start.unwrap_or(0.0) * i.sample_rate as f64) as u64)
+                    .map_err(|e| e.to_string())?;
                 let want = (duration.unwrap_or(10.0) * i.sample_rate as f64) as usize;
                 let (mut sum, mut n, mut buf) = (0f64, 0usize, Vec::new());
                 while n < want {
                     buf.clear();
-                    let got = r.read_f32(&mut buf, (want - n).min(1 << 16)).map_err(|e| e.to_string())?;
-                    if got == 0 { break; }
+                    let got = r
+                        .read_f32(&mut buf, (want - n).min(1 << 16))
+                        .map_err(|e| e.to_string())?;
+                    if got == 0 {
+                        break;
+                    }
                     sum += buf.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
                     n += got * i.channels as usize;
                 }
@@ -480,14 +508,33 @@ fn run() -> Result<(), String> {
             }
         }
         Cmd::Tools { op } => run_tools(op)?,
-        Cmd::Verify { files, deep, json, ffmpeg } => verify_cmd(&files, deep, json, ffmpeg)?,
+        Cmd::Verify {
+            files,
+            deep,
+            json,
+            ffmpeg,
+        } => verify_cmd(&files, deep, json, ffmpeg)?,
         Cmd::Atmos { op } => run_atmos(op)?,
         Cmd::StreamInfo { path, count, first } => {
             let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            print!("{}", sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary());
+            print!(
+                "{}",
+                sw_codec_truehd::analyze::analyze_range(&data, first, count.unwrap_or(usize::MAX)).summary()
+            );
         }
-        Cmd::DownmixCheck { layout, to, auto_import, inputs, trim_db, safe, start, duration, ffmpeg } => {
-            let layout: &'static ChannelLayout = ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
+        Cmd::DownmixCheck {
+            layout,
+            to,
+            auto_import,
+            inputs,
+            trim_db,
+            safe,
+            start,
+            duration,
+            ffmpeg,
+        } => {
+            let layout: &'static ChannelLayout =
+                ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
             let mut m = match to.as_str() {
                 "stereo" => Matrix::lo_ro(layout),
                 "5.1" => Matrix::to_51(layout),
@@ -495,17 +542,39 @@ fn run() -> Result<(), String> {
             };
             if safe {
                 let t = m.safe_trim_db();
-                println!("safe trim: {t:.2} dB (worst-case input sum {:.3})", m.worst_case_gain().into_iter().fold(0.0, f32::max));
+                println!(
+                    "safe trim: {t:.2} dB (worst-case input sum {:.3})",
+                    m.worst_case_gain().into_iter().fold(0.0, f32::max)
+                );
                 m.trim(t);
             }
             if trim_db != 0.0 {
                 m.trim(trim_db);
             }
             let map = collect_inputs(layout, auto_import, inputs)?;
-            let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
-            let job = ff::Job { stream: StreamType::Ac3, layout, inputs: map, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None, dialnorm: None, start_secs: start, duration_secs: duration, frames: None, slots: None, ffmpeg };
+            let ffmpeg = ffmpeg
+                .or_else(ff::find_ffmpeg)
+                .ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
+            let job = ff::Job {
+                stream: StreamType::Ac3,
+                layout,
+                inputs: map,
+                output: PathBuf::new(),
+                bitrate_kbps: None,
+                sample_rate: None,
+                dialnorm: None,
+                start_secs: start,
+                duration_secs: duration,
+                frames: None,
+                slots: None,
+                ffmpeg,
+            };
             let rep = ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())?;
-            println!("analysed {} frames ({:.1} s at 48 kHz)", rep.frames, rep.frames as f64 / 48_000.0);
+            println!(
+                "analysed {} frames ({:.1} s at 48 kHz)",
+                rep.frames,
+                rep.frames as f64 / 48_000.0
+            );
             for (c, p) in rep.channels.iter().zip(&rep.peak_db) {
                 println!("  {c:<4} peak {p:>7.2} dBFS");
             }
@@ -514,20 +583,52 @@ fn run() -> Result<(), String> {
                 println!("  {:<4} at {:.3} s", rep.channels[e.channel], e.frame as f64 / 48_000.0);
             }
         }
-        Cmd::Encode { stream, layout, dest, auto_import, inputs, bitrate, sample_rate, dialnorm, start, duration, output, ffmpeg, engine, no_downmix, channel_order, es_phase_shift, rear_3db, source_layout, core_96_24, pcm_format, bitstream } => {
+        Cmd::Encode {
+            stream,
+            layout,
+            dest,
+            auto_import,
+            inputs,
+            bitrate,
+            sample_rate,
+            dialnorm,
+            start,
+            duration,
+            output,
+            ffmpeg,
+            engine,
+            no_downmix,
+            channel_order,
+            es_phase_shift,
+            rear_3db,
+            source_layout,
+            core_96_24,
+            pcm_format,
+            bitstream,
+        } => {
             let bitstream = bitstream.options()?;
             let mut progress = Progress::new();
-            let order = sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
+            let order =
+                sw_pcm::ChannelOrder::parse(&channel_order).ok_or("--channel-order must be auto, mask or file")?;
             let stream = StreamType::from_id(&stream).ok_or(format!("unknown stream type '{stream}'"))?;
             let dest = Destination::from_id(&dest).ok_or(format!("unknown destination '{dest}'"))?;
             // the audio-file streams live under their own destination: do not make the user say so
-            let dest = if stream.is_audio_file() && dest == Destination::Generic { Destination::Files } else { dest };
+            let dest = if stream.is_audio_file() && dest == Destination::Generic {
+                Destination::Files
+            } else {
+                dest
+            };
             let layout: &'static ChannelLayout =
                 ChannelLayout::find(&layout).ok_or(format!("unknown layout '{layout}'"))?;
             formats::validate(dest, stream, layout, sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
             // audio files go through the job runner (as a mixdown from a richer source layout does)
-            if let Some(src) = source_layout.as_deref().filter(|s| !s.is_empty()).or(stream.is_audio_file().then_some(layout.id)) {
-                let src_layout: &'static ChannelLayout = ChannelLayout::find(src).ok_or(format!("unknown layout '{src}'"))?;
+            if let Some(src) = source_layout
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .or(stream.is_audio_file().then_some(layout.id))
+            {
+                let src_layout: &'static ChannelLayout =
+                    ChannelLayout::find(src).ok_or(format!("unknown layout '{src}'"))?;
                 let map = collect_inputs(src_layout, auto_import, inputs)?;
                 let spec = sw_queue::run::EncodeSpec {
                     dest: dest.id().to_string(),
@@ -538,7 +639,10 @@ fn run() -> Result<(), String> {
                     dialnorm,
                     start,
                     duration,
-                    inputs: map.iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect(),
+                    inputs: map
+                        .iter()
+                        .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
+                        .collect(),
                     output: output.to_string_lossy().into_owned(),
                     unlocked: false,
                     engine: "native".into(),
@@ -551,24 +655,52 @@ fn run() -> Result<(), String> {
                     pcm_format: pcm_format.clone().unwrap_or_default(),
                     bitstream: bitstream.clone(),
                 };
-                let out = sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |p, _| progress.tick(p)).map_err(|e| match e {
-                    sw_queue::run::Failure::Canceled => "canceled".to_string(),
-                    sw_queue::run::Failure::Error(m) => m,
-                })?;
+                let out =
+                    sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |p, _| {
+                        progress.tick(p)
+                    })
+                    .map_err(|e| match e {
+                        sw_queue::run::Failure::Canceled => "canceled".to_string(),
+                        sw_queue::run::Failure::Error(m) => m,
+                    })?;
                 println!("{} ({})", out.message, output.display());
                 return Ok(());
             }
 
             let map = collect_inputs(layout, auto_import, inputs)?;
-            let bitrate = bitrate.or_else(|| bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream))));
+            let bitrate = bitrate.or_else(|| {
+                bitrate_range_kbps(dest, stream, layout, sample_rate).map(|r| r.1.min(default_cap(stream)))
+            });
             if engine == "native" {
                 if stream == StreamType::DtsExpress {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::lbr_native::LbrRequest { layout, bitrate_kbps: bitrate.unwrap_or(128), start_secs: start.unwrap_or(0.0), duration_secs: duration, output: &output, secondary: dest == Destination::BluRaySecondary, bitstream: bitstream.clone() };
+                    let req = sw_codec_dts::lbr_native::LbrRequest {
+                        layout,
+                        bitrate_kbps: bitrate.unwrap_or(128),
+                        start_secs: start.unwrap_or(0.0),
+                        duration_secs: duration,
+                        output: &output,
+                        secondary: dest == Destination::BluRaySecondary,
+                        bitstream: bitstream.clone(),
+                    };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let stats = sw_codec_dts::lbr_native::encode_to_file(
+                        &mut stems,
+                        &req,
+                        &mut |p| progress.tick(p),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 4096) as f64 / stems.sample_rate as f64;
-                    println!("wrote {} ({} frames, {:.2} MB, average {:.0} kbps) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    println!(
+                        "wrote {} ({} frames, {:.2} MB, average {:.0} kbps) in {:.1} s = {:.0}x real time",
+                        output.display(),
+                        stats.frames,
+                        stats.bytes as f64 / 1e6,
+                        stats.bytes as f64 * 8.0 / secs / 1000.0,
+                        t0.elapsed().as_secs_f64(),
+                        secs / t0.elapsed().as_secs_f64().max(1e-3)
+                    );
                     return Ok(());
                 }
                 if matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
@@ -582,11 +714,23 @@ fn run() -> Result<(), String> {
                         mlp: stream == StreamType::Mlp,
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false))
-                        .map_err(|e| e.to_string())?;
+                    let stats = sw_codec_truehd::native::encode_to_file(
+                        &mut stems,
+                        &req,
+                        &mut |p| progress.tick(p),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .map_err(|e| e.to_string())?;
                     let secs = stats.frames as f64 / stems.sample_rate as f64;
                     let pcm = stats.frames as f64 * layout.channel_count() as f64 * 3.0;
-                    println!("wrote {} ({:.1} MB, {:.1}% of PCM) in {:.1} s = {:.0}x real time", output.display(), stats.bytes as f64 / 1e6, 100.0 * stats.bytes as f64 / pcm, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    println!(
+                        "wrote {} ({:.1} MB, {:.1}% of PCM) in {:.1} s = {:.0}x real time",
+                        output.display(),
+                        stats.bytes as f64 / 1e6,
+                        100.0 * stats.bytes as f64 / pcm,
+                        t0.elapsed().as_secs_f64(),
+                        secs / t0.elapsed().as_secs_f64().max(1e-3)
+                    );
                     if stats.downmix_overflows > 0 {
                         println!("note: {} stereo-presentation samples exceed 24 bits (a stereo-only decoder will clip them)", stats.downmix_overflows);
                     }
@@ -596,7 +740,11 @@ fn run() -> Result<(), String> {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::ma_native::MaRequest {
                         layout,
-                        core_bitrate_kbps: match bitrate { Some(0) => None, Some(b) => Some(b), None => Some(1509) },
+                        core_bitrate_kbps: match bitrate {
+                            Some(0) => None,
+                            Some(b) => Some(b),
+                            None => Some(1509),
+                        },
                         dialnorm: sw_queue::run::dts_dialnorm(dialnorm),
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
@@ -606,36 +754,90 @@ fn run() -> Result<(), String> {
                         bitstream: bitstream.clone(),
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
-                    let spf = if stems.sample_rate > 96_000 { 2048 } else if stems.sample_rate > 48_000 { 1024 } else { 512 };
+                    let stats = sw_codec_dts::ma_native::encode_to_file(
+                        &mut stems,
+                        &req,
+                        &mut |p| progress.tick(p),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let spf = if stems.sample_rate > 96_000 {
+                        2048
+                    } else if stems.sample_rate > 48_000 {
+                        1024
+                    } else {
+                        512
+                    };
                     let secs = (stats.frames * spf) as f64 / stems.sample_rate as f64;
-                    println!("wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, stats.bytes as f64 * 8.0 / secs / 1000.0, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    println!(
+                        "wrote {} ({} frames, {:.1} MB, average {:.0} kbps) in {:.1} s = {:.1}x real time",
+                        output.display(),
+                        stats.frames,
+                        stats.bytes as f64 / 1e6,
+                        stats.bytes as f64 * 8.0 / secs / 1000.0,
+                        t0.elapsed().as_secs_f64(),
+                        secs / t0.elapsed().as_secs_f64().max(1e-3)
+                    );
                     return Ok(());
                 }
-                if matches!(stream, StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624) {
+                if matches!(
+                    stream,
+                    StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624
+                ) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                     let req = sw_codec_dts::native::Request {
                         layout,
-                        bitrate_kbps: if stream == StreamType::DtsHdHra { 1509 } else { bitrate.unwrap_or(1509) },
+                        bitrate_kbps: if stream == StreamType::DtsHdHra {
+                            1509
+                        } else {
+                            bitrate.unwrap_or(1509)
+                        },
                         x96: stream == StreamType::Dts9624,
                         bitstream: bitstream.clone(),
                         dvd: dest == Destination::DvdVideo,
-                        hra_kbps: if stream == StreamType::DtsHdHra { Some(bitrate.unwrap_or(3018)) } else { None },
+                        hra_kbps: if stream == StreamType::DtsHdHra {
+                            Some(bitrate.unwrap_or(3018))
+                        } else {
+                            None
+                        },
                         dialnorm: sw_queue::run::dts_dialnorm(dialnorm),
                         pcm_bits: (stems.bits as u32).clamp(16, 24),
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
-                        es: sw_codec_dts::es_options(stream == StreamType::DtsEs || (matches!(stream, StreamType::DtsHdHra | StreamType::Dts9624) && layout.id.starts_with("6.")), layout, es_phase_shift, rear_3db),
+                        es: sw_codec_dts::es_options(
+                            stream == StreamType::DtsEs
+                                || (matches!(stream, StreamType::DtsHdHra | StreamType::Dts9624)
+                                    && layout.id.starts_with("6.")),
+                            layout,
+                            es_phase_shift,
+                            rear_3db,
+                        ),
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                    let stats = sw_codec_dts::native::encode_to_file(
+                        &mut stems,
+                        &req,
+                        &mut |p| progress.tick(p),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .map_err(|e| e.to_string())?;
                     let secs = (stats.frames * 512) as f64 / stems.sample_rate as f64;
-                    println!("wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                    println!(
+                        "wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time",
+                        output.display(),
+                        stats.frames,
+                        stats.bytes as f64 / 1e6,
+                        t0.elapsed().as_secs_f64(),
+                        secs / t0.elapsed().as_secs_f64().max(1e-3)
+                    );
                     return Ok(());
                 }
                 if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
-                    return Err(format!("the native engine encodes AC-3, E-AC-3, TrueHD, DTS core and DTS-HD MA so far, not {}", stream.display_name()));
+                    return Err(format!(
+                        "the native engine encodes AC-3, E-AC-3, TrueHD, DTS core and DTS-HD MA so far, not {}",
+                        stream.display_name()
+                    ));
                 }
                 let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
                 let req = sw_codec_ac3::native::Request {
@@ -648,15 +850,42 @@ fn run() -> Result<(), String> {
                     eac3: stream == StreamType::Eac3,
                 };
                 let t0 = std::time::Instant::now();
-                let stats = sw_codec_ac3::native::encode_to_file(&mut stems, &req, &mut |p| progress.tick(p), &std::sync::atomic::AtomicBool::new(false))
-                    .map_err(|e| e.to_string())?;
+                let stats = sw_codec_ac3::native::encode_to_file(
+                    &mut stems,
+                    &req,
+                    &mut |p| progress.tick(p),
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .map_err(|e| e.to_string())?;
                 let secs = stats.input_frames as f64 / stems.sample_rate as f64;
-                println!("wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time", output.display(), stats.frames, stats.bytes as f64 / 1e6, t0.elapsed().as_secs_f64(), secs / t0.elapsed().as_secs_f64().max(1e-3));
+                println!(
+                    "wrote {} ({} frames, {:.1} MB) in {:.1} s = {:.0}x real time",
+                    output.display(),
+                    stats.frames,
+                    stats.bytes as f64 / 1e6,
+                    t0.elapsed().as_secs_f64(),
+                    secs / t0.elapsed().as_secs_f64().max(1e-3)
+                );
                 return Ok(());
             }
-            let ffmpeg = ffmpeg.or_else(ff::find_ffmpeg).ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
+            let ffmpeg = ffmpeg
+                .or_else(ff::find_ffmpeg)
+                .ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
             let slots = sw_pcm::slot_map(layout, &map, order).ok();
-            let job = ff::Job { stream, layout, inputs: map, output: output.clone(), bitrate_kbps: bitrate, sample_rate: Some(sample_rate), dialnorm, start_secs: start, duration_secs: duration, frames: None, slots, ffmpeg };
+            let job = ff::Job {
+                stream,
+                layout,
+                inputs: map,
+                output: output.clone(),
+                bitrate_kbps: bitrate,
+                sample_rate: Some(sample_rate),
+                dialnorm,
+                start_secs: start,
+                duration_secs: duration,
+                frames: None,
+                slots,
+                ffmpeg,
+            };
             ff::run(&job).map_err(|e| e.to_string())?;
             println!("wrote {}", output.display());
         }
@@ -703,23 +932,67 @@ fn run_atmos(op: AtmosCmd) -> Result<(), String> {
             let d = find(path)?;
             println!("{}", dee::master_info(&d, &file).map_err(|e| e.to_string())?);
         }
-        AtmosCmd::Convert { input, output, format, dee: path } => {
+        AtmosCmd::Convert {
+            input,
+            output,
+            format,
+            dee: path,
+        } => {
             let d = find(path)?;
             let job = dee::AtmosJob::new(&input, &output, dee::Target::Convert { format });
             let work = std::env::temp_dir().join(format!("subwoofa_dee_{}", std::process::id()));
-            let done = dee::run(&d, &job, &work, &mut |_| {}, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).map_err(|e| e.to_string())?;
+            let done = dee::run(
+                &d,
+                &job,
+                &work,
+                &mut |_| {},
+                &mut |_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .map_err(|e| e.to_string())?;
             let _ = std::fs::remove_dir_all(&work);
             println!("wrote {} in {:.1} s", done.output.display(), done.seconds);
         }
-        AtmosCmd::Encode { input, format, output, bitrate, clusters, drc, dialnorm, frame_rate, start, end, presentation_8ch, presentation_6ch, metering, dee: path } => {
+        AtmosCmd::Encode {
+            input,
+            format,
+            output,
+            bitrate,
+            clusters,
+            drc,
+            dialnorm,
+            frame_rate,
+            start,
+            end,
+            presentation_8ch,
+            presentation_6ch,
+            metering,
+            dee: path,
+        } => {
             let d = find(path)?;
             let drc: dee::Drc = drc.parse()?;
             let target = match format.as_str() {
                 "truehd" | "thd" => {
-                    let pres = |on: bool| on.then_some(dee::Presentation { drc, surround_3db: true });
-                    dee::Target::TrueHd(dee::TrueHdOptions { drc, spatial_clusters: clusters, presentation_8ch: pres(presentation_8ch), presentation_6ch: pres(presentation_6ch), ..Default::default() })
+                    let pres = |on: bool| {
+                        on.then_some(dee::Presentation {
+                            drc,
+                            surround_3db: true,
+                        })
+                    };
+                    dee::Target::TrueHd(dee::TrueHdOptions {
+                        drc,
+                        spatial_clusters: clusters,
+                        presentation_8ch: pres(presentation_8ch),
+                        presentation_6ch: pres(presentation_6ch),
+                        ..Default::default()
+                    })
                 }
-                "ddp" | "ec3" | "eac3" => dee::Target::Ddp(dee::DdpOptions { data_rate_kbps: bitrate, drc_line: drc, drc_rf: drc, ..Default::default() }),
+                "ddp" | "ec3" | "eac3" => dee::Target::Ddp(dee::DdpOptions {
+                    data_rate_kbps: bitrate,
+                    drc_line: drc,
+                    drc_rf: drc,
+                    ..Default::default()
+                }),
                 other => return Err(format!("unknown format '{other}': use truehd or ddp")),
             };
             let mut job = dee::AtmosJob::new(&input, &output, target);
@@ -758,7 +1031,11 @@ fn run_atmos(op: AtmosCmd) -> Result<(), String> {
 }
 
 fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
-    let opt = sw_verify::Options { deep, ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg), reference_verifier: None };
+    let opt = sw_verify::Options {
+        deep,
+        ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg),
+        reference_verifier: None,
+    };
     let mut reports = Vec::new();
     for file in files {
         match sw_verify::verify(file, &opt) {
@@ -775,7 +1052,11 @@ fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Option<PathBuf>
     }
     if json {
         // one file: the report itself, as before; several: a list
-        let text = if reports.len() == 1 { serde_json::to_string_pretty(&reports[0]) } else { serde_json::to_string_pretty(&reports) };
+        let text = if reports.len() == 1 {
+            serde_json::to_string_pretty(&reports[0])
+        } else {
+            serde_json::to_string_pretty(&reports)
+        };
         println!("{}", text.map_err(|e| e.to_string())?);
     } else {
         for r in &reports {
@@ -786,8 +1067,22 @@ fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Option<PathBuf>
             for r in &reports {
                 let failed = r.checks.iter().filter(|c| c.status == sw_verify::Status::Fail).count();
                 let warned = r.checks.iter().filter(|c| c.status == sw_verify::Status::Warn).count();
-                let verdict = if r.passed { "passed".to_string() } else if failed > 0 { format!("FAILED ({failed} check{} failed)", if failed == 1 { "" } else { "s" }) } else { "FAILED".to_string() };
-                println!("  {verdict:<26} {}{}", r.file, if warned > 0 { format!("  [{warned} warning{}]", if warned == 1 { "" } else { "s" }) } else { String::new() });
+                let verdict = if r.passed {
+                    "passed".to_string()
+                } else if failed > 0 {
+                    format!("FAILED ({failed} check{} failed)", if failed == 1 { "" } else { "s" })
+                } else {
+                    "FAILED".to_string()
+                };
+                println!(
+                    "  {verdict:<26} {}{}",
+                    r.file,
+                    if warned > 0 {
+                        format!("  [{warned} warning{}]", if warned == 1 { "" } else { "s" })
+                    } else {
+                        String::new()
+                    }
+                );
             }
         }
     }
@@ -814,7 +1109,12 @@ impl Progress {
     fn new() -> Progress {
         use std::io::IsTerminal;
         let now = std::time::Instant::now();
-        Progress { started: now, last_drawn: now, drawn_anything: false, enabled: std::io::stderr().is_terminal() }
+        Progress {
+            started: now,
+            last_drawn: now,
+            drawn_anything: false,
+            enabled: std::io::stderr().is_terminal(),
+        }
     }
 
     /// `fraction` of the work done, 0.0 to 1.0.
@@ -830,7 +1130,12 @@ impl Progress {
         self.last_drawn = std::time::Instant::now();
         let spent = self.started.elapsed().as_secs_f32();
         let left = spent * (1.0 - fraction) / fraction;
-        eprint!("\r  {:3.0}%   {} spent, about {} left   ", fraction * 100.0, clock(spent), clock(left));
+        eprint!(
+            "\r  {:3.0}%   {} spent, about {} left   ",
+            fraction * 100.0,
+            clock(spent),
+            clock(left)
+        );
         self.drawn_anything = true;
     }
 
@@ -860,18 +1165,40 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
         ToolsCmd::Info { file } => {
             let i = Stream::open(&file).map_err(e)?.info();
             println!("{} ({})", i.description, i.format);
-            println!("{} Hz, {} channels, {} frames, {:.3} s", i.sample_rate, i.channels, i.frames, i.duration_secs);
-            println!("{:.1} MB, average {:.0} kbps, peak {:.0} kbps, {} restart point(s){}", i.bytes as f64 / 1e6, i.average_kbps, i.peak_kbps, i.restart_points, if i.container { ", .dtshd container" } else { "" });
+            println!(
+                "{} Hz, {} channels, {} frames, {:.3} s",
+                i.sample_rate, i.channels, i.frames, i.duration_secs
+            );
+            println!(
+                "{:.1} MB, average {:.0} kbps, peak {:.0} kbps, {} restart point(s){}",
+                i.bytes as f64 / 1e6,
+                i.average_kbps,
+                i.peak_kbps,
+                i.restart_points,
+                if i.container { ", .dtshd container" } else { "" }
+            );
         }
         ToolsCmd::Pbr { file, window } => {
             for p in Stream::open(&file).map_err(e)?.pbr(window) {
-                println!("{:9.2}  mean {:7.0}  peak {:7.0} kbps", p.secs, p.mean_kbps, p.peak_kbps);
+                println!(
+                    "{:9.2}  mean {:7.0}  peak {:7.0} kbps",
+                    p.secs, p.mean_kbps, p.peak_kbps
+                );
             }
         }
-        ToolsCmd::Trim { file, output, start, end } => {
+        ToolsCmd::Trim {
+            file,
+            output,
+            start,
+            end,
+        } => {
             let s = Stream::open(&file).map_err(e)?;
             let (first, n, at) = s.trim(&output, start, end).map_err(e)?;
-            println!("wrote {} frames from frame {first} ({at:.3} s) to {}", n, output.display());
+            println!(
+                "wrote {} frames from frame {first} ({at:.3} s) to {}",
+                n,
+                output.display()
+            );
         }
         ToolsCmd::Split { file, output, at } => {
             let s = Stream::open(&file).map_err(e)?;
@@ -887,22 +1214,43 @@ fn run_tools(op: ToolsCmd) -> Result<(), String> {
         }
         ToolsCmd::Replace { base, with, at, output } => {
             let (start, removed) = sw_tools::replace(&base, &with, at, &output).map_err(e)?;
-            println!("wrote {} (insert at {:.3} s, {:.3} s of the original replaced)", output.display(), start, removed);
+            println!(
+                "wrote {} (insert at {:.3} s, {:.3} s of the original replaced)",
+                output.display(),
+                start,
+                removed
+            );
         }
         ToolsCmd::Insert { base, with, at, output } => {
             let start = sw_tools::insert(&base, &with, at, &output).map_err(e)?;
             println!("wrote {} (inserted at {:.3} s)", output.display(), start);
         }
-        ToolsCmd::Restripe { file, start, fps, output } => {
+        ToolsCmd::Restripe {
+            file,
+            start,
+            fps,
+            output,
+        } => {
             let code = sw_tools::fps_code(&fps).ok_or_else(|| format!("unknown frame rate '{fps}'"))?;
-            let tc = sw_tools::parse_timecode(&start).ok_or_else(|| format!("start time '{start}' is not hh:mm:ss:ff"))?;
+            let tc =
+                sw_tools::parse_timecode(&start).ok_or_else(|| format!("start time '{start}' is not hh:mm:ss:ff"))?;
             let out = output.unwrap_or_else(|| file.clone());
             sw_tools::restripe(&file, &out, code, tc).map_err(e)?;
             println!("restriped {} ({} at {} fps code {})", out.display(), start, fps, code);
         }
-        ToolsCmd::AddSilence { file, head, tail, output } => {
+        ToolsCmd::AddSilence {
+            file,
+            head,
+            tail,
+            output,
+        } => {
             let (h, t) = sw_tools::add_silence(&file, &output, head, tail).map_err(e)?;
-            println!("wrote {} ({} silent frames at the head, {} at the tail)", output.display(), h, t);
+            println!(
+                "wrote {} ({} silent frames at the head, {} at the tail)",
+                output.display(),
+                h,
+                t
+            );
         }
         ToolsCmd::Verify { files, deep, ffmpeg } => return verify_cmd(&files, deep, false, ffmpeg),
     }

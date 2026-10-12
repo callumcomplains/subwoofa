@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use sw_backend_ffmpeg as ff;
-use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
 use sw_core::downmix::{Matrix, OFF};
+use sw_core::formats::{bitrate_presets, bitrate_range_kbps, validate, Destination, StreamType};
 use sw_queue::{EncodeSpec, Queue};
 mod atmos;
-use tauri::{Emitter, Manager};
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
+use tauri::{Emitter, Manager};
 
 #[derive(Serialize)]
 struct StreamInfo {
@@ -76,7 +76,12 @@ fn catalog() -> Catalog {
             ffmpeg: ff::supports(*s),
         })
         .collect();
-    Catalog { destinations, all_streams, layouts: LAYOUTS, has_ffmpeg: ff::find_ffmpeg().is_some() }
+    Catalog {
+        destinations,
+        all_streams,
+        layouts: LAYOUTS,
+        has_ffmpeg: ff::find_ffmpeg().is_some(),
+    }
 }
 
 fn parse(dest: &str, stream: &str) -> Result<(Destination, StreamType), String> {
@@ -110,7 +115,13 @@ fn options(dest: String, stream: String, layout: String, sample_rate: u32, unloc
         .and_then(|l| bitrate_range_kbps(d, s, l, sample_rate))
         .map_or((None, None), |(a, b)| (Some(a), Some(b)));
     let presets = lay.map(|l| bitrate_presets(d, s, l, sample_rate)).unwrap_or_default();
-    Ok(Options { layouts, bitrate_min, bitrate_max, presets, extension: d.extension(s) })
+    Ok(Options {
+        layouts,
+        bitrate_min,
+        bitrate_max,
+        presets,
+        extension: d.extension(s),
+    })
 }
 
 #[derive(Serialize)]
@@ -127,7 +138,11 @@ fn scan_folder(dir: String, layout: String) -> Result<Vec<FolderGroup>, String> 
         .into_iter()
         .map(|g| FolderGroup {
             name: g.name,
-            inputs: g.inputs.into_iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect(),
+            inputs: g
+                .inputs
+                .into_iter()
+                .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
+                .collect(),
         })
         .collect())
 }
@@ -137,7 +152,10 @@ fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>,
     let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
     // one multichannel file for every channel of the layout
     if let Some(all) = sw_pcm::multichannel_inputs(l, std::path::Path::new(&first)) {
-        return Ok(all.into_iter().map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned())).collect());
+        return Ok(all
+            .into_iter()
+            .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
+            .collect());
     }
     Ok(autoimport::auto_import(&PathBuf::from(first), l)
         .into_iter()
@@ -156,8 +174,13 @@ struct WholeFile {
 #[tauri::command]
 fn multichannel_pick(path: String, candidates: Vec<String>) -> Result<WholeFile, String> {
     let list: Vec<&'static ChannelLayout> = candidates.iter().filter_map(|id| ChannelLayout::find(id)).collect();
-    let (channels, mask, pick) = sw_pcm::suggest_layout(std::path::Path::new(&path), &list).map_err(|e| e.to_string())?;
-    Ok(WholeFile { channels, mask, layout: pick.map(|l| l.id) })
+    let (channels, mask, pick) =
+        sw_pcm::suggest_layout(std::path::Path::new(&path), &list).map_err(|e| e.to_string())?;
+    Ok(WholeFile {
+        channels,
+        mask,
+        layout: pick.map(|l| l.id),
+    })
 }
 
 #[derive(Serialize, Default)]
@@ -190,17 +213,35 @@ fn probe(path: String) -> Result<Probe, String> {
     let ffmpeg = ff::find_ffmpeg().ok_or("not a WAV/AIFF file, and ffmpeg is not available to read it")?;
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
     let out = Command::new(&ffprobe)
-        .args(["-v", "error", "-select_streams", "a:0", "-show_entries",
-               "stream=channels,sample_rate,bits_per_raw_sample,bits_per_sample:format=duration", "-of", "json", &path])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=channels,sample_rate,bits_per_raw_sample,bits_per_sample:format=duration",
+            "-of",
+            "json",
+            &path,
+        ])
         .output()
         .map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("ffprobe gave no JSON: {e}"))?;
     let s = &v["streams"][0];
     if s.is_null() {
-        return Err(format!("no audio stream found in {path}: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "no audio stream found in {path}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
-    let num = |x: &serde_json::Value| x.as_str().and_then(|t| t.parse::<u32>().ok()).or_else(|| x.as_u64().map(|n| n as u32));
-    let bits = num(&s["bits_per_raw_sample"]).filter(|b| *b > 0).or(num(&s["bits_per_sample"]).filter(|b| *b > 0));
+    let num = |x: &serde_json::Value| {
+        x.as_str()
+            .and_then(|t| t.parse::<u32>().ok())
+            .or_else(|| x.as_u64().map(|n| n as u32))
+    };
+    let bits = num(&s["bits_per_raw_sample"])
+        .filter(|b| *b > 0)
+        .or(num(&s["bits_per_sample"]).filter(|b| *b > 0));
     Ok(Probe {
         channels: num(&s["channels"]),
         sample_rate: num(&s["sample_rate"]),
@@ -212,19 +253,34 @@ fn probe(path: String) -> Result<Probe, String> {
 
 /* ---- StreamTools ---- */
 
-pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Opens one of the project's documentation pages in the browser. Only known page names, never free text.
 #[tauri::command]
 fn open_docs(page: String) -> Result<(), String> {
-    const PAGES: [&str; 6] = ["ENGINES.md", "ATMOS.md", "GETTING-STARTED.md", "FORMATS.md", "TROUBLESHOOTING.md", "LEGAL.md"];
+    const PAGES: [&str; 6] = [
+        "ENGINES.md",
+        "ATMOS.md",
+        "GETTING-STARTED.md",
+        "FORMATS.md",
+        "TROUBLESHOOTING.md",
+        "LEGAL.md",
+    ];
     if !PAGES.contains(&page.as_str()) {
         return Err("unknown page".into());
     }
     let url = format!("https://github.com/callumcomplains/subwoofa/blob/main/docs/{page}");
-    std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn().map(|_| ()).map_err(|e| e.to_string())
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -234,20 +290,34 @@ fn app_version() -> String {
 
 #[tauri::command]
 async fn tools_info(path: String) -> Result<sw_tools::Info, String> {
-    blocking(move || sw_tools::Stream::open(std::path::Path::new(&path)).map(|s| s.info()).map_err(|e| e.to_string())).await
+    blocking(move || {
+        sw_tools::Stream::open(std::path::Path::new(&path))
+            .map(|s| s.info())
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 async fn tools_pbr(path: String, window: f64) -> Result<Vec<sw_tools::PbrPoint>, String> {
-    blocking(move || sw_tools::Stream::open(std::path::Path::new(&path)).map(|s| s.pbr(window.max(0.1))).map_err(|e| e.to_string())).await
+    blocking(move || {
+        sw_tools::Stream::open(std::path::Path::new(&path))
+            .map(|s| s.pbr(window.max(0.1)))
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 async fn tools_trim(path: String, output: String, start: f64, end: Option<f64>) -> Result<String, String> {
     blocking(move || {
         let s = sw_tools::Stream::open(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
-        let (first, n, at) = s.trim(std::path::Path::new(&output), start, end).map_err(|e| e.to_string())?;
-        Ok(format!("Wrote {n} frames starting at frame {first} ({at:.3} s) to {output}"))
+        let (first, n, at) = s
+            .trim(std::path::Path::new(&output), start, end)
+            .map_err(|e| e.to_string())?;
+        Ok(format!(
+            "Wrote {n} frames starting at frame {first} ({at:.3} s) to {output}"
+        ))
     })
     .await
 }
@@ -256,7 +326,11 @@ async fn tools_trim(path: String, output: String, start: f64, end: Option<f64>) 
 async fn tools_split(path: String, output: String, at: Vec<f64>) -> Result<Vec<String>, String> {
     blocking(move || {
         let s = sw_tools::Stream::open(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
-        let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("bin").to_string();
+        let ext = std::path::Path::new(&path)
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("bin")
+            .to_string();
         // the save dialog returns a file name with an extension: drop it, the parts add their own
         let prefix = std::path::Path::new(&output).with_extension("");
         let paths = s.split(&prefix, &ext, &at).map_err(|e| e.to_string())?;
@@ -278,7 +352,11 @@ async fn tools_append(inputs: Vec<String>, output: String) -> Result<String, Str
 #[tauri::command]
 async fn tools_replace(path: String, with: String, at: f64, output: String, insert: bool) -> Result<String, String> {
     blocking(move || {
-        let (base, with, out) = (std::path::Path::new(&path), std::path::Path::new(&with), std::path::Path::new(&output));
+        let (base, with, out) = (
+            std::path::Path::new(&path),
+            std::path::Path::new(&with),
+            std::path::Path::new(&output),
+        );
         if insert {
             let t = sw_tools::insert(base, with, at, out).map_err(|e| e.to_string())?;
             Ok(format!("Wrote {output}\nInserted at {t:.3} s"))
@@ -304,7 +382,8 @@ async fn tools_restripe(path: String, output: String, fps: String, start: String
     blocking(move || {
         let code = sw_tools::fps_code(&fps).ok_or_else(|| format!("unknown frame rate {fps}"))?;
         let tc = sw_tools::parse_timecode(&start).ok_or_else(|| format!("{start} is not a timecode (hh:mm:ss:ff)"))?;
-        sw_tools::restripe(std::path::Path::new(&path), std::path::Path::new(&output), code, tc).map_err(|e| e.to_string())?;
+        sw_tools::restripe(std::path::Path::new(&path), std::path::Path::new(&output), code, tc)
+            .map_err(|e| e.to_string())?;
         Ok(format!("Wrote {output}\nStart {start} at {fps} fps"))
     })
     .await
@@ -313,8 +392,11 @@ async fn tools_restripe(path: String, output: String, fps: String, start: String
 #[tauri::command]
 async fn tools_add_silence(path: String, output: String, head: f64, tail: f64) -> Result<String, String> {
     blocking(move || {
-        let (h, t) = sw_tools::add_silence(std::path::Path::new(&path), std::path::Path::new(&output), head, tail).map_err(|e| e.to_string())?;
-        Ok(format!("Wrote {output}\n{h} silent frames at the head, {t} at the tail"))
+        let (h, t) = sw_tools::add_silence(std::path::Path::new(&path), std::path::Path::new(&output), head, tail)
+            .map_err(|e| e.to_string())?;
+        Ok(format!(
+            "Wrote {output}\n{h} silent frames at the head, {t} at the tail"
+        ))
     })
     .await
 }
@@ -329,7 +411,11 @@ pub(crate) struct VerifyOut {
 #[tauri::command]
 async fn verify_file(path: String, deep: bool) -> Result<VerifyOut, String> {
     blocking(move || {
-        let opt = sw_verify::Options { deep, ffmpeg: ff::find_ffmpeg(), reference_verifier: None };
+        let opt = sw_verify::Options {
+            deep,
+            ffmpeg: ff::find_ffmpeg(),
+            reference_verifier: None,
+        };
         let report = sw_verify::verify(std::path::Path::new(&path), &opt).map_err(|e| e.to_string())?;
         let text = report.to_text();
         Ok(VerifyOut { report, text })
@@ -368,14 +454,29 @@ async fn tool_status() -> ToolStatus {
                 use std::os::windows::process::CommandExt;
                 c.creation_flags(0x0800_0000);
             }
-            c.output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string))
+            c.output()
+                .ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string))
         });
         let dir = sw_verify::mas_dir();
-        let files = ["DTSHDVerify.exe", "DtsJobQueue.exe", "dtshd.exe"].iter().map(|n| (n.to_string(), dir.as_ref().map_or(false, |d| d.join(n).is_file()))).collect();
-        Ok(ToolStatus { ffmpeg: ffmpeg.map(|p| p.display().to_string()), ffmpeg_version: version, mas_dir: dir.map(|d| d.display().to_string()), mas_files: files })
+        let files = ["DTSHDVerify.exe", "DtsJobQueue.exe", "dtshd.exe"]
+            .iter()
+            .map(|n| (n.to_string(), dir.as_ref().map_or(false, |d| d.join(n).is_file())))
+            .collect();
+        Ok(ToolStatus {
+            ffmpeg: ffmpeg.map(|p| p.display().to_string()),
+            ffmpeg_version: version,
+            mas_dir: dir.map(|d| d.display().to_string()),
+            mas_files: files,
+        })
     })
     .await
-    .unwrap_or(ToolStatus { ffmpeg: None, ffmpeg_version: None, mas_dir: None, mas_files: vec![] })
+    .unwrap_or(ToolStatus {
+        ffmpeg: None,
+        ffmpeg_version: None,
+        mas_dir: None,
+        mas_files: vec![],
+    })
 }
 
 /* ---- queue ---- */
@@ -437,13 +538,24 @@ fn to_dto(m: &Matrix) -> MatrixDto {
         cells: m
             .cells
             .iter()
-            .map(|r| r.iter().map(|c| CellDto { gain_db: (c.gain_db != OFF).then_some(c.gain_db), invert: c.invert }).collect())
+            .map(|r| {
+                r.iter()
+                    .map(|c| CellDto {
+                        gain_db: (c.gain_db != OFF).then_some(c.gain_db),
+                        invert: c.invert,
+                    })
+                    .collect()
+            })
             .collect(),
     }
 }
 
 fn from_dto(d: &MatrixDto) -> Result<Matrix, String> {
-    let ch = |v: &Vec<String>| v.iter().map(|s| Channel::from_id(s).ok_or(format!("unknown channel '{s}'"))).collect::<Result<Vec<_>, _>>();
+    let ch = |v: &Vec<String>| {
+        v.iter()
+            .map(|s| Channel::from_id(s).ok_or(format!("unknown channel '{s}'")))
+            .collect::<Result<Vec<_>, _>>()
+    };
     let (inputs, outputs) = (ch(&d.inputs)?, ch(&d.outputs)?);
     if d.cells.len() != outputs.len() || d.cells.iter().any(|r| r.len() != inputs.len()) {
         return Err("matrix shape does not match its channels".into());
@@ -451,7 +563,10 @@ fn from_dto(d: &MatrixDto) -> Result<Matrix, String> {
     let mut m = Matrix::empty(&inputs, &outputs);
     for (o, row) in d.cells.iter().enumerate() {
         for (i, c) in row.iter().enumerate() {
-            m.cells[o][i] = sw_core::downmix::Cell { gain_db: c.gain_db.unwrap_or(OFF), invert: c.invert };
+            m.cells[o][i] = sw_core::downmix::Cell {
+                gain_db: c.gain_db.unwrap_or(OFF),
+                invert: c.invert,
+            };
         }
     }
     Ok(m)
@@ -481,7 +596,11 @@ fn downmix_safe(matrix: MatrixDto) -> Result<SafeTrim, String> {
     let trim_db = m.safe_trim_db();
     let worst_case = m.worst_case_gain().into_iter().fold(0.0, f32::max);
     m.trim(trim_db);
-    Ok(SafeTrim { trim_db, worst_case, matrix: to_dto(&m) })
+    Ok(SafeTrim {
+        trim_db,
+        worst_case,
+        matrix: to_dto(&m),
+    })
 }
 
 #[derive(Deserialize)]
@@ -498,11 +617,25 @@ async fn downmix_check(req: CheckRequest) -> Result<ff::downmix::SatReport, Stri
     tauri::async_runtime::spawn_blocking(move || {
         let layout = ChannelLayout::find(&req.layout).ok_or("unknown layout")?;
         let m = from_dto(&req.matrix)?;
-        let inputs = req.inputs.iter().filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v)))).collect();
+        let inputs = req
+            .inputs
+            .iter()
+            .filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v))))
+            .collect();
         let ffmpeg = ff::find_ffmpeg().ok_or("ffmpeg not found on PATH")?;
         let job = ff::Job {
-            stream: StreamType::Ac3, layout, inputs, output: PathBuf::new(), bitrate_kbps: None, sample_rate: None,
-            dialnorm: None, start_secs: req.start, duration_secs: req.duration, frames: None, slots: None, ffmpeg,
+            stream: StreamType::Ac3,
+            layout,
+            inputs,
+            output: PathBuf::new(),
+            bitrate_kbps: None,
+            sample_rate: None,
+            dialnorm: None,
+            start_secs: req.start,
+            duration_secs: req.duration,
+            frames: None,
+            slots: None,
+            ffmpeg,
         };
         ff::downmix::saturation_check(&job, &m).map_err(|e| e.to_string())
     })
@@ -515,19 +648,55 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let default_jobs = std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(1).clamp(1, 4));
-            let queue = Queue::new(default_jobs, std::sync::Arc::new(move |snap| {
-                let _ = handle.emit("queue", snap);
-            }));
+            let default_jobs =
+                std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(1).clamp(1, 4));
+            let queue = Queue::new(
+                default_jobs,
+                std::sync::Arc::new(move |snap| {
+                    let _ = handle.emit("queue", snap);
+                }),
+            );
             app.manage(queue);
             app.manage(atmos::State::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            catalog, options, auto_import, multichannel_pick, scan_folder, probe, downmix_default, downmix_safe, downmix_check,
-            queue_add, queue_list, queue_cancel, queue_remove, queue_clear, queue_set_concurrency, read_log, write_text,
-            app_version, open_docs, set_tool_paths, tool_status, tools_info, tools_pbr, tools_trim, tools_split, tools_append, tools_replace, tools_stripe, tools_restripe, tools_add_silence, verify_file,
-            atmos::atmos_locate, atmos::atmos_inspect, atmos::atmos_status, atmos::atmos_cancel, atmos::atmos_start
+            catalog,
+            options,
+            auto_import,
+            multichannel_pick,
+            scan_folder,
+            probe,
+            downmix_default,
+            downmix_safe,
+            downmix_check,
+            queue_add,
+            queue_list,
+            queue_cancel,
+            queue_remove,
+            queue_clear,
+            queue_set_concurrency,
+            read_log,
+            write_text,
+            app_version,
+            open_docs,
+            set_tool_paths,
+            tool_status,
+            tools_info,
+            tools_pbr,
+            tools_trim,
+            tools_split,
+            tools_append,
+            tools_replace,
+            tools_stripe,
+            tools_restripe,
+            tools_add_silence,
+            verify_file,
+            atmos::atmos_locate,
+            atmos::atmos_inspect,
+            atmos::atmos_status,
+            atmos::atmos_cancel,
+            atmos::atmos_start
         ])
         .run(tauri::generate_context!())
         .expect("error while running Subwoofa");

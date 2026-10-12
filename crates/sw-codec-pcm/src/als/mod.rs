@@ -29,7 +29,9 @@ const MAX_ORDER: usize = 64;
 const CONFIG_LEN: usize = 34;
 
 /// MPEG-4 sampling frequency indices, for the audio specific config in MP4 files.
-const RATES: [u32; 13] = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+const RATES: [u32; 13] = [
+    96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+];
 
 /// Frame length in samples for a sample rate: about 85 ms, tried against 2048 and found slightly better.
 fn frame_length(rate: u32) -> usize {
@@ -73,13 +75,24 @@ impl AlsWriter {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "MPEG-4 ALS here holds 16 or 24 bit integer samples")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "MPEG-4 ALS here holds 16 or 24 bit integer samples",
+                ))
+            }
         };
         if params.total_frames > u32::MAX as u64 - 1 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "MPEG-4 ALS files hold at most 2^32 samples per channel"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "MPEG-4 ALS files hold at most 2^32 samples per channel",
+            ));
         }
         let mut out = BufWriter::new(File::create(path)?);
-        let is_mp4 = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("m4a"));
+        let is_mp4 = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("m4a"));
         let output = if is_mp4 {
             Output::Mp4(mp4_audio::write_start(&mut out, b"mp42")?)
         } else {
@@ -91,7 +104,11 @@ impl AlsWriter {
             out,
             output,
             bits,
-            cfg: Settings { max_order: MAX_ORDER, bits, table: coefficient_table(params.rate) },
+            cfg: Settings {
+                max_order: MAX_ORDER,
+                bits,
+                table: coefficient_table(params.rate),
+            },
             frame_len: frame_length(params.rate),
             pending: vec![Vec::new(); channels],
             history: vec![vec![0; MAX_ORDER]; channels],
@@ -103,7 +120,11 @@ impl AlsWriter {
 
     /// Codes one frame (every channel's block) and writes it.
     fn write_frame(&mut self, samples: &[Vec<i32>]) -> std::io::Result<()> {
-        let extended: Vec<Vec<i32>> = samples.iter().zip(&self.history).map(|(s, h)| [h.as_slice(), s].concat()).collect();
+        let extended: Vec<Vec<i32>> = samples
+            .iter()
+            .zip(&self.history)
+            .map(|(s, h)| [h.as_slice(), s].concat())
+            .collect();
         let mut frame = Vec::new();
         let mut c = 0;
         while c < extended.len() {
@@ -189,7 +210,11 @@ impl AlsWriter {
         info.extend(self.config());
 
         let seconds = self.params.total_frames as f64 / self.params.rate as f64;
-        let average = if seconds > 0.0 { (bytes as f64 * 8.0 / seconds) as u32 } else { 0 };
+        let average = if seconds > 0.0 {
+            (bytes as f64 * 8.0 / seconds) as u32
+        } else {
+            0
+        };
         let mut decoder = vec![0x40, 0x15, 0, 0, 0];
         decoder.extend_from_slice(&0u32.to_be_bytes());
         decoder.extend_from_slice(&average.to_be_bytes());
@@ -236,7 +261,11 @@ impl BlockWriter for AlsWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= self.frame_len {
-            let frame: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..self.frame_len).collect()).collect();
+            let frame: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..self.frame_len).collect())
+                .collect();
             self.write_frame(&frame)?;
         }
         Ok(())
@@ -282,7 +311,15 @@ mod tests {
 
     #[test]
     fn config_has_its_fixed_size() {
-        let params = Params { rate: 48_000, format: SampleFormat::Int16, total_frames: 1000, order: vec![0, 1], mask: 3, labels: vec![], time_reference: None };
+        let params = Params {
+            rate: 48_000,
+            format: SampleFormat::Int16,
+            total_frames: 1000,
+            order: vec![0, 1],
+            mask: 3,
+            labels: vec![],
+            time_reference: None,
+        };
         let dir = std::env::temp_dir().join(format!("sw_als_cfg_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let writer = AlsWriter::create(&dir.join("x.als"), params).unwrap();

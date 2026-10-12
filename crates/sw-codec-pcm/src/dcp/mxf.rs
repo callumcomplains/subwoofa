@@ -35,7 +35,10 @@ pub(super) struct Set {
 
 impl Set {
     pub fn new(key: &str) -> Set {
-        Set { key: label(key), body: Vec::new() }
+        Set {
+            key: label(key),
+            body: Vec::new(),
+        }
     }
 
     pub fn prop(&mut self, tag: u16, value: &[u8]) -> &mut Set {
@@ -94,8 +97,12 @@ pub(super) fn utf16(text: &str) -> Vec<u8> {
 fn random_bytes<const N: usize>() -> [u8; N] {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
-    let mut state = nanos ^ (std::process::id() as u64).rotate_left(32) ^ COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut state = nanos
+        ^ (std::process::id() as u64).rotate_left(32)
+        ^ COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
     let mut out = [0u8; N];
     for chunk in out.chunks_mut(8) {
         state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -129,7 +136,16 @@ pub(super) fn timestamp() -> [u8; 8] {
     let (days, rest) = (secs / 86_400, secs % 86_400);
     let (year, month, day) = civil_from_days(days as i64);
     let year = (year as u16).to_be_bytes();
-    [year[0], year[1], month as u8, day as u8, (rest / 3600) as u8, (rest % 3600 / 60) as u8, (rest % 60) as u8, 0]
+    [
+        year[0],
+        year[1],
+        month as u8,
+        day as u8,
+        (rest / 3600) as u8,
+        (rest % 3600 / 60) as u8,
+        (rest % 60) as u8,
+        0,
+    ]
 }
 
 /// Calendar date from days since 1970-01-01 (proleptic Gregorian; the usual civil-from-days algorithm).
@@ -141,7 +157,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_index = (5 * day_of_year + 2) / 153;
     let day = (day_of_year - (153 * month_index + 2) / 5 + 1) as u32;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 } as u32;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    } as u32;
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     (year, month, day)
 }
@@ -176,7 +196,13 @@ impl Partition {
         v.extend_from_slice(&1u16.to_be_bytes()); // major version
         v.extend_from_slice(&2u16.to_be_bytes()); // minor version
         v.extend_from_slice(&1u32.to_be_bytes()); // KAG size
-        for field in [self.this, self.previous, self.footer, self.header_bytes, self.index_bytes] {
+        for field in [
+            self.this,
+            self.previous,
+            self.footer,
+            self.header_bytes,
+            self.index_bytes,
+        ] {
             v.extend_from_slice(&field.to_be_bytes());
         }
         v.extend_from_slice(&self.index_sid.to_be_bytes());
@@ -207,7 +233,13 @@ pub(super) fn filler(used: usize, total: usize) -> Option<Vec<u8>> {
 }
 
 /// A constant-bit-rate index table segment: no entries, one fixed size for every edit unit.
-pub(super) fn index_segment(edit_rate: (u32, u32), duration: u64, edit_unit_bytes: u32, index_sid: u32, body_sid: u32) -> Vec<u8> {
+pub(super) fn index_segment(
+    edit_rate: (u32, u32),
+    duration: u64,
+    edit_unit_bytes: u32,
+    index_sid: u32,
+    body_sid: u32,
+) -> Vec<u8> {
     let mut s = Set::new("060e2b34025301010d01020101100100");
     s.prop(0x3c0a, &uuid());
     s.prop(0x3f0b, &rational(edit_rate.0, edit_rate.1));
@@ -280,7 +312,10 @@ mod tests {
             index_sid: 0,
             body_sid: 0,
             operational_pattern: label("060e2b34040101020d01020110000000"),
-            containers: vec![label("060e2b34040101010d01030102060100"), label("060e2b34040101030d010301027f0100")],
+            containers: vec![
+                label("060e2b34040101010d01030102060100"),
+                label("060e2b34040101030d010301027f0100"),
+            ],
         };
         assert_eq!(p.bytes().len(), 140);
     }

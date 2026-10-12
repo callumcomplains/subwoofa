@@ -5,8 +5,8 @@
 //! ADPCM, high-frequency VQ, joint intensity coding, transient mode (always "no transient").
 
 use crate::bits::BitWriter;
-use crate::qmf::{Analysis, BANDS};
 use crate::core_exact::{dequantize, dequantize_lfe, FixedLfe, FixedSynth};
+use crate::qmf::{Analysis, BANDS};
 use crate::tables::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -235,10 +235,15 @@ struct Plan {
 impl Encoder {
     pub fn new(cfg: Config) -> Result<Encoder, Error> {
         if sfreq_code(cfg.sample_rate).is_none() {
-            return Err(Error::Unsupported(format!("{} Hz is not a DTS core rate", cfg.sample_rate)));
+            return Err(Error::Unsupported(format!(
+                "{} Hz is not a DTS core rate",
+                cfg.sample_rate
+            )));
         }
         if !(1..=MAX_PRIMARY).contains(&cfg.channels) {
-            return Err(Error::Unsupported("the DTS core carries 1 to 5 primary channels".into()));
+            return Err(Error::Unsupported(
+                "the DTS core carries 1 to 5 primary channels".into(),
+            ));
         }
         if cfg.blocks != 16 && cfg.blocks != 32 {
             return Err(Error::Unsupported("blocks per frame must be 16 or 32".into()));
@@ -250,21 +255,31 @@ impl Encoder {
         let frame_bytes = (cfg.bitrate as u64 * samples as u64 / cfg.sample_rate as u64 / 8) as usize;
         let min = 40 + (60 + 4 * 32) * cfg.channels + if cfg.lfe { 12 } else { 0 };
         if cfg.xch && cfg.channels != 5 {
-            return Err(Error::Unsupported("the XCH extension adds a sixth channel to a 5.x core".into()));
+            return Err(Error::Unsupported(
+                "the XCH extension adds a sixth channel to a 5.x core".into(),
+            ));
         }
         if frame_bytes < min || frame_bytes > 16384 {
-            return Err(Error::Unsupported(format!("frame size of {frame_bytes} bytes is outside what {} channels need (>= {min})", cfg.channels)));
+            return Err(Error::Unsupported(format!(
+                "frame size of {frame_bytes} bytes is outside what {} channels need (>= {min})",
+                cfg.channels
+            )));
         }
         let lfe_decim = 64usize;
         let lfe_fir = lfe_decimator();
         Ok(Encoder {
-            analysis: (0..cfg.channels + usize::from(cfg.xch)).map(|_| Analysis::new(cfg.perfect)).collect(),
+            analysis: (0..cfg.channels + usize::from(cfg.xch))
+                .map(|_| Analysis::new(cfg.perfect))
+                .collect(),
             lfe_hist: vec![0.0; 512],
             lfe_pre: vec![0.0; LFE_ALIGN],
             frame_bytes,
             lfe_decim,
             lfe_fir,
-            mask_weight: std::env::var("SW_DTS_BETA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4),
+            mask_weight: std::env::var("SW_DTS_BETA")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.4),
             exact: None,
             last_offset: 30.0,
             last_core_pcm: Vec::new(),
@@ -282,7 +297,11 @@ impl Encoder {
     /// With `x96` the emulated decoder synthesises at twice the core rate (for 96 kHz lossless streams).
     pub fn enable_exact_decode(&mut self, x96: bool) {
         let n = self.cfg.channels;
-        self.exact = Some(ExactState { synth: (0..n).map(|_| FixedSynth::new(false, x96)).collect(), lfe: FixedLfe::new(), x96 });
+        self.exact = Some(ExactState {
+            synth: (0..n).map(|_| FixedSynth::new(false, x96)).collect(),
+            lfe: FixedLfe::new(),
+            x96,
+        });
     }
 
     pub fn frame_samples(&self) -> usize {
@@ -324,17 +343,25 @@ impl Encoder {
         let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
         {
             use rayon::prelude::*;
-            self.analysis.par_iter_mut().zip(sub.par_iter_mut()).zip(pcm.par_iter()).for_each(|((an, out), input)| {
-                for b in 0..blocks {
-                    let mut o = [0f64; BANDS];
-                    an.step(&input[b * 32..b * 32 + 32], &mut o);
-                    for (band, v) in o.iter().enumerate() {
-                        out[band][b] = v * SUBBAND_GAIN;
+            self.analysis
+                .par_iter_mut()
+                .zip(sub.par_iter_mut())
+                .zip(pcm.par_iter())
+                .for_each(|((an, out), input)| {
+                    for b in 0..blocks {
+                        let mut o = [0f64; BANDS];
+                        an.step(&input[b * 32..b * 32 + 32], &mut o);
+                        for (band, v) in o.iter().enumerate() {
+                            out[band][b] = v * SUBBAND_GAIN;
+                        }
                     }
-                }
-            });
+                });
         }
-        let lfe = if self.cfg.lfe { Some(self.lfe_samples(&pcm[nch])) } else { None };
+        let lfe = if self.cfg.lfe {
+            Some(self.lfe_samples(&pcm[nch]))
+        } else {
+            None
+        };
         self.encode_subbands(&sub, lfe)
     }
 
@@ -399,7 +426,11 @@ impl Encoder {
         T_SEARCH.fetch_add(t_a.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         self.last_offset = lo;
         if std::env::var_os("SW_DTS_DEBUG").is_some() {
-            let used: Vec<f64> = best.abits.iter().map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0).collect();
+            let used: Vec<f64> = best
+                .abits
+                .iter()
+                .map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0)
+                .collect();
             eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
         }
         best
@@ -419,7 +450,12 @@ impl Encoder {
             self.emulate_decoder(&best, lfe.as_ref());
             T_EMU.fetch_add(t_c.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
             if std::env::var_os("SW_TIMING").is_some() {
-                eprintln!("core: search {} ms, pack {} ms, emulate {} ms", T_SEARCH.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000, T_PACK.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000, T_EMU.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000);
+                eprintln!(
+                    "core: search {} ms, pack {} ms, emulate {} ms",
+                    T_SEARCH.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
+                    T_PACK.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
+                    T_EMU.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000
+                );
             }
         }
         bytes
@@ -435,7 +471,8 @@ impl Encoder {
         let mut vals = Vec::with_capacity(n_out);
         for d in 0..n_out {
             self.lfe_hist.drain(..self.lfe_decim);
-            self.lfe_hist.extend_from_slice(&pcm[d * self.lfe_decim..(d + 1) * self.lfe_decim]);
+            self.lfe_hist
+                .extend_from_slice(&pcm[d * self.lfe_decim..(d + 1) * self.lfe_decim]);
             let y: f64 = self.lfe_hist.iter().zip(self.lfe_fir.iter()).map(|(x, h)| x * h).sum();
             vals.push(y * LFE_GAIN);
         }
@@ -445,24 +482,45 @@ impl Encoder {
             idx += 1;
         }
         let step = SCALE_7[idx] as f64 * 0.035;
-        let q = vals.iter().map(|v| ((v / step).round() as i32).clamp(-128, 127)).collect();
+        let q = vals
+            .iter()
+            .map(|v| ((v / step).round() as i32).clamp(-128, 127))
+            .collect();
         (q, idx as u8)
     }
 
     /// Highest quality offset (dB) whose plan fits `budget` bits, with that plan. On a multi-core machine the
     /// candidates of each round are evaluated in parallel; resolution is 0.375 dB either way.
-    fn search_offset(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], budget: usize) -> (f64, Plan) {
+    fn search_offset(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        power: &[[f64; BANDS]],
+        peak: &[[f64; BANDS]],
+        budget: usize,
+    ) -> (f64, Plan) {
         use rayon::prelude::*;
         if rayon::current_num_threads() >= 6 {
             let base = self.last_offset;
-            let first: Vec<(f64, Plan)> = (-4..=4).into_par_iter().map(|i| { let o = base + 3.0 * i as f64; (o, self.make_plan(sub, power, peak, o)) }).collect();
+            let first: Vec<(f64, Plan)> = (-4..=4)
+                .into_par_iter()
+                .map(|i| {
+                    let o = base + 3.0 * i as f64;
+                    (o, self.make_plan(sub, power, peak, o))
+                })
+                .collect();
             let top_fit = first.iter().rposition(|(_, p)| p.bits <= budget);
             if let Some(i) = top_fit {
                 if i + 1 < first.len() {
                     // the answer lies between candidate i (fits) and i + 1 (does not): refine in eighths
                     let lo = first[i].0;
                     let mut best = (lo, first.into_iter().nth(i).unwrap().1);
-                    let fine: Vec<(f64, Plan)> = (1..8).into_par_iter().map(|j| { let o = lo + 3.0 * j as f64 / 8.0; (o, self.make_plan(sub, power, peak, o)) }).collect();
+                    let fine: Vec<(f64, Plan)> = (1..8)
+                        .into_par_iter()
+                        .map(|j| {
+                            let o = lo + 3.0 * j as f64 / 8.0;
+                            (o, self.make_plan(sub, power, peak, o))
+                        })
+                        .collect();
                     for (o, p) in fine {
                         if p.bits <= budget {
                             best = (o, p);
@@ -479,7 +537,14 @@ impl Encoder {
         self.search_sequential(sub, power, peak, budget, self.last_offset - 12.0)
     }
 
-    fn search_sequential(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], budget: usize, start: f64) -> (f64, Plan) {
+    fn search_sequential(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        power: &[[f64; BANDS]],
+        peak: &[[f64; BANDS]],
+        budget: usize,
+        start: f64,
+    ) -> (f64, Plan) {
         let mut lo = start;
         let mut best = self.make_plan(sub, power, peak, lo);
         let mut guard = 0;
@@ -553,7 +618,13 @@ impl Encoder {
         self.finish_plan(sub, abits, peak, blocks)
     }
 
-    fn finish_plan(&self, sub: &[Vec<Vec<f64>>], abits: Vec<[u8; BANDS]>, peak: &[[f64; BANDS]], blocks: usize) -> Plan {
+    fn finish_plan(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        abits: Vec<[u8; BANDS]>,
+        peak: &[[f64; BANDS]],
+        blocks: usize,
+    ) -> Plan {
         let nch = self.nplan();
         let mut scale_idx = vec![[0u8; BANDS]; nch];
         let mut q = vec![vec![Vec::new(); BANDS]; nch];
@@ -571,7 +642,10 @@ impl Encoder {
                 }
                 scale_idx[ch][b] = idx as u8;
                 let delta = SCALE_7[idx] as f64 * step;
-                q[ch][b] = sub[ch][b].iter().map(|v| ((v / delta).round() as i32).clamp(-(mq as i32), mq as i32)).collect();
+                q[ch][b] = sub[ch][b]
+                    .iter()
+                    .map(|v| ((v / delta).round() as i32).clamp(-(mq as i32), mq as i32))
+                    .collect();
             }
         }
         // codebook choices
@@ -620,7 +694,11 @@ impl Encoder {
                     continue;
                 }
                 let g = GROUP_SIZE[k - 1];
-                let plain = if k <= 7 { nsamp / 4 * BLOCK_BITS[k - 1] as usize } else { nsamp * raw_bits(k) as usize };
+                let plain = if k <= 7 {
+                    nsamp / 4 * BLOCK_BITS[k - 1] as usize
+                } else {
+                    nsamp * raw_bits(k) as usize
+                };
                 let off = (QUANT_HUFF[k - 1][0].len() as i32 - 1) / 2;
                 let mut best = (plain, g as u8);
                 for s in 0..g {
@@ -664,7 +742,14 @@ impl Encoder {
                 bits = usize::MAX / 4; // XChFSIZE is 10 bits
             }
         }
-        Plan { abits, scale_idx, q, sel, bhuff, bits }
+        Plan {
+            abits,
+            scale_idx,
+            q,
+            sel,
+            bhuff,
+            bits,
+        }
     }
 
     /// Frame header + primary audio coding header + fixed parts of the subframe.
@@ -728,7 +813,11 @@ impl Encoder {
         w.put(cfg.amode as u32, 6);
         w.put(sfreq_code(cfg.sample_rate).unwrap(), 4);
         // 1234.8 kbit/s is the 14-bit DTS CD stream, labelled with the disc's 1411.2 kbit/s rate code
-        let rate_code = if cfg.bitrate == 1_234_800 { 22 } else { BIT_RATES.iter().take(25).position(|r| *r >= cfg.bitrate).unwrap_or(29) as u32 };
+        let rate_code = if cfg.bitrate == 1_234_800 {
+            22
+        } else {
+            BIT_RATES.iter().take(25).position(|r| *r >= cfg.bitrate).unwrap_or(29) as u32
+        };
         w.put(rate_code, 5);
         w.put(0, 1); // fixed bit
         w.put(0, 1); // dynamic range coefficients
@@ -741,7 +830,11 @@ impl Encoder {
         w.put(if cfg.lfe { 2 } else { 0 }, 2); // LFE interpolation by 64
         w.put(1, 1); // predictor history valid
         w.put(u32::from(cfg.perfect), 1); // perfect (1) or non-perfect (0) reconstruction bank
-        let (vernum, dn) = if cfg.dialnorm >= -15 { (7, -cfg.dialnorm) } else { (6, -cfg.dialnorm - 16) };
+        let (vernum, dn) = if cfg.dialnorm >= -15 {
+            (7, -cfg.dialnorm)
+        } else {
+            (6, -cfg.dialnorm - 16)
+        };
         w.put(vernum, 4);
         w.put(1, 2); // copy history
         let pcmr = match (cfg.pcm_bits, cfg.es) {
@@ -855,7 +948,11 @@ impl Encoder {
         if let Some(aux) = &self.aux {
             // a decoder looks for the sync word at the next 32-bit boundary after the size field
             let at = bytes.len().div_ceil(4) * 4;
-            assert!(at <= self.aux_sync(aux), "frame overflow before the auxiliary data: {at} > {}", self.aux_sync(aux));
+            assert!(
+                at <= self.aux_sync(aux),
+                "frame overflow before the auxiliary data: {at} > {}",
+                self.aux_sync(aux)
+            );
             bytes.resize(at, 0);
             bytes.extend_from_slice(&aux.block());
         }
@@ -867,7 +964,12 @@ impl Encoder {
             bytes.resize(start, 0);
             bytes.extend_from_slice(&self.pack_xch(plan, self.frame_bytes - start));
         }
-        assert!(bytes.len() <= self.frame_bytes, "frame overflow: {} > {}", bytes.len(), self.frame_bytes);
+        assert!(
+            bytes.len() <= self.frame_bytes,
+            "frame overflow: {} > {}",
+            bytes.len(),
+            self.frame_bytes
+        );
         bytes.resize(self.frame_bytes, 0);
         bytes
     }
@@ -882,15 +984,19 @@ impl Encoder {
         let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
         {
             use rayon::prelude::*;
-            self.analysis.par_iter_mut().zip(sub.par_iter_mut()).zip(pcm.par_iter()).for_each(|((an, out), input)| {
-                for b in 0..blocks {
-                    let mut o = [0f64; BANDS];
-                    an.step(&input[b * 32..b * 32 + 32], &mut o);
-                    for (band, v) in o.iter().enumerate() {
-                        out[band][b] = v * SUBBAND_GAIN;
+            self.analysis
+                .par_iter_mut()
+                .zip(sub.par_iter_mut())
+                .zip(pcm.par_iter())
+                .for_each(|((an, out), input)| {
+                    for b in 0..blocks {
+                        let mut o = [0f64; BANDS];
+                        an.step(&input[b * 32..b * 32 + 32], &mut o);
+                        for (band, v) in o.iter().enumerate() {
+                            out[band][b] = v * SUBBAND_GAIN;
+                        }
                     }
-                }
-            });
+                });
         }
         self.frame_bytes = total_bytes;
         self.x96_reserve = 0;

@@ -9,7 +9,10 @@ pub(crate) struct SampleCrc {
 
 impl SampleCrc {
     pub fn new(bits: u32) -> SampleCrc {
-        SampleCrc { state: 0xFFFF_FFFF, width: bits as usize / 8 }
+        SampleCrc {
+            state: 0xFFFF_FFFF,
+            width: bits as usize / 8,
+        }
     }
 
     /// Adds a stretch of samples (`channels[channel][frame]`).
@@ -19,7 +22,11 @@ impl SampleCrc {
                 for &byte in &channel[n].to_le_bytes()[..self.width] {
                     self.state ^= byte as u32;
                     for _ in 0..8 {
-                        self.state = if self.state & 1 != 0 { (self.state >> 1) ^ 0xEDB8_8320 } else { self.state >> 1 };
+                        self.state = if self.state & 1 != 0 {
+                            (self.state >> 1) ^ 0xEDB8_8320
+                        } else {
+                            self.state >> 1
+                        };
                     }
                 }
             }

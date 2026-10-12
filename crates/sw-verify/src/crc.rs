@@ -20,7 +20,8 @@ static ANSI: [u16; 256] = table(0x8005);
 static CCITT: [u16; 256] = table(0x1021);
 
 fn run(t: &[u16; 256], init: u16, data: &[u8]) -> u16 {
-    data.iter().fold(init, |c, b| (c << 8) ^ t[((c >> 8) as u8 ^ b) as usize])
+    data.iter()
+        .fold(init, |c, b| (c << 8) ^ t[((c >> 8) as u8 ^ b) as usize])
 }
 
 /// AC-3 / E-AC-3: x^16 + x^15 + x^2 + 1, register starts at zero. A block followed by its own CRC leaves zero.
@@ -56,7 +57,15 @@ mod tests {
     #[test]
     fn mlp_checksum_matches_a_real_28_byte_major_sync() {
         // the 5.1 major sync written by an independent encoder (see the TrueHD crate's own test)
-        let real: Vec<u8> = (0..28).map(|i| u8::from_str_radix(&"f8726fba0007800fb752000000008c7f203c0000000000000000e4d1"[2 * i..2 * i + 2], 16).unwrap()).collect();
+        let real: Vec<u8> = (0..28)
+            .map(|i| {
+                u8::from_str_radix(
+                    &"f8726fba0007800fb752000000008c7f203c0000000000000000e4d1"[2 * i..2 * i + 2],
+                    16,
+                )
+                .unwrap()
+            })
+            .collect();
         assert!(mlp_major_sync_ok(&real));
         let mut bad = real.clone();
         bad[9] ^= 1;

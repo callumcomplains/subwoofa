@@ -5,7 +5,11 @@ use sw_codec_dts::ma_core::{MaCoreConfig, MaCoreEncoder};
 use sw_core::{ChannelLayout, Downmix};
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
@@ -14,7 +18,9 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
             *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let noise = ((*seed >> 12) as i32 & 0xFFF) - 2048;
             let t = i as f64 / 48_000.0;
-            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0 + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0) as i32 + noise * 4
+            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0
+                + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0) as i32
+                + noise * 4
         })
         .collect()
 }
@@ -46,7 +52,6 @@ fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
     layout.channels.iter().filter(|c| rank(**c) < me).count()
 }
 
-
 fn core_roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize, bit_res: u32) {
     core_roundtrip_x(name, layout_id, rate, frames, bit_res, false)
 }
@@ -61,12 +66,29 @@ fn core_roundtrip_dm(name: &str, layout_id: &str, rate: u32, frames: usize, bit_
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout_with(layout, &downmix);
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: rate, bit_res, core_bitrate: 1_509_000, dialnorm: 0, x96, wide_remap: false, downmix }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig {
+        layout,
+        sample_rate: rate,
+        bit_res,
+        core_bitrate: 1_509_000,
+        dialnorm: 0,
+        x96,
+        wide_remap: false,
+        downmix,
+    })
+    .unwrap();
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 7u32;
     let shift = 24 - bit_res;
-    let sigs: Vec<Vec<i32>> = (0..nch).map(|c| signal(c, n * frames, &mut seed).into_iter().map(|v| v >> shift).collect()).collect();
+    let sigs: Vec<Vec<i32>> = (0..nch)
+        .map(|c| {
+            signal(c, n * frames, &mut seed)
+                .into_iter()
+                .map(|v| v >> shift)
+                .collect()
+        })
+        .collect();
     let mut stream = Vec::new();
     for f in 0..frames {
         let part: Vec<Vec<i32>> = sigs.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
@@ -81,11 +103,29 @@ fn core_roundtrip_dm(name: &str, layout_id: &str, rate: u32, frames: usize, bit_
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.dts");
     std::fs::write(&path, &stream).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "warning", "-i"])
+        .arg(&path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.stderr.is_empty(), "{name}: ffmpeg complained: {}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<i32> = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
-    assert!(dec.len() >= n * frames * nch, "{name}: decoded length {} < {}", dec.len(), n * frames * nch);
+    assert!(
+        out.stderr.is_empty(),
+        "{name}: ffmpeg complained: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dec: Vec<i32> = out
+        .stdout
+        .chunks_exact(3)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8)
+        .collect();
+    assert!(
+        dec.len() >= n * frames * nch,
+        "{name}: decoded length {} < {}",
+        dec.len(),
+        n * frames * nch
+    );
     let mut bad = 0usize;
     for (j, &lc) in map.order.iter().enumerate() {
         let pos = out_position(layout, lc);
@@ -95,7 +135,11 @@ fn core_roundtrip_dm(name: &str, layout_id: &str, rate: u32, frames: usize, bit_
             if (dec[i * nch + pos] >> shift) != sigs[j][i] {
                 bad += 1;
                 if bad < 5 || i % 2048 == 0 {
-                    eprintln!("{name}: channel {lc} differs at sample {i}: got {} want {}", dec[i * nch + lc], sigs[j][i]);
+                    eprintln!(
+                        "{name}: channel {lc} differs at sample {i}: got {} want {}",
+                        dec[i * nch + lc],
+                        sigs[j][i]
+                    );
                 }
             }
         }
@@ -154,7 +198,17 @@ fn seven_one_embedded_five_one_downmix() {
     let layout = ChannelLayout::find("7.1-side-rear").unwrap();
     let map = map_layout(layout);
     let frames = 16;
-    let mut enc = MaCoreEncoder::new(MaCoreConfig { layout, sample_rate: 48_000, bit_res: 24, core_bitrate: 1_509_000, dialnorm: 0 , x96: false, wide_remap: false, downmix: Default::default() }).unwrap();
+    let mut enc = MaCoreEncoder::new(MaCoreConfig {
+        layout,
+        sample_rate: 48_000,
+        bit_res: 24,
+        core_bitrate: 1_509_000,
+        dialnorm: 0,
+        x96: false,
+        wide_remap: false,
+        downmix: Default::default(),
+    })
+    .unwrap();
     let n = enc.frame_samples();
     let mut seed = 5u32;
     let sigs: Vec<Vec<i32>> = (0..8).map(|c| signal(c, n * frames, &mut seed)).collect();
@@ -170,9 +224,18 @@ fn seven_one_embedded_five_one_downmix() {
     }
     let path = std::env::temp_dir().join(format!("sw_dts_dmix_{}.dts", std::process::id()));
     std::fs::write(&path, &stream).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-downmix", "5.1(side)", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "warning", "-downmix", "5.1(side)", "-i"])
+        .arg(&path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
-    let dec: Vec<i32> = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    let dec: Vec<i32> = out
+        .stdout
+        .chunks_exact(3)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8)
+        .collect();
     assert_eq!(dec.len(), n * frames * 6);
     // coded channel order is C L R LFE Lss Rss | Lsr Rsr; the decoder outputs L R C LFE Ls Rs
     let _ = map;

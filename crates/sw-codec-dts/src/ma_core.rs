@@ -7,8 +7,8 @@
 use crate::encoder::{Config as CoreConfig, Encoder as CoreEncoder};
 use crate::exss::{exss_frame, ExssParams};
 use crate::ma::map_layout_with;
-use crate::native::map_channels as core_map_channels;
 use crate::ma::Hier;
+use crate::native::map_channels as core_map_channels;
 use crate::qmf64::{Analysis64, BANDS as BANDS64};
 use crate::x96::X96Encoder;
 use crate::xll::{XllConfig, XllEncoder};
@@ -31,7 +31,11 @@ pub struct MaCoreConfig {
 
 /// Half-length of the decimator (linear phase, Kaiser window, `2 * half + 1` taps) for a rate ratio of 2 or 4.
 fn half_len(ratio: usize) -> usize {
-    if ratio >= 4 { 383 } else { 191 }
+    if ratio >= 4 {
+        383
+    } else {
+        191
+    }
 }
 
 fn bessel_i0(x: f64) -> f64 {
@@ -55,7 +59,11 @@ fn decimator_taps(frac: f64, ratio: usize) -> Vec<f64> {
     let mut h = Vec::with_capacity(2 * half + 1);
     for i in 0..=2 * half {
         let m = i as f64 - half as f64 - frac;
-        let sinc = if m == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m) };
+        let sinc = if m == 0.0 {
+            2.0 * fc
+        } else {
+            (2.0 * std::f64::consts::PI * fc * m).sin() / (std::f64::consts::PI * m)
+        };
         let r = m / half as f64;
         let w = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
         h.push(sinc * w);
@@ -103,7 +111,6 @@ pub struct MaCoreEncoder {
     phase: usize,
     emitted: usize,
     t_core: std::time::Duration,
-    t_xll: std::time::Duration,
     /// Lossless stage of the previous batch of frames, running while the next batch is core-encoded.
     pending: Option<std::thread::JoinHandle<Vec<Vec<u8>>>>,
     /// Source samples already discarded from the front of `buf`.
@@ -134,20 +141,32 @@ impl MaCoreEncoder {
         let base_chs: Vec<sw_core::Channel> = xmap.order[..base].iter().map(|&i| cfg.layout.channels[i]).collect();
         let cmap = core_map_channels(&base_chs, cfg.layout.id)?;
         if base != cfg.layout.channels.len() && xmap.hier.is_none() {
-            return Err(crate::Error::Unsupported(format!("layout '{}' needs the DTS extension channels (not implemented yet)", cfg.layout.id)));
+            return Err(crate::Error::Unsupported(format!(
+                "layout '{}' needs the DTS extension channels (not implemented yet)",
+                cfg.layout.id
+            )));
         }
         let nprim = cmap.order.len();
         // 6.x discrete: the centre surround also rides in the core as an XCH extension, so ES decoders can play it
         // from the core alone (the lossless data still carries it as a set of its own)
-        let xch_x = (cfg.layout.id.starts_with("6.") && cfg.layout.kind == sw_core::layout::LayoutKind::Discrete && !cfg.x96)
-            .then(|| xmap.order.iter().position(|&i| cfg.layout.channels[i] == sw_core::Channel::Cs))
-            .flatten()
-            .filter(|&x| x >= base);
+        let xch_x =
+            (cfg.layout.id.starts_with("6.") && cfg.layout.kind == sw_core::layout::LayoutKind::Discrete && !cfg.x96)
+                .then(|| {
+                    xmap.order
+                        .iter()
+                        .position(|&i| cfg.layout.channels[i] == sw_core::Channel::Cs)
+                })
+                .flatten()
+                .filter(|&x| x >= base);
         let ratio = match cfg.sample_rate {
             44_100 | 48_000 => 1,
             88_200 | 96_000 => 2,
             176_400 | 192_000 => 4,
-            r => return Err(crate::Error::Unsupported(format!("{r} Hz is not supported by DTS-HD MA yet"))),
+            r => {
+                return Err(crate::Error::Unsupported(format!(
+                    "{r} Hz is not supported by DTS-HD MA yet"
+                )))
+            }
         };
         let mut core = CoreEncoder::new(CoreConfig {
             sample_rate: cfg.sample_rate / ratio as u32,
@@ -163,14 +182,25 @@ impl MaCoreEncoder {
             perfect: false,
             blocks: 16,
         })?;
-        core.set_aux_downmix(crate::ma::core_aux(&cfg.downmix, cfg.layout, cmap.amode, cmap.lfe.is_some(), xch_x.is_some()));
+        core.set_aux_downmix(crate::ma::core_aux(
+            &cfg.downmix,
+            cfg.layout,
+            cmap.amode,
+            cmap.lfe.is_some(),
+            xch_x.is_some(),
+        ));
         let x96 = if cfg.x96 && ratio == 2 {
             let bytes = (core.frame_bytes() / 8).max(96) & !3;
             core.keep_residual = true;
             core.x96_reserve = bytes;
             let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
             let delay = ext[0].delay();
-            Some(X96State { ext, enc: X96Encoder::new(16), bytes, delay })
+            Some(X96State {
+                ext,
+                enc: X96Encoder::new(16),
+                bytes,
+                delay,
+            })
         } else {
             None
         };
@@ -182,23 +212,65 @@ impl MaCoreEncoder {
                 if x >= base {
                     return None;
                 }
-                Some(cmap.order.iter().position(|&o| o == x).or_else(|| (cmap.lfe == Some(x)).then_some(nprim)).expect("layout channel missing from the core"))
+                Some(
+                    cmap.order
+                        .iter()
+                        .position(|&o| o == x)
+                        .or_else(|| (cmap.lfe == Some(x)).then_some(nprim))
+                        .expect("layout channel missing from the core"),
+                )
             })
             .collect();
-        let xll_cfg = XllConfig { sample_rate: cfg.sample_rate, bit_res: cfg.bit_res, frame_samples: n, sets: xmap.xll_sets(true) };
-        let exss = ExssParams { sample_rate: cfg.sample_rate, channels: nch, bit_res: cfg.bit_res, spk_mask: xmap.exss_mask, with_core: true, dialnorm: (-cfg.dialnorm) as u32, frame_duration_code: 0, x96_in_core: x96.is_some(), xch_in_core: xch_x.is_some(), secondary: false, extras: crate::exss::ExssExtras { min_header: 32, emb_5_1: xmap.hier.as_ref().map_or(false, |h| h.extras), emb_stereo: xmap.hier.as_ref().map_or(false, |h| h.stereo), wide_remap: cfg.wide_remap, repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
+        let xll_cfg = XllConfig {
+            sample_rate: cfg.sample_rate,
+            bit_res: cfg.bit_res,
+            frame_samples: n,
+            sets: xmap.xll_sets(true),
+        };
+        let exss = ExssParams {
+            sample_rate: cfg.sample_rate,
+            channels: nch,
+            bit_res: cfg.bit_res,
+            spk_mask: xmap.exss_mask,
+            with_core: true,
+            dialnorm: (-cfg.dialnorm) as u32,
+            frame_duration_code: 0,
+            x96_in_core: x96.is_some(),
+            xch_in_core: xch_x.is_some(),
+            secondary: false,
+            extras: crate::exss::ExssExtras {
+                min_header: 32,
+                emb_5_1: xmap.hier.as_ref().map_or(false, |h| h.extras),
+                emb_stereo: xmap.hier.as_ref().map_or(false, |h| h.stereo),
+                wide_remap: cfg.wide_remap,
+                repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+                ..Default::default()
+            },
+        };
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
         let mut frac = 0.0;
         let (l48, phase) = if ratio == 1 {
             (core.delay(), 0)
         } else {
             let l48 = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(if ratio == 4 && std::env::var_os("SW_NOB0").is_some() { 14.5 } else if ratio == 4 { 0.0 } else { 0.5 });
+            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(
+                if ratio == 4 && std::env::var_os("SW_NOB0").is_some() {
+                    14.5
+                } else if ratio == 4 {
+                    0.0
+                } else {
+                    0.5
+                },
+            );
             frac = phase - phase.floor();
             (l48, phase.floor() as usize)
         };
         let half = half_len(ratio);
-        let mut lookahead = if ratio == 1 { l48 } else { ratio * (l48 + 1) + phase + half + 2 };
+        let mut lookahead = if ratio == 1 {
+            l48
+        } else {
+            ratio * (l48 + 1) + phase + half + 2
+        };
         if let Some(x) = &x96 {
             lookahead = lookahead.max(x.delay + 64 * 16 + 64);
         }
@@ -206,7 +278,11 @@ impl MaCoreEncoder {
             core,
             exss,
             buf: vec![Vec::new(); nch],
-            cbuf: if xmap.hier.as_ref().map_or(false, |h| h.stereo) { vec![Vec::new(); nch] } else { Vec::new() },
+            cbuf: if xmap.hier.as_ref().map_or(false, |h| h.stereo) {
+                vec![Vec::new(); nch]
+            } else {
+                Vec::new()
+            },
             resid: match &xmap.hier {
                 Some(h) => h.sets[xmap.resid_set].clone(),
                 None => 0..base,
@@ -218,14 +294,24 @@ impl MaCoreEncoder {
             ratio,
             half,
             from_band0: ratio == 4 && std::env::var_os("SW_NOB0").is_none(),
-            taps_b0: if ratio == 4 { decimator_taps(frac, 2) } else { Vec::new() },
-            cgain: std::env::var("SW_CGAIN").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
-            taps: if ratio >= 2 { decimator_taps(frac, ratio) } else { Vec::new() },
+            taps_b0: if ratio == 4 {
+                decimator_taps(frac, 2)
+            } else {
+                Vec::new()
+            },
+            cgain: std::env::var("SW_CGAIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0),
+            taps: if ratio >= 2 {
+                decimator_taps(frac, ratio)
+            } else {
+                Vec::new()
+            },
             l48,
             phase,
             emitted: 0,
             t_core: std::time::Duration::ZERO,
-            t_xll: std::time::Duration::ZERO,
             pending: None,
             dropped: 0,
             xll_cfg,
@@ -297,7 +383,10 @@ impl MaCoreEncoder {
     }
 
     fn flush_pending(&mut self) -> Vec<Vec<u8>> {
-        self.pending.take().map(|h| h.join().expect("lossless worker panicked")).unwrap_or_default()
+        self.pending
+            .take()
+            .map(|h| h.join().expect("lossless worker panicked"))
+            .unwrap_or_default()
     }
 
     /// Analyse the (core-domain) programme with the 64-band bank, subtract what the core coded in the lower
@@ -310,7 +399,12 @@ impl MaCoreEncoder {
         let hier = &self.hier;
         let bufs = if self.cbuf.is_empty() { &self.buf } else { &self.cbuf };
         let deq = &self.core.last_deq;
-        let work: Vec<(usize, usize)> = self.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.filter(|s| *s < nprim).map(|s| (x, s))).collect();
+        let work: Vec<(usize, usize)> = self
+            .xll_to_core
+            .iter()
+            .enumerate()
+            .filter_map(|(x, slot)| slot.filter(|s| *s < nprim).map(|s| (x, s)))
+            .collect();
         let x96 = self.x96.as_mut().unwrap();
         let delay = x96.delay;
         let _ = n;
@@ -318,7 +412,9 @@ impl MaCoreEncoder {
         let jobs: Vec<(usize, usize, &mut Analysis64, &mut Vec<Vec<f64>>)> = {
             let mut anas: Vec<Option<&mut Analysis64>> = x96.ext.iter_mut().map(Some).collect();
             let mut outs: Vec<Option<&mut Vec<Vec<f64>>>> = resid.iter_mut().map(Some).collect();
-            work.iter().map(|&(x, slot)| (x, slot, anas[slot].take().unwrap(), outs[slot].take().unwrap())).collect()
+            work.iter()
+                .map(|&(x, slot)| (x, slot, anas[slot].take().unwrap(), outs[slot].take().unwrap()))
+                .collect()
         };
         jobs.into_par_iter().for_each(|(x, slot, ana, out)| {
             let g = gain0 * hier.as_ref().map_or(1.0, |h| h.core_gain(x));
@@ -327,7 +423,11 @@ impl MaCoreEncoder {
             let input: Vec<f64> = (0..blocks * 64)
                 .map(|i| {
                     let idx = start + i as isize;
-                    if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] as f64 * g } else { 0.0 }
+                    if idx >= 0 && (idx as usize) < src.len() {
+                        src[idx as usize] as f64 * g
+                    } else {
+                        0.0
+                    }
                 })
                 .collect();
             let mut bands = ana.analyse_blocks(&input);
@@ -416,8 +516,15 @@ impl MaCoreEncoder {
         let inputs: Vec<(usize, usize, Vec<f64>)> = {
             use rayon::prelude::*;
             let me: &MaCoreEncoder = &*self;
-            let work: Vec<(usize, usize)> = me.xll_to_core.iter().enumerate().filter_map(|(x, slot)| slot.map(|s| (x, s))).collect();
-            work.into_par_iter().map(|(x, slot)| (x, slot, me.core_input(x, me.emitted))).collect()
+            let work: Vec<(usize, usize)> = me
+                .xll_to_core
+                .iter()
+                .enumerate()
+                .filter_map(|(x, slot)| slot.map(|s| (x, s)))
+                .collect();
+            work.into_par_iter()
+                .map(|(x, slot)| (x, slot, me.core_input(x, me.emitted)))
+                .collect()
         };
         for (x, slot, mut v) in inputs {
             if let Some(h) = &self.hier {
@@ -451,7 +558,11 @@ impl MaCoreEncoder {
                     Some(slot) => {
                         let c = &self.core.last_core_pcm[slot];
                         debug_assert_eq!(c.len(), half);
-                        (0..half).map(|i| (((c[i] as i64 + round as i64) >> self.shift) as i32).clamp(-(1 << 23), (1 << 23) - 1)).collect::<Vec<i32>>()
+                        (0..half)
+                            .map(|i| {
+                                (((c[i] as i64 + round as i64) >> self.shift) as i32).clamp(-(1 << 23), (1 << 23) - 1)
+                            })
+                            .collect::<Vec<i32>>()
                     }
                 })
                 .collect();
@@ -489,13 +600,18 @@ impl MaCoreEncoder {
                         (0..n)
                             .map(|i| {
                                 let up = ((c[i] as i64 * inv + (1 << 15)) >> 16) as i32;
-                                let core = (((up as i64 + round as i64) >> self.shift) as i32).clamp(-(1 << 23), (1 << 23) - 1);
+                                let core = (((up as i64 + round as i64) >> self.shift) as i32)
+                                    .clamp(-(1 << 23), (1 << 23) - 1);
                                 self.buf[x][start + i] - core
                             })
                             .collect(),
                     )
                 }
-                None => resid.push((0..n).map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift)).collect()),
+                None => resid.push(
+                    (0..n)
+                        .map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift))
+                        .collect(),
+                ),
             }
         }
         if let Some(path) = std::env::var_os("SW_DUMP_RESID") {
@@ -522,7 +638,6 @@ impl MaCoreEncoder {
         (core_bytes, resid, None)
     }
 }
-
 
 /// Lossless coding of a batch of independent frames on the rayon pool; returns the finished stream frames.
 fn xll_stage(jobs: Vec<Job>, cfg: XllConfig, exss: ExssParams) -> Vec<Vec<u8>> {

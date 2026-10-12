@@ -8,7 +8,11 @@ pub struct BitWriter {
 
 impl BitWriter {
     pub fn new() -> Self {
-        BitWriter { buf: Vec::with_capacity(4096), acc: 0, nacc: 0 }
+        BitWriter {
+            buf: Vec::with_capacity(4096),
+            acc: 0,
+            nacc: 0,
+        }
     }
 
     /// Append the low `n` bits of `v` (n <= 32).
@@ -29,7 +33,11 @@ impl BitWriter {
 
     /// Pad with zero bits to `total_bits`, then return the bytes. Panics if already longer.
     pub fn finish_padded(mut self, total_bits: usize) -> Vec<u8> {
-        assert!(self.bit_len() <= total_bits, "bit overflow: {} > {total_bits}", self.bit_len());
+        assert!(
+            self.bit_len() <= total_bits,
+            "bit overflow: {} > {total_bits}",
+            self.bit_len()
+        );
         while self.bit_len() < total_bits {
             let n = (total_bits - self.bit_len()).min(32) as u32;
             self.put(0, n);

@@ -73,7 +73,6 @@ pub struct Hra96Config {
 
 pub struct Hra96Encoder {
     kind: Hra96Kind,
-    nprim: usize,
     core: CoreEncoder,
     /// The encoder of the rear pair (7.x only).
     rear: Option<CoreEncoder>,
@@ -103,19 +102,55 @@ pub struct Hra96Encoder {
     timing: [std::time::Duration; 5],
 }
 
-fn core_config(amode: u8, nprim: usize, es: bool, xch: bool, has_lfe: bool, dialnorm: i32, pcm_bits: u32) -> CoreConfig {
-    CoreConfig { sample_rate: 48_000, amode, channels: nprim, lfe: has_lfe, bitrate: 1_509_000, dialnorm, pcm_bits, es, xch, perfect: false, blocks: 16 }
+fn core_config(
+    amode: u8,
+    nprim: usize,
+    es: bool,
+    xch: bool,
+    has_lfe: bool,
+    dialnorm: i32,
+    pcm_bits: u32,
+) -> CoreConfig {
+    CoreConfig {
+        sample_rate: 48_000,
+        amode,
+        channels: nprim,
+        lfe: has_lfe,
+        bitrate: 1_509_000,
+        dialnorm,
+        pcm_bits,
+        es,
+        xch,
+        perfect: false,
+        blocks: 16,
+    }
 }
 
 impl Hra96Encoder {
     pub fn new(cfg: Hra96Config) -> Result<Hra96Encoder, Error> {
         let has_lfe = cfg.has_lfe;
         let es = matches!(cfg.kind, Hra96Kind::Matrix | Hra96Kind::Discrete) || cfg.core_es;
-        let mut core = CoreEncoder::new(core_config(cfg.amode, cfg.nprim, es, cfg.kind == Hra96Kind::Discrete, has_lfe, cfg.dialnorm, cfg.pcm_bits))?;
+        let mut core = CoreEncoder::new(core_config(
+            cfg.amode,
+            cfg.nprim,
+            es,
+            cfg.kind == Hra96Kind::Discrete,
+            has_lfe,
+            cfg.dialnorm,
+            cfg.pcm_bits,
+        ))?;
         core.keep_residual = true;
         core.set_aux_downmix(cfg.aux.clone());
         let rear = if cfg.kind == Hra96Kind::Rear {
-            let mut r = CoreEncoder::new(CoreConfig { amode: 2, channels: 2, lfe: false, bitrate: 1_536_000, es: false, xch: false, ..core_config(2, 2, false, false, false, cfg.dialnorm, cfg.pcm_bits) })?;
+            let mut r = CoreEncoder::new(CoreConfig {
+                amode: 2,
+                channels: 2,
+                lfe: false,
+                bitrate: 1_536_000,
+                es: false,
+                xch: false,
+                ..core_config(2, 2, false, false, false, cfg.dialnorm, cfg.pcm_bits)
+            })?;
             r.keep_residual = true;
             Some(r)
         } else {
@@ -123,7 +158,10 @@ impl Hra96Encoder {
         };
         let n = core.frame_samples() * 2;
         let l48: usize = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-        let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+        let phase: f64 = std::env::var("SW_PHASE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.5);
         let frac = phase - phase.floor();
         let phase = phase.floor() as usize;
         let nprim = cfg.nprim;
@@ -132,7 +170,12 @@ impl Hra96Encoder {
         let extra_ana: Vec<Analysis64> = (0..cfg.kind.extra_channels()).map(|_| Analysis64::new()).collect();
         let ana_delay = core_ana[0].delay();
         let lookahead = (2 * (l48 + 1) + phase + HALF + 2).max(ana_delay + 64 * 16 + 64);
-        let params = cfg.xxch.clone().unwrap_or(XxchParams { core_mask: 0, spk_mask: 0, mask_bits: 9, dmix: None });
+        let params = cfg.xxch.clone().unwrap_or(XxchParams {
+            core_mask: 0,
+            spk_mask: 0,
+            mask_bits: 9,
+            dmix: None,
+        });
         // size of the extension substream header (what the components do not account for)
         let overhead = match cfg.kind {
             Hra96Kind::Rear => exss_frame_xxch_x96(&cfg.exss, &[0u8; 4], &[0u8; 4]).len() - 8,
@@ -149,7 +192,6 @@ impl Hra96Encoder {
         }
         Ok(Hra96Encoder {
             kind: cfg.kind,
-            nprim,
             core,
             rear,
             core_ana,
@@ -211,7 +253,10 @@ impl Hra96Encoder {
             out.push(self.next_frame());
         }
         if std::env::var_os("SW_TIMING").is_some() {
-            eprintln!("hra96 timing: decimate {:?}, core+xxch {:?}, 64-band analysis {:?}, x96 coding {:?}", self.timing[0], self.timing[1], self.timing[2], self.timing[3]);
+            eprintln!(
+                "hra96 timing: decimate {:?}, core+xxch {:?}, 64-band analysis {:?}, x96 coding {:?}",
+                self.timing[0], self.timing[1], self.timing[2], self.timing[3]
+            );
         }
         out
     }
@@ -237,13 +282,24 @@ impl Hra96Encoder {
 
     /// 64-band analysis of one frame of a channel, aligned with what the decoder's synthesis outputs, minus the
     /// 48 kHz coding's reconstruction in the lower 32 bands.
-    fn analyse(ana: &mut Analysis64, src: &[f64], f_off: usize, dropped: usize, delay: usize, deq: &[Vec<i32>]) -> Vec<Vec<f64>> {
+    fn analyse(
+        ana: &mut Analysis64,
+        src: &[f64],
+        f_off: usize,
+        dropped: usize,
+        delay: usize,
+        deq: &[Vec<i32>],
+    ) -> Vec<Vec<f64>> {
         let blocks = 16;
         let start = f_off as isize + delay as isize - dropped as isize;
         let input: Vec<f64> = (0..blocks * 64)
             .map(|i| {
                 let idx = start + i as isize;
-                if idx >= 0 && (idx as usize) < src.len() { src[idx as usize] } else { 0.0 }
+                if idx >= 0 && (idx as usize) < src.len() {
+                    src[idx as usize]
+                } else {
+                    0.0
+                }
             })
             .collect();
         let mut bands = ana.analyse_blocks(&input);
@@ -295,14 +351,23 @@ impl Hra96Encoder {
         let kind = self.kind;
         let (r_core, r_extra): (Vec<Vec<Vec<f64>>>, Vec<Vec<Vec<f64>>>) = {
             use rayon::prelude::*;
-            let a: Vec<_> = self.core_ana.par_iter_mut().enumerate().map(|(ch, ana)| Self::analyse(ana, &bufs[ch], f_off, dropped, delay, &core_deq[ch])).collect();
+            let a: Vec<_> = self
+                .core_ana
+                .par_iter_mut()
+                .enumerate()
+                .map(|(ch, ana)| Self::analyse(ana, &bufs[ch], f_off, dropped, delay, &core_deq[ch]))
+                .collect();
             let b: Vec<_> = self
                 .extra_ana
                 .par_iter_mut()
                 .enumerate()
                 .map(|(j, ana)| {
                     // the XCH channel's reconstruction is the core encoder's sixth plan; the rears' is the rear encoder's
-                    let deq = if kind == Hra96Kind::Discrete { &core_deq[5] } else { &rear_deq.unwrap()[j] };
+                    let deq = if kind == Hra96Kind::Discrete {
+                        &core_deq[5]
+                    } else {
+                        &rear_deq.unwrap()[j]
+                    };
                     Self::analyse(ana, &bufs[extra_start + j], f_off, dropped, delay, deq)
                 })
                 .collect();
@@ -310,7 +375,11 @@ impl Hra96Encoder {
         };
         self.timing[2] += t0.elapsed();
         let t0 = std::time::Instant::now();
-        let x96 = if r_extra.is_empty() { self.x96.encode_exss(&[&r_core], x96_bytes) } else { self.x96.encode_exss(&[&r_core, &r_extra], x96_bytes) };
+        let x96 = if r_extra.is_empty() {
+            self.x96.encode_exss(&[&r_core], x96_bytes)
+        } else {
+            self.x96.encode_exss(&[&r_core, &r_extra], x96_bytes)
+        };
         self.timing[3] += t0.elapsed();
         if self.kind == Hra96Kind::Rear {
             data.extend_from_slice(&exss_frame_xxch_x96(&self.exss, &xxch, &x96));
@@ -347,12 +416,26 @@ pub struct Hra96Map {
 pub fn hra96_map(layout: &ChannelLayout) -> Option<Hra96Map> {
     use sw_core::layout::LayoutKind;
     if let Some(m) = crate::native_xxch::xxch_map(layout) {
-        return Some(Hra96Map { kind: Hra96Kind::Rear, core: m.core.to_vec(), amode: 9, lfe: m.lfe, extra: m.rear.to_vec() });
+        return Some(Hra96Map {
+            kind: Hra96Kind::Rear,
+            core: m.core.to_vec(),
+            amode: 9,
+            lfe: m.lfe,
+            extra: m.rear.to_vec(),
+        });
     }
     let pos = |list: &[Channel]| layout.channels.iter().position(|c| list.contains(c));
     let lfe = pos(&[Channel::Lfe]);
     let cs = pos(&[Channel::Cs]);
-    let five = (|| Some([pos(&[Channel::C])?, pos(&[Channel::L])?, pos(&[Channel::R])?, pos(&[Channel::Ls, Channel::Lss])?, pos(&[Channel::Rs, Channel::Rss])?]))();
+    let five = (|| {
+        Some([
+            pos(&[Channel::C])?,
+            pos(&[Channel::L])?,
+            pos(&[Channel::R])?,
+            pos(&[Channel::Ls, Channel::Lss])?,
+            pos(&[Channel::Rs, Channel::Rss])?,
+        ])
+    })();
     if let Some(core) = five {
         if layout.channels.len() != 5 + usize::from(lfe.is_some()) + usize::from(cs.is_some()) {
             return None;
@@ -362,49 +445,139 @@ pub fn hra96_map(layout: &ChannelLayout) -> Option<Hra96Map> {
             Some(_) if layout.kind == LayoutKind::Discrete => Hra96Kind::Discrete,
             Some(_) => Hra96Kind::Matrix,
         };
-        return Some(Hra96Map { kind, core: core.to_vec(), amode: 9, lfe, extra: cs.into_iter().collect() });
+        return Some(Hra96Map {
+            kind,
+            core: core.to_vec(),
+            amode: 9,
+            lfe,
+            extra: cs.into_iter().collect(),
+        });
     }
     // fewer channels: the core carries them as they are
     let lm = crate::native::map_layout(layout).ok()?;
-    Some(Hra96Map { kind: Hra96Kind::Plain, core: lm.order, amode: lm.amode, lfe: lm.lfe, extra: Vec::new() })
+    Some(Hra96Map {
+        kind: Hra96Kind::Plain,
+        core: lm.order,
+        amode: lm.amode,
+        lfe: lm.lfe,
+        extra: Vec::new(),
+    })
 }
 
 /// File-level driver: 96 kHz stems in, `.dtshd` (or raw) out.
-pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_progress: &mut dyn FnMut(f32), cancel: &AtomicBool) -> Result<Stats, NativeError> {
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    map: Hra96Map,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
     let rate = stems.sample_rate;
     if rate != 96_000 {
-        return Err(Error::Unsupported("HRA above 5.1 channels, and HRA 6.x, are implemented at 96 kHz (and 7.x at 48 kHz)".into()).into());
+        return Err(Error::Unsupported(
+            "HRA above 5.1 channels, and HRA 6.x, are implemented at 96 kHz (and 7.x at 48 kHz)".into(),
+        )
+        .into());
     }
     if req.es.map_or(false, |e| e.phase_shift || e.rear_minus_3db) {
-        return Err(Error::Unsupported("the ES phase shift and the rear -3 dB trim are not available for DTS-HD High Resolution at 96 kHz".into()).into());
+        return Err(Error::Unsupported(
+            "the ES phase shift and the rear -3 dB trim are not available for DTS-HD High Resolution at 96 kHz".into(),
+        )
+        .into());
     }
-    let total_kbps = req.hra_kbps.unwrap_or(if map.kind == Hra96Kind::Rear { 5376 } else { 4224 });
+    let total_kbps = req
+        .hra_kbps
+        .unwrap_or(if map.kind == Hra96Kind::Rear { 5376 } else { 4224 });
     let has_lfe = map.lfe.is_some();
     let kind = map.kind;
     // the channels the extension header describes: the core channels, and what is coded beside them
     let coded_extra = if kind == Hra96Kind::Matrix { 0 } else { map.extra.len() };
     let nprim = map.core.len();
     let nch_total = nprim + usize::from(has_lfe) + coded_extra;
-    let exss_mask: u32 = req.layout.channels.iter().enumerate().filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i))).map(|(_, c)| crate::ma::exss_bit(*c)).fold(0, |m, b| m | b);
-    let make_exss = || ExssParams { sample_rate: rate, channels: nch_total, bit_res: req.pcm_bits, spk_mask: exss_mask, with_core: true, dialnorm: (-req.dialnorm) as u32, frame_duration_code: 0, x96_in_core: false, xch_in_core: kind == Hra96Kind::Discrete, secondary: false, extras: crate::exss::ExssExtras { min_header: 28, repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2), ..Default::default() } };
-    let make_encoder = || Hra96Encoder::new(Hra96Config { amode: map.amode, nprim, has_lfe, kind, total_kbps, dialnorm: req.dialnorm, pcm_bits: req.pcm_bits, exss: make_exss(), core_es: req.layout.id == "7.1-ls-rs-lsr-rsr", xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)), aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, has_lfe, kind == Hra96Kind::Discrete) });
+    let exss_mask: u32 = req
+        .layout
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i)))
+        .map(|(_, c)| crate::ma::exss_bit(*c))
+        .fold(0, |m, b| m | b);
+    let make_exss = || ExssParams {
+        sample_rate: rate,
+        channels: nch_total,
+        bit_res: req.pcm_bits,
+        spk_mask: exss_mask,
+        with_core: true,
+        dialnorm: (-req.dialnorm) as u32,
+        frame_duration_code: 0,
+        x96_in_core: false,
+        xch_in_core: kind == Hra96Kind::Discrete,
+        secondary: false,
+        extras: crate::exss::ExssExtras {
+            min_header: 28,
+            repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+            ..Default::default()
+        },
+    };
+    let make_encoder = || {
+        Hra96Encoder::new(Hra96Config {
+            amode: map.amode,
+            nprim,
+            has_lfe,
+            kind,
+            total_kbps,
+            dialnorm: req.dialnorm,
+            pcm_bits: req.pcm_bits,
+            exss: make_exss(),
+            core_es: req.layout.id == "7.1-ls-rs-lsr-rsr",
+            xxch: crate::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)),
+            aux: crate::ma::core_aux(
+                &req.bitstream.downmix,
+                req.layout,
+                map.amode,
+                has_lfe,
+                kind == Hra96Kind::Discrete,
+            ),
+        })
+    };
     let mix = crate::native_xxch::xxch_map(req.layout).map(|m| m.mix(&req.bitstream.downmix));
     let mut enc = make_encoder()?;
     let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
     stems.seek_frame(first)?;
     let avail = stems.frames - first;
-    let want = req.duration_secs.map(|d| (d * rate as f64).round() as u64).unwrap_or(avail).min(avail);
+    let want = req
+        .duration_secs
+        .map(|d| (d * rate as f64).round() as u64)
+        .unwrap_or(avail)
+        .min(avail);
     if want == 0 {
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
-    let container = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req
+        .output
+        .extension()
+        .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
     let codec_delay = 2048usize;
     // what the core carries: the 5.1 downmix of a 7.1 programme, or the core channels alone
-    let core_mask: u32 = if kind == Hra96Kind::Rear { map.core.iter().map(|&i| crate::ma::exss_bit(req.layout.channels[i])).fold(0, |m, b| m | b) | if has_lfe { 0x8 } else { 0 } } else { exss_mask };
+    let core_mask: u32 = if kind == Hra96Kind::Rear {
+        map.core
+            .iter()
+            .map(|&i| crate::ma::exss_bit(req.layout.channels[i]))
+            .fold(0, |m, b| m | b)
+            | if has_lfe { 0x8 } else { 0 }
+    } else {
+        exss_mask
+    };
     let info = container.then(|| {
-        let mut i = crate::dtshd::DtsHdInfo::new(rate, n as u16, want, exss_mask as u16, crate::dtshd::Kind::CoreAndExtension);
+        let mut i = crate::dtshd::DtsHdInfo::new(
+            rate,
+            n as u16,
+            want,
+            exss_mask as u16,
+            crate::dtshd::Kind::CoreAndExtension,
+        );
         crate::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
         i.core_kbps = 1509;
         i.core_payload = core_payload;
@@ -417,7 +590,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     // the decoder lags the source by `delay`: a container states `codec_delay` and the stream starts with silence
     // to make up the difference; a raw stream starts that many samples into the source instead
     let delay = enc.delay();
-    let (skip, lead) = if container { (0usize, codec_delay.saturating_sub(delay)) } else { (delay.min(want as usize), 0) };
+    let (skip, lead) = if container {
+        (0usize, codec_delay.saturating_sub(delay))
+    } else {
+        (delay.min(want as usize), 0)
+    };
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut left = skip as u64;
     while left > 0 {
@@ -429,7 +606,11 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
     let to24 = |v: f32| v as f64 * 8_388_608.0;
     let clamp = |v: f64| v.clamp(-8_388_608.0, 8_388_607.0);
     let (mut frames, mut bytes) = (0u64, 0u64);
-    let write = |out: &mut crate::dtshd::StreamOut, fr: Vec<Vec<u8>>, frames: &mut u64, bytes: &mut u64| -> Result<(), NativeError> {
+    let write = |out: &mut crate::dtshd::StreamOut,
+                 fr: Vec<Vec<u8>>,
+                 frames: &mut u64,
+                 bytes: &mut u64|
+     -> Result<(), NativeError> {
         for f in fr {
             out.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
             *frames += 1;
@@ -469,7 +650,9 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
                         v
                     }
                     // 6.x: the centre surround at -3 dB on both surrounds
-                    Hra96Kind::Matrix | Hra96Kind::Discrete if slot >= 3 => to24(planar[src][i]) + to24(planar[map.extra[0]][i]) * CS_MIX,
+                    Hra96Kind::Matrix | Hra96Kind::Discrete if slot >= 3 => {
+                        to24(planar[src][i]) + to24(planar[map.extra[0]][i]) * CS_MIX
+                    }
                     _ => to24(planar[src][i]),
                 };
                 block[slot][i] = clamp(value);
@@ -477,7 +660,12 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, map: Hra96Map, on_prog
             if let Some(l) = map.lfe {
                 let v = to24(planar[l][i]);
                 block[lfe_slot][i] = clamp(match &mix {
-                    Some(m) if kind == Hra96Kind::Rear => v * m.scale + (0..2).map(|e| to24(planar[map.extra[e]][i]) * m.extra[e][5]).sum::<f64>(),
+                    Some(m) if kind == Hra96Kind::Rear => {
+                        v * m.scale
+                            + (0..2)
+                                .map(|e| to24(planar[map.extra[e]][i]) * m.extra[e][5])
+                                .sum::<f64>()
+                    }
                     _ => v,
                 });
             }

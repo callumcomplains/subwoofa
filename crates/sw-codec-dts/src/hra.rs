@@ -20,7 +20,15 @@ impl HraStage {
     /// `total_kbps` is core plus extension; `exss` describes the asset.
     pub fn new(total_kbps: u32, sample_rate: u32, frame_samples: usize, blocks: usize, exss: ExssParams) -> HraStage {
         let overhead = exss_frame_ext(&exss, Some(&[0u8; 4]), None).len() - 4;
-        HraStage { xbr: XbrEncoder::new(blocks), exss, bits_num: total_kbps as u64 * 1000 * frame_samples as u64, bits_den: sample_rate as u64, frames: 0, overhead, sets: Vec::new() }
+        HraStage {
+            xbr: XbrEncoder::new(blocks),
+            exss,
+            bits_num: total_kbps as u64 * 1000 * frame_samples as u64,
+            bits_den: sample_rate as u64,
+            frames: 0,
+            overhead,
+            sets: Vec::new(),
+        }
     }
 
     /// Split the channels of the residual into XBR channel sets of these sizes.
@@ -37,7 +45,11 @@ impl HraStage {
         let total = (upto(self.frames + 1) - upto(self.frames)) as usize;
         self.frames += 1;
         let budget = total.saturating_sub(core.len() + self.overhead).clamp(1, 16384);
-        let mut xbr = if self.sets.is_empty() { self.xbr.encode(residual, budget) } else { self.xbr.encode_sets(residual, &self.sets, budget) };
+        let mut xbr = if self.sets.is_empty() {
+            self.xbr.encode(residual, budget)
+        } else {
+            self.xbr.encode_sets(residual, &self.sets, budget)
+        };
         if xbr.len() < budget {
             xbr.resize(budget, 0);
         }

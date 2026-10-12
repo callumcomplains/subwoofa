@@ -38,8 +38,23 @@ fn make(dir: &std::path::Path, container: Container, ext: &str, multiplier: u32)
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join(format!("out.{ext}"));
-    let req = Request { layout, container, format: SampleFormat::Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier, dcp: Default::default() };
-    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let req = Request {
+        layout,
+        container,
+        format: SampleFormat::Int24,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        dsd_multiplier: multiplier,
+        dcp: Default::default(),
+    };
+    encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
     out
 }
 
@@ -67,9 +82,21 @@ fn every_audio_file_passes_the_structure_check() {
     for &(container, ext, multiplier) in CASES {
         let path = make(&dir, container, ext, multiplier);
         let report = verify(&path, &Options::default()).unwrap();
-        assert!(report.passed, "{ext}: {:?}", report.checks.iter().filter(|c| c.status == sw_verify::Status::Fail).collect::<Vec<_>>());
+        assert!(
+            report.passed,
+            "{ext}: {:?}",
+            report
+                .checks
+                .iter()
+                .filter(|c| c.status == sw_verify::Status::Fail)
+                .collect::<Vec<_>>()
+        );
         assert!(!report.format.starts_with("unknown"), "{ext}: format {}", report.format);
-        assert!(report.duration_secs > 1.9 && report.duration_secs < 2.1, "{ext}: duration {}", report.duration_secs);
+        assert!(
+            report.duration_secs > 1.9 && report.duration_secs < 2.1,
+            "{ext}: duration {}",
+            report.duration_secs
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -79,12 +106,19 @@ fn a_file_cut_short_fails() {
     let dir = std::env::temp_dir().join(format!("sw_verify_cut_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // formats whose headers state a size or a checksum over the audio
-    for &(container, ext, multiplier) in CASES.iter().filter(|c| matches!(c.1, "wav" | "aif" | "caf" | "oga" | "m4a" | "tta" | "dsf" | "dff")) {
+    for &(container, ext, multiplier) in CASES
+        .iter()
+        .filter(|c| matches!(c.1, "wav" | "aif" | "caf" | "oga" | "m4a" | "tta" | "dsf" | "dff"))
+    {
         let path = make(&dir, container, ext, multiplier);
         let bytes = std::fs::read(&path).unwrap();
         let cut = dir.join(format!("cut.{ext}"));
         // m4a keeps its tables at the end, so cut inside the audio by removing from the middle instead
-        let broken = if ext == "m4a" { [&bytes[..bytes.len() / 2], &bytes[bytes.len() - 100..]].concat() } else { bytes[..bytes.len() / 2].to_vec() };
+        let broken = if ext == "m4a" {
+            [&bytes[..bytes.len() / 2], &bytes[bytes.len() - 100..]].concat()
+        } else {
+            bytes[..bytes.len() / 2].to_vec()
+        };
         std::fs::write(&cut, broken).unwrap();
         let report = verify(&cut, &Options::default()).unwrap();
         assert!(!report.passed, "{ext}: a damaged file passed");

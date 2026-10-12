@@ -28,7 +28,9 @@ use word_coder::Medians;
 const VERSION: u16 = 0x410;
 
 /// Sample rates the header can name directly; anything else is sent as a 24-bit number.
-const RATES: [u32; 15] = [6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000];
+const RATES: [u32; 15] = [
+    6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000,
+];
 const CUSTOM_RATE: u32 = 15;
 
 /// Header flag bits.
@@ -80,17 +82,29 @@ impl WavPackWriter {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "WavPack here holds 16 or 24 bit integer samples")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "WavPack here holds 16 or 24 bit integer samples",
+                ))
+            }
         };
         if params.total_frames > u32::MAX as u64 - 1 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "WavPack files hold at most 2^32 samples per channel"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "WavPack files hold at most 2^32 samples per channel",
+            ));
         }
         let groups = (0..params.channels())
             .collect::<Vec<_>>()
             .chunks(2)
             .map(|pair| {
                 let stereo = pair.len() == 2;
-                Group { channels: pair.to_vec(), chain: Chain::new(&predictor::preset(stereo), stereo), medians: [[0; 3]; 2] }
+                Group {
+                    channels: pair.to_vec(),
+                    chain: Chain::new(&predictor::preset(stereo), stereo),
+                    medians: [[0; 3]; 2],
+                }
             })
             .collect();
         let span = (params.rate as usize / 2).clamp(4096, 100_000);
@@ -135,8 +149,13 @@ impl WavPackWriter {
         let group = &mut self.groups[g];
         let stereo = group.channels.len() == 2;
 
-        let samples: Vec<&[i32]> = group.channels.iter().map(|&c| &frame[c][..]) .collect();
-        let max_abs = samples.iter().flat_map(|s| s.iter()).map(|v| v.unsigned_abs()).max().unwrap_or(0);
+        let samples: Vec<&[i32]> = group.channels.iter().map(|&c| &frame[c][..]).collect();
+        let max_abs = samples
+            .iter()
+            .flat_map(|s| s.iter())
+            .map(|v| v.unsigned_abs())
+            .max()
+            .unwrap_or(0);
         let crc = block_crc(&samples);
 
         flags |= (bits / 8 - 1) | (32 - max_abs.leading_zeros()).min(31) << flag::MAGNITUDE_SHIFT;
@@ -210,7 +229,11 @@ impl BlockWriter for WavPackWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= self.span {
-            let frame: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..self.span).collect()).collect();
+            let frame: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..self.span).collect())
+                .collect();
             self.write_frame(&frame)?;
         }
         Ok(())
@@ -235,10 +258,19 @@ fn to_mid_side(left: i32, right: i32) -> (i32, i32) {
 /// Joint stereo helps when the channels are alike: compare the size of the plain and the mid/side signals.
 fn prefers_joint(left: &[i32], right: &[i32]) -> bool {
     let size = |a: i64, b: i64| (a + b).max(1);
-    let plain = size(left.iter().map(|&v| log2_cost(v)).sum(), right.iter().map(|&v| log2_cost(v)).sum());
+    let plain = size(
+        left.iter().map(|&v| log2_cost(v)).sum(),
+        right.iter().map(|&v| log2_cost(v)).sum(),
+    );
     let joint = size(
-        left.iter().zip(right).map(|(&l, &r)| log2_cost(to_mid_side(l, r).0)).sum(),
-        left.iter().zip(right).map(|(&l, &r)| log2_cost(to_mid_side(l, r).1)).sum(),
+        left.iter()
+            .zip(right)
+            .map(|(&l, &r)| log2_cost(to_mid_side(l, r).0))
+            .sum(),
+        left.iter()
+            .zip(right)
+            .map(|(&l, &r)| log2_cost(to_mid_side(l, r).1))
+            .sum(),
     );
     joint < plain
 }
@@ -273,7 +305,11 @@ fn channel_info(count: usize, mask: u32) -> Vec<u8> {
 /// Medians as stored: the logarithm of each, channel by channel.
 fn entropy_bytes(medians: &[Medians; 2], stereo: bool) -> Vec<u8> {
     let channels = if stereo { 2 } else { 1 };
-    medians[..channels].iter().flatten().flat_map(|&m| (log2(m.max(0) as u32) as u16).to_le_bytes()).collect()
+    medians[..channels]
+        .iter()
+        .flatten()
+        .flat_map(|&m| (log2(m.max(0) as u32) as u16).to_le_bytes())
+        .collect()
 }
 
 /// Appends a sub-block: id, size in 16-bit words, the data, padded to a whole word.

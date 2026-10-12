@@ -13,7 +13,12 @@ pub fn imdct_spec(xk: &[f64], short: bool, w: &[f64]) -> Vec<f64> {
     let n = N;
     let mut x = vec![0.0; n];
     if !short {
-        let tw: Vec<(f64, f64)> = (0..n / 4).map(|k| { let a = 2.0 * PI * (8 * k + 1) as f64 / (8 * n) as f64; (-a.cos(), -a.sin()) }).collect();
+        let tw: Vec<(f64, f64)> = (0..n / 4)
+            .map(|k| {
+                let a = 2.0 * PI * (8 * k + 1) as f64 / (8 * n) as f64;
+                (-a.cos(), -a.sin())
+            })
+            .collect();
         let z0: Vec<(f64, f64)> = (0..n / 4)
             .map(|k| {
                 let (re, im) = (xk[n / 2 - 2 * k - 1], xk[2 * k]);
@@ -32,7 +37,12 @@ pub fn imdct_spec(xk: &[f64], short: bool, w: &[f64]) -> Vec<f64> {
             x[3 * n / 4 + 2 * i + 1] = -y[n / 4 - i - 1].0 * w[n / 4 - 2 * i - 2];
         }
     } else {
-        let tw: Vec<(f64, f64)> = (0..n / 8).map(|k| { let a = 2.0 * PI * (8 * k + 1) as f64 / (4 * n) as f64; (-a.cos(), -a.sin()) }).collect();
+        let tw: Vec<(f64, f64)> = (0..n / 8)
+            .map(|k| {
+                let a = 2.0 * PI * (8 * k + 1) as f64 / (4 * n) as f64;
+                (-a.cos(), -a.sin())
+            })
+            .collect();
         let mut ys: Vec<Vec<(f64, f64)>> = Vec::new();
         for half in 0..2 {
             let xs: Vec<f64> = (0..n / 4).map(|k| xk[2 * k + half]).collect();
@@ -101,15 +111,21 @@ impl Switched {
             .collect();
         // calibrate the scale against the fast long-block forward transform
         let m = Mdct::new(mdct_scale);
-        let x: Vec<f32> = (0..N).map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0 + (i as f32 * 0.07).sin()).collect();
+        let x: Vec<f32> = (0..N)
+            .map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0 + (i as f32 * 0.07).sin())
+            .collect();
         let mut fast = vec![0f32; M];
         m.forward(&x, &mut fast);
-        let raw: Vec<f64> = (0..M).map(|k| (0..N).map(|n| mats[0][k * N + n] * x[n] as f64).sum()).collect();
+        let raw: Vec<f64> = (0..M)
+            .map(|k| (0..N).map(|n| mats[0][k * N + n] * x[n] as f64).sum())
+            .collect();
         let k = raw.iter().zip(&fast).map(|(r, f)| r * *f as f64).sum::<f64>() / raw.iter().map(|r| r * r).sum::<f64>();
         let scaled = |m: &Vec<f64>| m.iter().map(|v| (v * k) as f32).collect::<Vec<f32>>();
         // the short synthesis columns have half the energy of the long ones (norm 64 against 128)
         let short: Vec<f32> = mats[1].iter().map(|v| (v * k * 2.0) as f32).collect();
-        Switched { at: [scaled(&mats[0]), short] }
+        Switched {
+            at: [scaled(&mats[0]), short],
+        }
     }
 
     /// Transform 512 raw input samples into 256 coefficients; `short` interleaves the two half transforms.
@@ -167,7 +183,10 @@ mod tests {
                 ((seed >> 9) as f32 / 4_194_304.0 - 1.0) * 0.5 + (i as f32 * 0.03).sin() * 0.3
             })
             .collect();
-        let pattern: Vec<bool> = [false, false, true, false, true, true, false, false, true, false, false, true, true, false].to_vec();
+        let pattern: Vec<bool> = [
+            false, false, true, false, true, true, false, false, true, false, false, true, true, false,
+        ]
+        .to_vec();
         let mut coefs = Vec::new();
         for b in 0..blocks {
             let mut c = vec![0f32; M];
@@ -176,7 +195,9 @@ mod tests {
         }
         let out = decode(&coefs, &pattern, w);
         // block b's output (samples b*M..(b+1)*M of `out`) is the signal delayed by one block
-        let err = (M..blocks * M).map(|i| (out[i] - sig[i] as f64).abs()).fold(0.0, f64::max);
+        let err = (M..blocks * M)
+            .map(|i| (out[i] - sig[i] as f64).abs())
+            .fold(0.0, f64::max);
         assert!(err < 1e-3, "max reconstruction error {err}");
     }
 }
@@ -191,7 +212,9 @@ mod probe {
         let full = kbd_window(5.0, N);
         let w = &full[..M];
         let blocks = pattern.len();
-        let sig: Vec<f32> = (0..(blocks + 1) * M).map(|i| (i as f32 * 0.03).sin() * 0.5 + (i as f32 * 0.31).cos() * 0.2).collect();
+        let sig: Vec<f32> = (0..(blocks + 1) * M)
+            .map(|i| (i as f32 * 0.03).sin() * 0.5 + (i as f32 * 0.31).cos() * 0.2)
+            .collect();
         let mut out = Vec::new();
         let mut delay = vec![0.0; M];
         for b in 0..blocks {
@@ -203,7 +226,9 @@ mod probe {
                 delay[n] = x[M + n];
             }
         }
-        (M..blocks * M).map(|i| (out[i] - sig[i] as f64).abs()).fold(0.0, f64::max)
+        (M..blocks * M)
+            .map(|i| (out[i] - sig[i] as f64).abs())
+            .fold(0.0, f64::max)
     }
 
     #[test]
@@ -224,7 +249,13 @@ mod probe2 {
     fn gram() {
         let full = kbd_window(5.0, N);
         let w = &full[..M];
-        let cols: Vec<Vec<f64>> = (0..M).map(|k| { let mut u = vec![0.0; M]; u[k] = 1.0; imdct_spec(&u, true, w) }).collect();
+        let cols: Vec<Vec<f64>> = (0..M)
+            .map(|k| {
+                let mut u = vec![0.0; M];
+                u[k] = 1.0;
+                imdct_spec(&u, true, w)
+            })
+            .collect();
         let dot = |a: &Vec<f64>, b: &Vec<f64>| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
         let mut offmax = 0.0f64;
         let mut diag = Vec::new();
@@ -236,9 +267,24 @@ mod probe2 {
                 }
             }
         }
-        println!("diag min {} max {} offmax {}", diag.iter().cloned().fold(f64::MAX, f64::min), diag.iter().cloned().fold(0.0, f64::max), offmax);
-        let colsl: Vec<Vec<f64>> = (0..M).map(|k| { let mut u = vec![0.0; M]; u[k] = 1.0; imdct_spec(&u, false, w) }).collect();
-        println!("long diag {} {}", dot(&colsl[0], &colsl[0]), dot(&colsl[100], &colsl[100]));
+        println!(
+            "diag min {} max {} offmax {}",
+            diag.iter().cloned().fold(f64::MAX, f64::min),
+            diag.iter().cloned().fold(0.0, f64::max),
+            offmax
+        );
+        let colsl: Vec<Vec<f64>> = (0..M)
+            .map(|k| {
+                let mut u = vec![0.0; M];
+                u[k] = 1.0;
+                imdct_spec(&u, false, w)
+            })
+            .collect();
+        println!(
+            "long diag {} {}",
+            dot(&colsl[0], &colsl[0]),
+            dot(&colsl[100], &colsl[100])
+        );
         let _ = MDCT_SCALE;
     }
 }
@@ -264,8 +310,18 @@ impl Detector {
         let q = std::f64::consts::FRAC_1_SQRT_2;
         let norm = 1.0 / (1.0 + k / q + k * k);
         let b0 = norm;
-        let c = [b0, -2.0 * b0, b0, 2.0 * (k * k - 1.0) * norm, (1.0 - k / q + k * k) * norm];
-        Detector { coef: [c, c], state: [[0.0; 2]; 2], prev: [0.0; 3] }
+        let c = [
+            b0,
+            -2.0 * b0,
+            b0,
+            2.0 * (k * k - 1.0) * norm,
+            (1.0 - k / q + k * k) * norm,
+        ];
+        Detector {
+            coef: [c, c],
+            state: [[0.0; 2]; 2],
+            prev: [0.0; 3],
+        }
     }
 
     fn filter(&mut self, x: f64) -> f64 {

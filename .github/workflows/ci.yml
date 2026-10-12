@@ -16,6 +16,8 @@ jobs:
           echo "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu" >> "$GITHUB_ENV"
         shell: bash
       - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
       - name: Build
         run: cargo build --workspace --exclude subwoofa-app
       - name: Test

@@ -81,13 +81,22 @@ fn unstore_weight(stored: i8) -> i32 {
 /// The inverse of [`unstore_weight`], to the nearest storable value.
 fn store_weight(weight: i32) -> i8 {
     let weight = weight.min(CROSS_LIMIT);
-    let base = if weight > 0 { weight - ((weight + 64) >> 7) } else { weight };
+    let base = if weight > 0 {
+        weight - ((weight + 64) >> 7)
+    } else {
+        weight
+    };
     ((base + WEIGHT_UNIT / 2) >> 3).clamp(-127, 127) as i8
 }
 
 impl Stage {
     fn new(term: Term) -> Stage {
-        Stage { term, weight: [0; 2], recent: [[0; HISTORY]; 2], cross: [0; 2] }
+        Stage {
+            term,
+            weight: [0; 2],
+            recent: [[0; HISTORY]; 2],
+            cross: [0; 2],
+        }
     }
 
     /// What this term predicts for `channel` from the channel's own history.
@@ -147,7 +156,10 @@ impl Stage {
 impl Chain {
     /// `terms` in stored order: the first one acts on the signal first when encoding.
     pub fn new(terms: &[Term], stereo: bool) -> Chain {
-        Chain { stages: terms.iter().map(|&t| Stage::new(t)).collect(), stereo }
+        Chain {
+            stages: terms.iter().map(|&t| Stage::new(t)).collect(),
+            stereo,
+        }
     }
 
     pub fn terms(&self) -> impl Iterator<Item = Term> + '_ {
@@ -176,7 +188,9 @@ impl Chain {
         let channels = if self.stereo { 2 } else { 1 };
         let mut state = StartState::default();
         for stage in &mut self.stages {
-            state.terms.push(((stage.term.delay + 5) & 0x1F) as u8 | (stage.term.rate << 5) as u8);
+            state
+                .terms
+                .push(((stage.term.delay + 5) & 0x1F) as u8 | (stage.term.rate << 5) as u8);
             for c in 0..channels {
                 let stored = store_weight(stage.weight[c]);
                 stage.weight[c] = unstore_weight(stored);
@@ -257,7 +271,9 @@ mod tests {
 
     #[test]
     fn mono_round_trip() {
-        let signal: Vec<i32> = (0..20_000).map(|n| ((n as f64 * 0.05).sin() * 9000.0) as i32 + (n * 7919 % 13) as i32).collect();
+        let signal: Vec<i32> = (0..20_000)
+            .map(|n| ((n as f64 * 0.05).sin() * 9000.0) as i32 + (n * 7919 % 13) as i32)
+            .collect();
         let mut chain = Chain::new(&preset(false), false);
         let residuals: Vec<i32> = signal.iter().map(|&s| chain.mono(s)).collect();
         assert_eq!(decode_mono(&preset(false), &residuals), signal);

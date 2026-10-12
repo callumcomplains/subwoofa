@@ -18,7 +18,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &byte in data {
         crc ^= (byte as u32) << 24;
         for _ in 0..8 {
-            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04C1_1DB7 } else { crc << 1 };
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04C1_1DB7
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -59,7 +63,17 @@ pub struct PacketWriter<W: Write> {
 
 impl<W: Write> PacketWriter<W> {
     pub fn new(out: W, serial: u32) -> PacketWriter<W> {
-        PacketWriter { out, serial, sequence: 0, lacing: Vec::new(), body: Vec::new(), granule: None, continued: false, first_page: true, bytes: 0 }
+        PacketWriter {
+            out,
+            serial,
+            sequence: 0,
+            lacing: Vec::new(),
+            body: Vec::new(),
+            granule: None,
+            continued: false,
+            first_page: true,
+            bytes: 0,
+        }
     }
 
     /// Adds a packet whose last sample is number `granule`.
@@ -100,7 +114,11 @@ impl<W: Write> PacketWriter<W> {
         if self.first_page {
             flags |= FLAG_FIRST;
         }
-        let granule = if unfinished && self.granule.is_none() { NO_GRANULE } else { self.granule.unwrap_or(NO_GRANULE) };
+        let granule = if unfinished && self.granule.is_none() {
+            NO_GRANULE
+        } else {
+            self.granule.unwrap_or(NO_GRANULE)
+        };
         self.write_page(flags, granule)?;
         self.continued = unfinished;
         Ok(())
@@ -111,7 +129,14 @@ impl<W: Write> PacketWriter<W> {
         if self.lacing.is_empty() {
             // no data page left to mark: the end flag needs a page of its own
             let granule = self.granule.unwrap_or(0);
-            let page = build_page(self.serial, self.sequence, FLAG_LAST | if self.continued { FLAG_CONTINUED } else { 0 }, granule, &[], &[]);
+            let page = build_page(
+                self.serial,
+                self.sequence,
+                FLAG_LAST | if self.continued { FLAG_CONTINUED } else { 0 },
+                granule,
+                &[],
+                &[],
+            );
             self.bytes += page.len() as u64;
             self.out.write_all(&page)?;
         } else {
@@ -163,10 +188,21 @@ mod tests {
         w.packet(&vec![1u8; 100_000], 10).unwrap();
         let bytes = w.finish().unwrap();
         // 100000 bytes need 393 segments: two pages, the second flagged as a continuation
-        let pages: Vec<usize> = bytes.windows(4).enumerate().filter(|(_, w)| *w == b"OggS").map(|(i, _)| i).collect();
+        let pages: Vec<usize> = bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, w)| *w == b"OggS")
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(pages.len(), 2);
         assert_eq!(bytes[pages[1] + 5] & FLAG_CONTINUED, FLAG_CONTINUED);
-        assert_eq!(u64::from_le_bytes(bytes[pages[0] + 6..pages[0] + 14].try_into().unwrap()), NO_GRANULE);
-        assert_eq!(u64::from_le_bytes(bytes[pages[1] + 6..pages[1] + 14].try_into().unwrap()), 10);
+        assert_eq!(
+            u64::from_le_bytes(bytes[pages[0] + 6..pages[0] + 14].try_into().unwrap()),
+            NO_GRANULE
+        );
+        assert_eq!(
+            u64::from_le_bytes(bytes[pages[1] + 6..pages[1] + 14].try_into().unwrap()),
+            10
+        );
     }
 }

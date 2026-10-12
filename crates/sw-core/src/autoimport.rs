@@ -33,8 +33,30 @@ fn strip_numbering(s: &str) -> String {
     let mut last = 0;
     for (a, b) in tokens(s) {
         let t = &s[a..b];
-        let descriptor = matches!(t.to_ascii_lowercase().as_str(), "front" | "left" | "right" | "center" | "centre" | "surround" | "back" | "rear" | "side" | "low" | "frequency" | "effects" | "channel" | "sub" | "subwoofer" | "height" | "top" | "wide");
-        if descriptor || (t.len() > 2 && t[..2].eq_ignore_ascii_case("ch") && t[2..].bytes().all(|c| c.is_ascii_digit())) {
+        let descriptor = matches!(
+            t.to_ascii_lowercase().as_str(),
+            "front"
+                | "left"
+                | "right"
+                | "center"
+                | "centre"
+                | "surround"
+                | "back"
+                | "rear"
+                | "side"
+                | "low"
+                | "frequency"
+                | "effects"
+                | "channel"
+                | "sub"
+                | "subwoofer"
+                | "height"
+                | "top"
+                | "wide"
+        );
+        if descriptor
+            || (t.len() > 2 && t[..2].eq_ignore_ascii_case("ch") && t[2..].bytes().all(|c| c.is_ascii_digit()))
+        {
             out.push_str(&s[last..a]);
             last = b;
         }
@@ -74,26 +96,45 @@ fn split_around(stem: &str, ch: Channel) -> Option<(String, String)> {
 /// Channels whose file cannot be found are omitted.
 pub fn auto_import(first: &Path, layout: &ChannelLayout) -> HashMap<Channel, PathBuf> {
     let mut found = HashMap::new();
-    let dir = first.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let Some(ext) = first.extension().and_then(|e| e.to_str()) else { return found };
-    let Some(stem) = first.file_stem().and_then(|s| s.to_str()) else { return found };
+    let dir = first
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let Some(ext) = first.extension().and_then(|e| e.to_str()) else {
+        return found;
+    };
+    let Some(stem) = first.file_stem().and_then(|s| s.to_str()) else {
+        return found;
+    };
 
     // Work out which channel the given file represents.
-    let Some(first_ch) = layout.channels.iter().copied().find(|c| split_around(stem, *c).is_some())
+    let Some(first_ch) = layout
+        .channels
+        .iter()
+        .copied()
+        .find(|c| split_around(stem, *c).is_some())
     else {
         return found;
     };
     let (prefix, suffix) = split_around(stem, first_ch).unwrap();
     found.insert(first_ch, first.to_path_buf());
 
-    let Ok(entries) = std::fs::read_dir(dir) else { return found };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
     let files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     for ch in layout.channels.iter().copied().filter(|c| *c != first_ch) {
         for f in &files {
-            if f.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case(ext)) != Some(true) {
+            if f.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case(ext))
+                != Some(true)
+            {
                 continue;
             }
-            let Some(fs) = f.file_stem().and_then(|s| s.to_str()) else { continue };
+            let Some(fs) = f.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
             if let Some((p, s)) = split_around(fs, ch) {
                 if p == prefix && s == suffix {
                     found.insert(ch, f.clone());
@@ -115,21 +156,36 @@ pub struct Group {
 /// Find every complete set of per-channel files in `dir` (non-recursive): files are grouped by everything
 /// around the channel ID, and only groups that cover the whole layout are returned, sorted by name.
 pub fn scan_folder(dir: &Path, layout: &ChannelLayout) -> Vec<Group> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let first = layout.channels[0];
     let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
     files.sort();
     let mut groups: Vec<Group> = Vec::new();
     for f in &files {
-        let ext_ok = f.extension().and_then(|e| e.to_str()).map(|e| matches!(e.to_ascii_lowercase().as_str(), "wav" | "w64" | "aif" | "aiff" | "flac" | "bwf")).unwrap_or(false);
-        let Some(stem) = f.file_stem().and_then(|s| s.to_str()) else { continue };
+        let ext_ok = f
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "wav" | "w64" | "aif" | "aiff" | "flac" | "bwf"
+                )
+            })
+            .unwrap_or(false);
+        let Some(stem) = f.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         if !ext_ok || split_around(stem, first).is_none() {
             continue;
         }
         let found = auto_import(f, layout);
         if layout.channels.iter().all(|c| found.contains_key(c)) {
             let (prefix, suffix) = split_around(stem, first).unwrap();
-            let name = format!("{prefix}{suffix}").trim_matches(|c: char| matches!(c, '.' | '-' | '_' | ' ')).to_string();
+            let name = format!("{prefix}{suffix}")
+                .trim_matches(|c: char| matches!(c, '.' | '-' | '_' | ' '))
+                .to_string();
             let name = if name.is_empty() { stem.to_string() } else { name };
             if !groups.iter().any(|g| g.inputs.get(&first) == found.get(&first)) {
                 groups.push(Group { name, inputs: found });

@@ -14,7 +14,8 @@ pub const HISTORY: usize = 7;
 const OFF: usize = 8;
 
 const COEFF: [i32; 20] = [
-    868669, -5931642, -1228483, 4194304, -20577, 122631, -393647, 904476, -1696305, 2825313, -4430736, 6791313, 41153, -245210, 785564, -1788164, 3259333, -5074941, 6928550, -8204883,
+    868669, -5931642, -1228483, 4194304, -20577, 122631, -393647, 904476, -1696305, 2825313, -4430736, 6791313, 41153,
+    -245210, 785564, -1788164, 3259333, -5074941, 6928550, -8204883,
 ];
 
 fn mul(x: i32, c: i32, bits: u32) -> i32 {
@@ -31,15 +32,50 @@ struct Step {
 
 fn steps() -> Vec<Step> {
     let mut v = vec![
-        Step { to_a: true, shift: 0, bits: 22, coeff: COEFF[0] },
-        Step { to_a: false, shift: 0, bits: 22, coeff: COEFF[1] },
-        Step { to_a: true, shift: 0, bits: 22, coeff: COEFF[2] },
-        Step { to_a: false, shift: 0, bits: 22, coeff: COEFF[3] },
+        Step {
+            to_a: true,
+            shift: 0,
+            bits: 22,
+            coeff: COEFF[0],
+        },
+        Step {
+            to_a: false,
+            shift: 0,
+            bits: 22,
+            coeff: COEFF[1],
+        },
+        Step {
+            to_a: true,
+            shift: 0,
+            bits: 22,
+            coeff: COEFF[2],
+        },
+        Step {
+            to_a: false,
+            shift: 0,
+            bits: 22,
+            coeff: COEFF[3],
+        },
     ];
     for i in 0..8 {
-        v.push(Step { to_a: true, shift: i, bits: 23, coeff: COEFF[i + 4] });
-        v.push(Step { to_a: false, shift: i, bits: 23, coeff: COEFF[i + 12] });
-        v.push(Step { to_a: true, shift: i, bits: 23, coeff: COEFF[i + 4] });
+        v.push(Step {
+            to_a: true,
+            shift: i,
+            bits: 23,
+            coeff: COEFF[i + 4],
+        });
+        v.push(Step {
+            to_a: false,
+            shift: i,
+            bits: 23,
+            coeff: COEFF[i + 12],
+        });
+        v.push(Step {
+            to_a: true,
+            shift: i,
+            bits: 23,
+            coeff: COEFF[i + 4],
+        });
     }
     v
 }
@@ -56,7 +92,11 @@ fn run(a: &mut [i32], b: &mut [i32], inverse: bool) {
                 *d = if inverse { d.wrapping_add(m) } else { d.wrapping_sub(m) };
             } else {
                 let m = mul(a[OFF + k - s.shift], s.coeff, s.bits);
-                b[k] = if inverse { b[k].wrapping_add(m) } else { b[k].wrapping_sub(m) };
+                b[k] = if inverse {
+                    b[k].wrapping_add(m)
+                } else {
+                    b[k].wrapping_sub(m)
+                };
             }
         }
     };
@@ -123,7 +163,11 @@ mod tests {
     #[test]
     fn a_tone_lands_in_one_band() {
         // 3 kHz at 192 kHz sits in the low band; 60 kHz in the high band
-        let tone = |f: f64| -> Vec<i32> { (0..4096).map(|i| ((i as f64 * f / 192000.0 * std::f64::consts::TAU).sin() * 4.0e6) as i32).collect() };
+        let tone = |f: f64| -> Vec<i32> {
+            (0..4096)
+                .map(|i| ((i as f64 * f / 192000.0 * std::f64::consts::TAU).sin() * 4.0e6) as i32)
+                .collect()
+        };
         let energy = |v: &[i32]| v[64..v.len() - 64].iter().map(|x| (*x as f64).powi(2)).sum::<f64>();
         let (l0, l1, _) = split(&tone(3000.0));
         assert!(energy(&l0) > 50.0 * energy(&l1), "{} {}", energy(&l0), energy(&l1));

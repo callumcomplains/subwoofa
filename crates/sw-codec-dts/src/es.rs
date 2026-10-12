@@ -24,7 +24,11 @@ pub struct EsOptions {
 impl EsOptions {
     /// Samples of delay the mixer adds to the programme.
     pub fn delay(&self) -> usize {
-        if self.phase_shift { SHIFT_DELAY } else { 0 }
+        if self.phase_shift {
+            SHIFT_DELAY
+        } else {
+            0
+        }
     }
 }
 
@@ -36,7 +40,8 @@ fn hilbert_taps() -> Vec<f64> {
             if (k as i64) % 2 == 0 {
                 return 0.0;
             }
-            let w = 0.42 - 0.5 * (2.0 * PI * i as f64 / (n - 1) as f64).cos() + 0.08 * (4.0 * PI * i as f64 / (n - 1) as f64).cos();
+            let w = 0.42 - 0.5 * (2.0 * PI * i as f64 / (n - 1) as f64).cos()
+                + 0.08 * (4.0 * PI * i as f64 / (n - 1) as f64).cos();
             2.0 / (PI * k) * w
         })
         .collect()
@@ -65,14 +70,25 @@ impl EsMixer {
             return None;
         }
         let keep = if opts.phase_shift { 2 * SHIFT_DELAY } else { 0 };
-        Some(EsMixer { opts, ls, rs, cs, taps: hilbert_taps(), hist: vec![vec![0.0; keep]; channels.len()] })
+        Some(EsMixer {
+            opts,
+            ls,
+            rs,
+            cs,
+            taps: hilbert_taps(),
+            hist: vec![vec![0.0; keep]; channels.len()],
+        })
     }
 
     /// Mix one block (all channels the same length). Output has the same shape; the Cs channel is left in
     /// place (the caller leaves it out of the core).
     pub fn process(&mut self, block: &[Vec<f32>]) -> Vec<Vec<f32>> {
         let n = block[0].len();
-        let att = if self.opts.rear_minus_3db { std::f64::consts::FRAC_1_SQRT_2 } else { 1.0 };
+        let att = if self.opts.rear_minus_3db {
+            std::f64::consts::FRAC_1_SQRT_2
+        } else {
+            1.0
+        };
         let d = self.opts.delay();
         let cs_gain = std::f64::consts::FRAC_1_SQRT_2 * att;
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(block.len());
@@ -83,7 +99,9 @@ impl EsMixer {
             ext.extend(chan.iter().map(|v| *v as f64));
             let h = self.hist[c].len();
             let sample = |i: usize| ext[h + i - d];
-            let mut y: Vec<f64> = (0..n).map(|i| if d == 0 { chan[i] as f64 } else { sample(i) }).collect();
+            let mut y: Vec<f64> = (0..n)
+                .map(|i| if d == 0 { chan[i] as f64 } else { sample(i) })
+                .collect();
             if c == self.ls || c == self.rs {
                 let theta = if c == self.ls { PI / 4.0 } else { -PI / 4.0 };
                 if self.opts.phase_shift {
@@ -141,7 +159,17 @@ mod tests {
     #[test]
     fn matrix_mix_adds_cs_at_minus_3_db() {
         let chans = [L, R, C, Lfe, Ls, Rs, Cs];
-        let mut m = EsMixer::new(EsOptions { flag: true, mix_cs: true, xch: false, phase_shift: false, rear_minus_3db: false }, &chans).unwrap();
+        let mut m = EsMixer::new(
+            EsOptions {
+                flag: true,
+                mix_cs: true,
+                xch: false,
+                phase_shift: false,
+                rear_minus_3db: false,
+            },
+            &chans,
+        )
+        .unwrap();
         let block: Vec<Vec<f32>> = (0..7).map(|c| vec![if c == 6 { 0.5 } else { 0.0 }; 8]).collect();
         let out = m.process(&block);
         assert!((out[4][0] - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
@@ -152,7 +180,17 @@ mod tests {
     #[test]
     fn phase_shift_rotates_surrounds_in_quadrature() {
         let chans = [L, R, C, Lfe, Ls, Rs];
-        let mut m = EsMixer::new(EsOptions { flag: true, mix_cs: false, xch: false, phase_shift: true, rear_minus_3db: false }, &chans).unwrap();
+        let mut m = EsMixer::new(
+            EsOptions {
+                flag: true,
+                mix_cs: false,
+                xch: false,
+                phase_shift: true,
+                rear_minus_3db: false,
+            },
+            &chans,
+        )
+        .unwrap();
         let n = 4096;
         let f = 0.01f64; // cycles per sample
         let sig: Vec<f32> = (0..n).map(|i| (2.0 * PI * f * i as f64).sin() as f32).collect();
@@ -162,7 +200,11 @@ mod tests {
         for i in 1000..3000 {
             let delayed = sig[i - SHIFT_DELAY] as f64;
             let sum = (out[4][i] + out[5][i]) as f64;
-            assert!((sum - 2.0 * std::f64::consts::FRAC_1_SQRT_2 * delayed).abs() < 0.01, "sample {i}: {sum} vs {}", 2.0 * delayed * std::f64::consts::FRAC_1_SQRT_2);
+            assert!(
+                (sum - 2.0 * std::f64::consts::FRAC_1_SQRT_2 * delayed).abs() < 0.01,
+                "sample {i}: {sum} vs {}",
+                2.0 * delayed * std::f64::consts::FRAC_1_SQRT_2
+            );
         }
         // and each differs from the delayed input in amplitude only by phase (unit gain)
         let e: f64 = (1000..3000).map(|i| (out[4][i] as f64).powi(2)).sum::<f64>() / 2000.0;

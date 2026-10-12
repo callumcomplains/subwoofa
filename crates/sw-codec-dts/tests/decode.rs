@@ -3,7 +3,11 @@ use std::process::Command;
 use sw_codec_dts::{Config, Encoder};
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn run(name: &str, channels: usize, amode: u8, lfe: bool, bitrate: u32, blocks: usize) -> (f64, Vec<f64>) {
@@ -11,8 +15,29 @@ fn run(name: &str, channels: usize, amode: u8, lfe: bool, bitrate: u32, blocks: 
 }
 
 /// `xch`: an extra centre-surround channel after the primaries.
-fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate: u32, blocks: usize) -> (f64, Vec<f64>) {
-    let mut enc = Encoder::new(Config { sample_rate: 48_000, amode, channels, lfe, bitrate, dialnorm: 0, pcm_bits: 24, es: xch, xch, perfect: false, blocks }).unwrap();
+fn run_ext(
+    name: &str,
+    channels: usize,
+    amode: u8,
+    lfe: bool,
+    xch: bool,
+    bitrate: u32,
+    blocks: usize,
+) -> (f64, Vec<f64>) {
+    let mut enc = Encoder::new(Config {
+        sample_rate: 48_000,
+        amode,
+        channels,
+        lfe,
+        bitrate,
+        dialnorm: 0,
+        pcm_bits: 24,
+        es: xch,
+        xch,
+        perfect: false,
+        blocks,
+    })
+    .unwrap();
     let n = enc.frame_samples();
     let frames = 60;
     let total = n * frames;
@@ -24,7 +49,12 @@ fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate
                     let t = i as f64 / 48_000.0;
                     let is_lfe = lfe && c == channels + usize::from(xch);
                     let f = if is_lfe { 40.0 } else { 300.0 + 700.0 * c as f64 };
-                    (2.0 * std::f64::consts::PI * f * t).sin() * 1_000_000.0 + if is_lfe { 0.0 } else { (2.0 * std::f64::consts::PI * (f * 7.3) * t).sin() * 200_000.0 }
+                    (2.0 * std::f64::consts::PI * f * t).sin() * 1_000_000.0
+                        + if is_lfe {
+                            0.0
+                        } else {
+                            (2.0 * std::f64::consts::PI * (f * 7.3) * t).sin() * 200_000.0
+                        }
                 })
                 .collect()
         })
@@ -47,10 +77,19 @@ fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.dts");
     std::fs::write(&path, &stream).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&path).args(["-f", "f64le", "-"]).output().unwrap();
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&path)
+        .args(["-f", "f64le", "-"])
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<f64> = out.stdout.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect();
+    let dec: Vec<f64> = out
+        .stdout
+        .chunks_exact(8)
+        .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+        .collect();
     let nout = nin;
     assert_eq!(dec.len() % nout, 0);
     let _ = enc.delay();
@@ -77,7 +116,10 @@ fn run_ext(name: &str, channels: usize, amode: u8, lfe: bool, xch: bool, bitrate
                 }
             }
         }
-        println!("  out ch {c}: matches input {} delay {} gain {:.3e}", best.1, best.3, best.2);
+        println!(
+            "  out ch {c}: matches input {} delay {} gain {:.3e}",
+            best.1, best.3, best.2
+        );
         if c == 0 {
             gain0 = best.2;
         }
@@ -125,7 +167,20 @@ fn band_mapping_matches_synthesis() {
     }
     use sw_codec_dts::qmf::Synthesis;
     for band in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 30, 31] {
-        let mut enc = Encoder::new(Config { sample_rate: 48_000, amode: 0, channels: 1, lfe: false, bitrate: 1_000_000, dialnorm: 0, pcm_bits: 24, es: false, xch: false, perfect: false, blocks: 16 }).unwrap();
+        let mut enc = Encoder::new(Config {
+            sample_rate: 48_000,
+            amode: 0,
+            channels: 1,
+            lfe: false,
+            bitrate: 1_000_000,
+            dialnorm: 0,
+            pcm_bits: 24,
+            es: false,
+            xch: false,
+            perfect: false,
+            blocks: 16,
+        })
+        .unwrap();
         let frames = 40;
         let mut stream = Vec::new();
         let mut sy = Synthesis::new(false);
@@ -148,8 +203,17 @@ fn band_mapping_matches_synthesis() {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.dts");
         std::fs::write(&path, &stream).unwrap();
-        let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&path).args(["-f", "f64le", "-"]).output().unwrap();
-        let dec: Vec<f64> = out.stdout.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect();
+        let out = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&path)
+            .args(["-f", "f64le", "-"])
+            .output()
+            .unwrap();
+        let dec: Vec<f64> = out
+            .stdout
+            .chunks_exact(8)
+            .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+            .collect();
         let mut best = (0.0f64, 0usize, 0.0f64);
         for delay in 0..700usize {
             let (mut xy, mut xx, mut yy) = (0.0, 0.0, 0.0);
@@ -168,6 +232,9 @@ fn band_mapping_matches_synthesis() {
                 best = (c, delay, xy / xx);
             }
         }
-        println!("band {band:2}: corr {:+.4} delay {} gain {:.3e}", best.0, best.1, best.2);
+        println!(
+            "band {band:2}: corr {:+.4} delay {} gain {:.3e}",
+            best.0, best.1, best.2
+        );
     }
 }

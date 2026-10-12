@@ -50,8 +50,19 @@ pub fn saturation_check(job: &Job, m: &Matrix) -> Result<SatReport, Error> {
     let (input_args, join) = join_inputs(job, "j")?;
     let filter = format!("{join};[j]{}[out]", pan_filter(m)?);
     let mut cmd = Command::new(&job.ffmpeg);
-    cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"]).args(&input_args);
-    cmd.args(["-filter_complex", &filter, "-map", "[out]", "-c:a", "pcm_f32le", "-f", "f32le", "-"]);
+    cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"])
+        .args(&input_args);
+    cmd.args([
+        "-filter_complex",
+        &filter,
+        "-map",
+        "[out]",
+        "-c:a",
+        "pcm_f32le",
+        "-f",
+        "f32le",
+        "-",
+    ]);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let mut stdout = child.stdout.take().expect("piped stdout");
@@ -68,7 +79,11 @@ pub fn saturation_check(job: &Job, m: &Matrix) -> Result<SatReport, Error> {
         pending.extend_from_slice(&buf[..got]);
         let whole = pending.len() / (4 * n) * (4 * n);
         floats.clear();
-        floats.extend(pending[..whole].chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+        floats.extend(
+            pending[..whole]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+        );
         sat.feed(&floats);
         pending.drain(..whole);
     }
@@ -76,7 +91,10 @@ pub fn saturation_check(job: &Job, m: &Matrix) -> Result<SatReport, Error> {
     if !out.status.success() {
         let log = String::from_utf8_lossy(&out.stderr);
         let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
-        return Err(Error::Failed(out.status.code().unwrap_or(-1), tail[tail.len().saturating_sub(5)..].join("\n")));
+        return Err(Error::Failed(
+            out.status.code().unwrap_or(-1),
+            tail[tail.len().saturating_sub(5)..].join("\n"),
+        ));
     }
     Ok(SatReport {
         channels: m.outputs.iter().map(|c| c.short()).collect(),

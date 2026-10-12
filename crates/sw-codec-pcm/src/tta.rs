@@ -30,7 +30,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -48,7 +52,14 @@ struct Filter {
 
 impl Filter {
     fn new(shift: u32) -> Filter {
-        Filter { shift, round: 1 << (shift - 1), error: 0, qm: [0; 8], dx: [0; 8], dl: [0; 8] }
+        Filter {
+            shift,
+            round: 1 << (shift - 1),
+            error: 0,
+            qm: [0; 8],
+            dx: [0; 8],
+            dl: [0; 8],
+        }
     }
 
     /// Filters one sample and updates the weights. Returns what is left of the sample.
@@ -98,7 +109,12 @@ struct Rice {
 
 impl Rice {
     fn new() -> Rice {
-        Rice { k0: 10, k1: 10, sum0: shift_16(10), sum1: shift_16(10) }
+        Rice {
+            k0: 10,
+            k1: 10,
+            sum0: shift_16(10),
+            sum1: shift_16(10),
+        }
     }
 }
 
@@ -113,7 +129,13 @@ fn encode_frame(channels: &[Vec<i32>], bytes_per_sample: u32) -> Vec<u8> {
     let nch = channels.len();
     let n = channels[0].len();
     let filter_shift = [10u32, 9, 10, 12][bytes_per_sample as usize - 1];
-    let mut state: Vec<Channel> = (0..nch).map(|_| Channel { predictor: 0, filter: Filter::new(filter_shift), rice: Rice::new() }).collect();
+    let mut state: Vec<Channel> = (0..nch)
+        .map(|_| Channel {
+            predictor: 0,
+            filter: Filter::new(filter_shift),
+            rice: Rice::new(),
+        })
+        .collect();
     let mut w = LeBitWriter::default();
     for i in 0..n {
         let mut res = 0i32;
@@ -131,11 +153,16 @@ fn encode_frame(channels: &[Vec<i32>], bytes_per_sample: u32) -> Vec<u8> {
             let ch = &mut state[c];
             let before_prediction = value;
             let predictor_shift = if bytes_per_sample == 1 { 4 } else { 5 };
-            let predicted = ((((ch.predictor as i64) << predictor_shift) - ch.predictor as i64) >> predictor_shift) as i32;
+            let predicted =
+                ((((ch.predictor as i64) << predictor_shift) - ch.predictor as i64) >> predictor_shift) as i32;
             value = value.wrapping_sub(predicted);
             ch.predictor = before_prediction;
             let value = ch.filter.process(value);
-            let mut coded: u32 = if value > 0 { ((value as u32) << 1) - 1 } else { (value.wrapping_neg() as u32) << 1 };
+            let mut coded: u32 = if value > 0 {
+                ((value as u32) << 1) - 1
+            } else {
+                (value.wrapping_neg() as u32) << 1
+            };
 
             let rice = &mut ch.rice;
             let mut k = rice.k0;
@@ -186,17 +213,34 @@ impl TtaWriter {
         let bits = match params.format {
             SampleFormat::Int16 => 16,
             SampleFormat::Int24 => 24,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "TTA holds 16 or 24 bit integer samples")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "TTA holds 16 or 24 bit integer samples",
+                ))
+            }
         };
         if params.total_frames > u32::MAX as u64 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "TTA files hold at most 2^32 samples per channel"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TTA files hold at most 2^32 samples per channel",
+            ));
         }
         let frame_samples = (256u64 * params.rate as u64 / 245) as usize;
         let expected_frames = (params.total_frames as usize).div_ceil(frame_samples);
         let header_len = 22 + 4 * expected_frames as u64 + 4;
         let mut out = BufWriter::new(File::create(path)?);
         out.write_all(&vec![0u8; header_len as usize])?; // filled in at the end
-        Ok(TtaWriter { out, bits, frame_samples, pending: vec![Vec::new(); params.channels()], frame_sizes: Vec::new(), expected_frames, header_len, params })
+        Ok(TtaWriter {
+            out,
+            bits,
+            frame_samples,
+            pending: vec![Vec::new(); params.channels()],
+            frame_sizes: Vec::new(),
+            expected_frames,
+            header_len,
+            params,
+        })
     }
 
     fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
@@ -213,7 +257,11 @@ impl BlockWriter for TtaWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= self.frame_samples {
-            let block: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..self.frame_samples).collect()).collect();
+            let block: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..self.frame_samples).collect())
+                .collect();
             self.write_frame(&block)?;
         }
         Ok(())

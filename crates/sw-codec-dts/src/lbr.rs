@@ -7,8 +7,8 @@
 //! tonal component coding. The writers below follow the order in which a decoder parses the chunks.
 
 use crate::lbr_fb::{Analysis, BANDS, HOP, TS};
-use rayon::prelude::*;
 use crate::lbr_tables::*;
+use rayon::prelude::*;
 
 /// Bit writer, least significant bit first (the bit order of LBR streams).
 #[derive(Default, Clone)]
@@ -28,7 +28,11 @@ impl BitsLe {
         if bits == 0 {
             return;
         }
-        let v = if bits == 32 { v as u64 } else { (v as u64) & ((1u64 << bits) - 1) };
+        let v = if bits == 32 {
+            v as u64
+        } else {
+            (v as u64) & ((1u64 << bits) - 1)
+        };
         self.cur |= v << self.n;
         self.n += bits;
         while self.n >= 8 {
@@ -83,7 +87,9 @@ pub(crate) struct Vlc {
 impl Vlc {
     pub(crate) fn new(table: &[(u8, u8)]) -> Vlc {
         let n = table.iter().map(|t| t.0 as usize).max().unwrap() + 1;
-        Vlc { codes: codes_of(table, n) }
+        Vlc {
+            codes: codes_of(table, n),
+        }
     }
 
     /// Write the value `v` (what the decoder returns, 0 or more).
@@ -354,7 +360,9 @@ impl LbrEncoder {
             return Err(crate::Error::Unsupported("DTS Express is implemented at 48 kHz".into()));
         }
         if cfg.channels == 0 || cfg.channels > 5 {
-            return Err(crate::Error::Unsupported("DTS Express: 1 to 5 full-band channels".into()));
+            return Err(crate::Error::Unsupported(
+                "DTS Express: 1 to 5 full-band channels".into(),
+            ));
         }
         let floor = Self::min_bitrate(cfg.channels, cfg.lfe);
         if cfg.bitrate < floor {
@@ -365,16 +373,59 @@ impl LbrEncoder {
             )));
         }
         // whole 16-bit words: the verifier rejects odd frame sizes
-        let frame_bytes = cfg.payload_bytes.unwrap_or((cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2);
+        let frame_bytes = cfg
+            .payload_bytes
+            .unwrap_or((cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2);
         let n = cfg.channels;
         let per_channel = cfg.bitrate as f64 / 1000.0 / cfg.channels as f64;
-        let band_limit = std::env::var("SW_LBR_BL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if cfg.dialog_mode { 1 } else if per_channel >= 128.0 { 0 } else if per_channel >= 56.0 { 1 } else { 2 });
+        let band_limit = std::env::var("SW_LBR_BL")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(if cfg.dialog_mode {
+                1
+            } else if per_channel >= 128.0 {
+                0
+            } else if per_channel >= 56.0 {
+                1
+            } else {
+                2
+            });
         let geo = Geo::new(cfg.sample_rate, band_limit);
         // the decoder scales a band-limited stream's filter bank output by sqrt(2^(2 - limited range)), so the
         // coefficients are scaled down by the same factor here
-        let gain = if band_limit > 0 { 1.0 / ((1u32 << band_limit) as f64).sqrt() } else { 1.0 };
-        let ana: Vec<Analysis> = (0..n).map(|_| { let mut a = Analysis::new(); a.set_gain(gain); a }).collect();
-        Ok(LbrEncoder { t: Tables::new(), ana, buf: vec![Vec::new(); n], next_hop: 0, base: 0, lfe: cfg.lfe.then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate, cfg.bitrate >= LFE_WIDE_FROM)), lfe_buf: Vec::new(), lfe_base: 0, frames: 0, frame_bytes, geo, min_resid: std::sync::atomic::AtomicUsize::new(0), tonal: std::env::var_os("SW_LBR_NOTONES").is_none(), groups: (0..5).map(crate::lbr_tonal::Group::new).collect(), lpc_state: std::sync::RwLock::new(vec![LpcState::default(); n]), lpc_plan: std::sync::RwLock::new(vec![LpcPlan::default(); n]), cfg })
+        let gain = if band_limit > 0 {
+            1.0 / ((1u32 << band_limit) as f64).sqrt()
+        } else {
+            1.0
+        };
+        let ana: Vec<Analysis> = (0..n)
+            .map(|_| {
+                let mut a = Analysis::new();
+                a.set_gain(gain);
+                a
+            })
+            .collect();
+        Ok(LbrEncoder {
+            t: Tables::new(),
+            ana,
+            buf: vec![Vec::new(); n],
+            next_hop: 0,
+            base: 0,
+            lfe: cfg
+                .lfe
+                .then(|| crate::lbr_lfe::LfeEncoder::new(cfg.sample_rate, cfg.bitrate >= LFE_WIDE_FROM)),
+            lfe_buf: Vec::new(),
+            lfe_base: 0,
+            frames: 0,
+            frame_bytes,
+            geo,
+            min_resid: std::sync::atomic::AtomicUsize::new(0),
+            tonal: std::env::var_os("SW_LBR_NOTONES").is_none(),
+            groups: (0..5).map(crate::lbr_tonal::Group::new).collect(),
+            lpc_state: std::sync::RwLock::new(vec![LpcState::default(); n]),
+            lpc_plan: std::sync::RwLock::new(vec![LpcPlan::default(); n]),
+            cfg,
+        })
     }
 
     /// Smallest bit rate (bits per second) the encoder can honour: about 55 kbps per channel pair at its
@@ -430,7 +481,11 @@ impl LbrEncoder {
     /// Samples ahead of a frame's own hops that the tone sets of the frame need (their span reaches 54 steps
     /// beyond the frame's last step).
     fn lookahead(&self) -> usize {
-        if self.tonal { 54 * HOP } else { 0 }
+        if self.tonal {
+            54 * HOP
+        } else {
+            0
+        }
     }
 
     fn next_frame(&mut self) -> Vec<u8> {
@@ -439,7 +494,9 @@ impl LbrEncoder {
         while self.next_hop <= need {
             let start = self.next_hop * HOP - self.base;
             for (c, a) in self.ana.iter_mut().enumerate() {
-                let block: Vec<f64> = (0..2 * HOP).map(|i| self.buf[c].get(start + i).copied().unwrap_or(0.0)).collect();
+                let block: Vec<f64> = (0..2 * HOP)
+                    .map(|i| self.buf[c].get(start + i).copied().unwrap_or(0.0))
+                    .collect();
                 a.compute_hop(&block);
             }
             self.next_hop += 1;
@@ -463,7 +520,11 @@ impl LbrEncoder {
             let (buf, base) = (&self.lfe_buf, self.lfe_base);
             let body = l.code_frame(&|i| {
                 let p = origin as isize + i - base as isize;
-                if p < 0 { 0.0 } else { buf.get(p as usize).copied().unwrap_or(0.0) }
+                if p < 0 {
+                    0.0
+                } else {
+                    buf.get(p as usize).copied().unwrap_or(0.0)
+                }
             });
             chunk(0x0A, body)
         });
@@ -495,13 +556,27 @@ impl LbrEncoder {
         use crate::lbr_tonal as tn;
         let nch = self.cfg.channels;
         let lr = 2 - self.geo.band_limit as i32;
-        let kappa = std::env::var("SW_LBR_KAPPA").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        let max_g = std::env::var("SW_LBR_GROUPS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(5);
-        let search = tn::Search { max_line: (4 * self.geo.nsb).saturating_sub(6), kappa, max_tones: 12, limited_range: lr };
+        let kappa = std::env::var("SW_LBR_KAPPA")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4.0);
+        let max_g = std::env::var("SW_LBR_GROUPS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(5);
+        let search = tn::Search {
+            max_line: (4 * self.geo.nsb).saturating_sub(6),
+            kappa,
+            max_tones: 12,
+        };
         let mut all: Vec<Vec<Vec<tn::Tone>>> = Vec::new();
         // at most a quarter of the frame goes to tones, and never so much that the coarsest residual of the
         // previous frame (plus headers) no longer fits
-        let room = self.frame_bytes as i64 - (self.header_len() as i64 + 8 + (self.min_resid.load(std::sync::atomic::Ordering::Relaxed) as f64 * 1.15) as i64 + if self.cfg.lfe { 60 } else { 0 });
+        let room = self.frame_bytes as i64
+            - (self.header_len() as i64
+                + 8
+                + (self.min_resid.load(std::sync::atomic::Ordering::Relaxed) as f64 * 1.15) as i64
+                + if self.cfg.lfe { 60 } else { 0 });
         let mut bits_left: i64 = ((self.frame_bytes as i64 * 8) / 4).min(room.max(0) * 8 / 2);
         for g in 0..5usize {
             let mut subs: Vec<Vec<tn::Tone>> = Vec::new();
@@ -513,7 +588,11 @@ impl LbrEncoder {
                 let grp = &self.groups[g];
                 let first = 32 * f + tn::TONE_DELAY + j * grp.steps;
                 let mut targets: Vec<Vec<[f64; HOP]>> = (0..nch)
-                    .map(|ch| (0..2 * grp.steps).map(|r| self.ana[ch].coefs_mut(first + r).map(|c| *c).unwrap_or([0.0; HOP])).collect())
+                    .map(|ch| {
+                        (0..2 * grp.steps)
+                            .map(|r| self.ana[ch].coefs_mut(first + r).map(|c| *c).unwrap_or([0.0; HOP]))
+                            .collect()
+                    })
                     .collect();
                 let tones = tn::pick(grp, &mut targets, &search, &mut bits_left);
                 if !tones.is_empty() {
@@ -568,7 +647,9 @@ impl LbrEncoder {
         let nch = self.cfg.channels;
         let npairs = nch.div_ceil(2);
         let tonal_bytes: usize = tonal.iter().map(|c| c.len()).sum();
-        let budget = self.frame_bytes.saturating_sub(self.header_len() + 8 + lfe.as_ref().map_or(0, |c| c.len()) + tonal_bytes);
+        let budget = self
+            .frame_bytes
+            .saturating_sub(self.header_len() + 8 + lfe.as_ref().map_or(0, |c| c.len()) + tonal_bytes);
         let nsb = self.geo.nsb;
         self.plan_prediction(ts);
         // profiles from the finest quantizers to the coarsest (steepness 0 only: the others never won)
@@ -577,7 +658,11 @@ impl LbrEncoder {
         {
             let mut n = 0usize;
             for pair in 0..npairs {
-                n += self.write_pair(pair, ts, 0, MIN_K).iter().map(|c| c.len()).sum::<usize>();
+                n += self
+                    .write_pair(pair, ts, 0, MIN_K)
+                    .iter()
+                    .map(|c| c.len())
+                    .sum::<usize>();
             }
             self.min_resid.store(n, std::sync::atomic::Ordering::Relaxed);
         }
@@ -589,7 +674,11 @@ impl LbrEncoder {
                 chunks.extend(self.write_pair(pair, ts, p, k));
             }
             if std::env::var_os("SW_LBR_DEBUG").is_some() {
-                eprintln!("fixed bytes {} chunks {:?}", chunks.iter().map(|c| c.len()).sum::<usize>(), chunks.iter().map(|c| c.len()).collect::<Vec<_>>());
+                eprintln!(
+                    "fixed bytes {} chunks {:?}",
+                    chunks.iter().map(|c| c.len()).sum::<usize>(),
+                    chunks.iter().map(|c| c.len()).collect::<Vec<_>>()
+                );
             }
             chunks.extend(tonal);
             return self.assemble(chunks);
@@ -630,7 +719,10 @@ impl LbrEncoder {
         // the least error wins; on a tie the finer profile (earlier in the list)
         let mut best = None;
         for fit in fits.into_iter().flatten() {
-            if best.as_ref().map_or(true, |(be, _, _): &(f64, Vec<Vec<u8>>, Vec<(usize, [[f64; 8]; 3], [bool; 3])>)| fit.0 < *be) {
+            if best.as_ref().map_or(
+                true,
+                |(be, _, _): &(f64, Vec<Vec<u8>>, Vec<(usize, [[f64; 8]; 3], [bool; 3])>)| fit.0 < *be,
+            ) {
                 best = Some(fit);
             }
         }
@@ -670,7 +762,11 @@ impl LbrEncoder {
                 }
                 for sb in 0..3 {
                     let y = &ts[ch][sb];
-                    let sets: [&[f64]; 2] = if sb < 2 { [&y[16..80], &y[80..128]] } else { [&y[16..128], &y[16..128]] };
+                    let sets: [&[f64]; 2] = if sb < 2 {
+                        [&y[16..80], &y[80..128]]
+                    } else {
+                        [&y[16..128], &y[16..128]]
+                    };
                     for (set, seg) in sets.iter().enumerate() {
                         let codes = crate::lbr_lpc::analyse(seg);
                         plan.codes[sb][set] = codes;
@@ -711,14 +807,26 @@ impl LbrEncoder {
         out.push(12); // 48 kHz
         out.extend_from_slice(&self.cfg.speaker_mask.to_le_bytes());
         out.extend_from_slice(&0x0800u16.to_le_bytes());
-        out.push(match self.geo.band_limit { 0 => 0x14, 1 => 0x08, _ => 0x10 } | 0x01 | if self.cfg.lfe { 0x02 } else { 0 }); // band limit, LFE; bit 0 is set in every commercial stream seen
+        out.push(
+            match self.geo.band_limit {
+                0 => 0x14,
+                1 => 0x08,
+                _ => 0x10,
+            } | 0x01
+                | if self.cfg.lfe { 0x02 } else { 0 },
+        ); // band limit, LFE; bit 0 is set in every commercial stream seen
         let br = self.hdr_br();
         out.push((((br >> 16) & 0xF) | (((br >> 16) & 0xF) << 4)) as u8);
         out.extend_from_slice(&(br as u16).to_le_bytes());
         out.extend_from_slice(&(br as u16).to_le_bytes());
         // frame chunk with its 16-bit checksum: the id byte, both length bytes and every byte after the checksum
         if std::env::var_os("SW_LBR_DEBUG").is_some() && out.len() + 5 + body.len() > self.frame_bytes {
-            eprintln!("frame {} overshoots: {} bytes against {}", self.frames, out.len() + 5 + body.len(), self.frame_bytes);
+            eprintln!(
+                "frame {} overshoots: {} bytes against {}",
+                self.frames,
+                out.len() + 5 + body.len(),
+                self.frame_bytes
+            );
         }
         let pad = self.frame_bytes.saturating_sub(out.len() + 3 + 2 + body.len() + 2);
         if std::env::var_os("SW_LBR_PAD").is_some() {
@@ -752,7 +860,16 @@ impl LbrEncoder {
     /// factor that makes the decoder's noise match their level.
     /// Bands below `k` carry data; bands from `k` up to `kw` are written as zero symbols (a channel pair has to
     /// describe the whole mono region); above `kw` the decoder fills noise at the signalled level.
-    fn code_channel(&self, ch: usize, x: &[Vec<f64>], levels: &[usize], pos: &[usize], k: usize, kw: usize, g2: Vec<[u8; 64]>) -> ChanCoding {
+    fn code_channel(
+        &self,
+        ch: usize,
+        x: &[Vec<f64>],
+        levels: &[usize],
+        pos: &[usize],
+        k: usize,
+        kw: usize,
+        g2: Vec<[u8; 64]>,
+    ) -> ChanCoding {
         let nsb = self.geo.nsb;
         let mut q = vec![vec![Vec::new(); 8]; nsb];
         let mut scf = vec![[0usize; 8]; nsb];
@@ -770,7 +887,11 @@ impl LbrEncoder {
                 // the lowest bands are predicted: a closed loop over what the decoder will have produced
                 // with the predictor of the frame, or without it (the first samples still follow the last frame's)
                 let off = self.lpc_band(ch, sb, &x[sb], &alpha, lmax, false);
-                let on = if levels[sb] >= 3 { Some(self.lpc_band(ch, sb, &x[sb], &alpha, lmax, true)) } else { None };
+                let on = if levels[sb] >= 3 {
+                    Some(self.lpc_band(ch, sb, &x[sb], &alpha, lmax, true))
+                } else {
+                    None
+                };
                 let ((s8, q8, e, tail), used) = match on {
                     Some(o) if o.2 < off.2 => (o, true),
                     _ => (off, false),
@@ -787,7 +908,11 @@ impl LbrEncoder {
             for slot in 0..8 {
                 let seg = &x[sb][slot * 16..slot * 16 + 16];
                 // attenuation steps of the eight sample pairs of the slot (none for the lowest bands)
-                let steps: [u8; 8] = if sb >= 4 && group < g2.len() { g2[group][slot * 8..slot * 8 + 8].try_into().unwrap() } else { [0; 8] };
+                let steps: [u8; 8] = if sb >= 4 && group < g2.len() {
+                    g2[group][slot * 8..slot * 8 + 8].try_into().unwrap()
+                } else {
+                    [0; 8]
+                };
                 if pos[sb] < k {
                     let (s, qq, e) = self.pick_scale(seg, &alpha, lmax, &steps);
                     err += e;
@@ -823,12 +948,27 @@ impl LbrEncoder {
             }
             eprintln!("{line} err {err:.3e}");
         }
-        ChanCoding { err, q, grids: self.grids(&scf), g2, tails, lpc_used }
+        ChanCoding {
+            err,
+            q,
+            grids: self.grids(&scf),
+            g2,
+            tails,
+            lpc_used,
+        }
     }
 
     /// Closed-loop quantization of one predicted band: scale factors, symbols, squared error and the decoder's last
     /// eight samples. The coefficient set follows the position in the frame as the decoder's synthesis does.
-    fn lpc_band(&self, ch: usize, sb: usize, y: &[f64], alpha: &[f32], lmax: f32, on: bool) -> ([usize; 8], Vec<Vec<i32>>, f64, [f64; 8]) {
+    fn lpc_band(
+        &self,
+        ch: usize,
+        sb: usize,
+        y: &[f64],
+        alpha: &[f32],
+        lmax: f32,
+        on: bool,
+    ) -> ([usize; 8], Vec<Vec<i32>>, f64, [f64; 8]) {
         let plan_all = self.lpc_plan.read().unwrap();
         let state_all = self.lpc_state.read().unwrap();
         let (plan, st) = (&plan_all[ch], &state_all[ch]);
@@ -942,7 +1082,11 @@ impl LbrEncoder {
                 .enumerate()
                 .map(|(i, v)| {
                     let a = step_gain(s, steps[i / 2]);
-                    let qi = if a > 0.0 { nearest(alpha, (*v / a) as f32) } else { nearest(alpha, 0.0) };
+                    let qi = if a > 0.0 {
+                        nearest(alpha, (*v / a) as f32)
+                    } else {
+                        nearest(alpha, 0.0)
+                    };
                     err += (v - a * alpha[qi] as f64).powi(2);
                     qi as i32
                 })
@@ -965,14 +1109,30 @@ impl LbrEncoder {
             if bands.is_empty() {
                 continue;
             }
-            let amp: Vec<f64> = (0..64).map(|i| (bands.iter().map(|&b| x[b][2 * i] * x[b][2 * i] + x[b][2 * i + 1] * x[b][2 * i + 1]).sum::<f64>() / (2 * bands.len()) as f64).sqrt()).collect();
+            let amp: Vec<f64> = (0..64)
+                .map(|i| {
+                    (bands
+                        .iter()
+                        .map(|&b| x[b][2 * i] * x[b][2 * i] + x[b][2 * i + 1] * x[b][2 * i + 1])
+                        .sum::<f64>()
+                        / (2 * bands.len()) as f64)
+                        .sqrt()
+                })
+                .collect();
             for slot in 0..8 {
                 let a = &amp[slot * 8..slot * 8 + 8];
                 let top = a.iter().cloned().fold(0.0, f64::max);
                 if top < 1e-9 {
                     continue;
                 }
-                let steps: Vec<u8> = a.iter().map(|v| (2.0 * (top / v.max(top * 1e-4)).log2()).round().clamp(0.0, G2_MAX as f64) as u8).collect();
+                let steps: Vec<u8> = a
+                    .iter()
+                    .map(|v| {
+                        (2.0 * (top / v.max(top * 1e-4)).log2())
+                            .round()
+                            .clamp(0.0, G2_MAX as f64) as u8
+                    })
+                    .collect();
                 // flat slots stay flat: the side information is not worth a small correction
                 if steps.iter().all(|s| *s <= G2_MIN) {
                     continue;
@@ -1030,7 +1190,14 @@ impl LbrEncoder {
 
     /// `muted`: emergency mode, every coded sample becomes the zero symbol (keeps the stream legal when even
     /// the cheapest setting does not fit the frame).
-    fn write_pair_ex(&self, pair: usize, ts: &[Vec<Vec<f64>>], profile: u32, k: usize, muted: bool) -> (Vec<Vec<u8>>, f64, Vec<(usize, [[f64; 8]; 3], [bool; 3])>) {
+    fn write_pair_ex(
+        &self,
+        pair: usize,
+        ts: &[Vec<Vec<f64>>],
+        profile: u32,
+        k: usize,
+        muted: bool,
+    ) -> (Vec<Vec<u8>>, f64, Vec<(usize, [[f64; 8]; 3], [bool; 3])>) {
         let ch1 = pair * 2;
         let ch2 = (ch1 + 1).min(self.cfg.channels - 1);
         let stereo = ch1 != ch2;
@@ -1042,14 +1209,20 @@ impl LbrEncoder {
             profile
         } else {
             let energy = |b: usize| -> f64 { (ch1..=ch2).map(|c| ts[c][b].iter().map(|v| v * v).sum::<f64>()).sum() };
-            let m = (0..8.min(nsb)).max_by(|&a, &b| energy(a).partial_cmp(&energy(b)).unwrap()).unwrap_or(0);
+            let m = (0..8.min(nsb))
+                .max_by(|&a, &b| energy(a).partial_cmp(&energy(b)).unwrap())
+                .unwrap_or(0);
             (profile & !7) | m as u32
         };
         let levels = levels_from_profile(profile, nsb, geo.limited_rate);
         let kw = if stereo { k.max(geo.max_mono) } else { k };
         // a lone channel codes its bands in order of energy (the quantizer levels fall with the position, so the
         // strongest bands get the finest ones); a pair keeps them in order
-        let ord = if stereo || std::env::var_os("SW_LBR_NOORDER").is_some() { (0..nsb).collect::<Vec<usize>>() } else { self.band_order(&ts[ch1]) };
+        let ord = if stereo || std::env::var_os("SW_LBR_NOORDER").is_some() {
+            (0..nsb).collect::<Vec<usize>>()
+        } else {
+            self.band_order(&ts[ch1])
+        };
         let mut pos = vec![0usize; nsb];
         for (p, &b) in ord.iter().enumerate() {
             pos[b] = p;
@@ -1063,8 +1236,14 @@ impl LbrEncoder {
             }
         };
         let mut c1 = self.code_channel(ch1, &ts[ch1], &levels, &pos, k, kw, g2_for(ch1));
-        let mut c2 = if stereo { Some(self.code_channel(ch2, &ts[ch2], &levels, &pos, k, kw, g2_for(ch2))) } else { None };
-        let tails: Vec<(usize, [[f64; 8]; 3], [bool; 3])> = std::iter::once((ch1, c1.tails, c1.lpc_used)).chain(c2.as_ref().map(|c| (ch2, c.tails, c.lpc_used))).collect();
+        let mut c2 = if stereo {
+            Some(self.code_channel(ch2, &ts[ch2], &levels, &pos, k, kw, g2_for(ch2)))
+        } else {
+            None
+        };
+        let tails: Vec<(usize, [[f64; 8]; 3], [bool; 3])> = std::iter::once((ch1, c1.tails, c1.lpc_used))
+            .chain(c2.as_ref().map(|c| (ch2, c.tails, c.lpc_used)))
+            .collect();
         let used = [c1.lpc_used, c2.as_ref().map_or([false; 3], |c| c.lpc_used)];
         let lpc_used = |ch: usize| used[ch - ch1];
         let err = c1.err + c2.as_ref().map_or(0.0, |c| c.err);
@@ -1109,7 +1288,11 @@ impl LbrEncoder {
             for sb in 0..2 {
                 for ch in ch1..=ch2 {
                     for set in 0..2 {
-                        for code in if lpc_used(ch)[sb] { plan[ch].codes[sb][set] } else { [8u8; 8] } {
+                        for code in if lpc_used(ch)[sb] {
+                            plan[ch].codes[sb][set]
+                        } else {
+                            [8u8; 8]
+                        } {
                             w.put(code as u32, 4);
                         }
                     }
@@ -1139,7 +1322,11 @@ impl LbrEncoder {
         {
             let plan = self.lpc_plan.read().unwrap();
             for ch in ch1..=ch2 {
-                for code in if lpc_used(ch)[2] { plan[ch].codes[2][0] } else { [8u8; 8] } {
+                for code in if lpc_used(ch)[2] {
+                    plan[ch].codes[2][0]
+                } else {
+                    [8u8; 8]
+                } {
                     w.put(code as u32, 4);
                 }
             }
@@ -1330,7 +1517,10 @@ impl LbrEncoder {
                     for (j, s) in blk.iter().enumerate() {
                         v[j] = *s as usize;
                     }
-                    w.put(self.t.pack3[v[0] + 5 * v[1] + 25 * v[2]].expect("3-in-7 code") as u32, 7);
+                    w.put(
+                        self.t.pack3[v[0] + 5 * v[1] + 25 * v[2]].expect("3-in-7 code") as u32,
+                        7,
+                    );
                 }
             }
             4 => {

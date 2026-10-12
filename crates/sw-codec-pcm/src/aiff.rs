@@ -21,13 +21,27 @@ impl AiffWriter {
         let mut out = BufWriter::new(File::create(path)?);
         out.write_all(&header)?;
         let file_bytes = header.len() as u64;
-        Ok(AiffWriter { out, params, scratch: Vec::new(), data_bytes, written: 0, file_bytes })
+        Ok(AiffWriter {
+            out,
+            params,
+            scratch: Vec::new(),
+            data_bytes,
+            written: 0,
+            file_bytes,
+        })
     }
 }
 
 impl BlockWriter for AiffWriter {
     fn write_block(&mut self, planar: &[Vec<f32>], frames: usize) -> std::io::Result<()> {
-        interleave(planar, &self.params.order, frames, self.params.format, true, &mut self.scratch);
+        interleave(
+            planar,
+            &self.params.order,
+            frames,
+            self.params.format,
+            true,
+            &mut self.scratch,
+        );
         self.out.write_all(&self.scratch)?;
         self.written += self.scratch.len() as u64;
         Ok(())
@@ -35,7 +49,10 @@ impl BlockWriter for AiffWriter {
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if self.written != self.data_bytes {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the input ended before the planned length"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the input ended before the planned length",
+            ));
         }
         pad_even(&mut self.out, self.data_bytes)?;
         self.out.flush()?;
@@ -53,7 +70,11 @@ fn header(p: &Params, data_bytes: u64) -> std::io::Result<Vec<u8>> {
     if float {
         // AIFF-C names its compression (fl32 or fl64), then a text label: a length byte and the text, padded to even
         comm.extend_from_slice(if p.format.bits() == 32 { b"fl32" } else { b"fl64" });
-        let name: &[u8] = if p.format.bits() == 32 { b"IEEE 32-bit float" } else { b"IEEE 64-bit float" };
+        let name: &[u8] = if p.format.bits() == 32 {
+            b"IEEE 32-bit float"
+        } else {
+            b"IEEE 64-bit float"
+        };
         comm.push(name.len() as u8);
         comm.extend_from_slice(name);
         if (1 + name.len()) % 2 == 1 {
@@ -68,7 +89,10 @@ fn header(p: &Params, data_bytes: u64) -> std::io::Result<Vec<u8>> {
     let ssnd_size = 8 + data_bytes;
     let form_size = 4 + chunks.len() as u64 + 8 + ssnd_size + ssnd_size % 2;
     if form_size > u32::MAX as u64 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "AIFF files cannot hold more than 4 GB: use WAV (RF64), CAF or FLAC"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AIFF files cannot hold more than 4 GB: use WAV (RF64), CAF or FLAC",
+        ));
     }
     let mut out = Vec::new();
     out.extend_from_slice(b"FORM");

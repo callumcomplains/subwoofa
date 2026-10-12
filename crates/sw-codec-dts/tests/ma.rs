@@ -5,7 +5,11 @@ use sw_codec_dts::ma::{map_layout, MaConfig, MaEncoder};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
@@ -14,7 +18,10 @@ fn signal(c: usize, n: usize, seed: &mut u32) -> Vec<i32> {
             *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let noise = ((*seed >> 12) as i32 & 0xFFF) - 2048;
             let t = i as f64 / 48_000.0;
-            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0 + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0 + (2.0 * std::f64::consts::PI * 0.31 * i as f64).sin() * 150_000.0) as i32 + noise * 4
+            ((2.0 * std::f64::consts::PI * (200.0 + 130.0 * c as f64) * t).sin() * 2_000_000.0
+                + (2.0 * std::f64::consts::PI * 3100.0 * t).sin() * 300_000.0
+                + (2.0 * std::f64::consts::PI * 0.31 * i as f64).sin() * 150_000.0) as i32
+                + noise * 4
         })
         .collect()
 }
@@ -46,14 +53,20 @@ fn out_position(layout: &ChannelLayout, idx: usize) -> usize {
     layout.channels.iter().filter(|c| rank(**c) < me).count()
 }
 
-
 fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     if !have_ffmpeg() {
         return;
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0, wide_remap: false, repr_type: None });
+    let mut enc = MaEncoder::new(MaConfig {
+        sample_rate: rate,
+        map: map.clone(),
+        bit_res: 24,
+        dialnorm: 0,
+        wide_remap: false,
+        repr_type: None,
+    });
     let n = enc.frame_samples();
     let nch = map.order.len();
     let mut seed = 99u32;
@@ -63,16 +76,39 @@ fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
         let part: Vec<Vec<i32>> = sigs.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
         stream.extend(enc.encode_frame(&part));
     }
-    let mut file = dtshd_header(&DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: (n * frames) as u64, ch_mask: 0xF, initial_padding: 0 }, stream.len() as u64);
+    let mut file = dtshd_header(
+        &DtsHdHeader {
+            sample_rate: rate,
+            frames: frames as u32,
+            samples_per_frame: n as u16,
+            total_samples: (n * frames) as u64,
+            ch_mask: 0xF,
+            initial_padding: 0,
+        },
+        stream.len() as u64,
+    );
     file.extend_from_slice(&stream);
     let dir = std::env::temp_dir().join(format!("sw_dts_ma_{}_{}", std::process::id(), name));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.dtshd");
     std::fs::write(&path, &file).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "warning", "-i"])
+        .arg(&path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.stderr.is_empty(), "{name}: ffmpeg complained: {}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<i32> = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    assert!(
+        out.stderr.is_empty(),
+        "{name}: ffmpeg complained: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dec: Vec<i32> = out
+        .stdout
+        .chunks_exact(3)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8)
+        .collect();
     assert_eq!(dec.len(), n * frames * nch, "{name}: decoded length");
     // FFmpeg outputs channels in layout order (L R C LFE Ls Rs for 5.1); find each coded channel's output slot
     let want_order: Vec<usize> = (0..nch).collect();
@@ -81,7 +117,11 @@ fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     for (j, &lc) in map.order.iter().enumerate() {
         let lc = out_position(layout, lc);
         for i in 0..n * frames {
-            assert_eq!(dec[i * nch + lc], sigs[j][i], "{name}: channel {lc} differs at sample {i}");
+            assert_eq!(
+                dec[i * nch + lc],
+                sigs[j][i],
+                "{name}: channel {lc} differs at sample {i}"
+            );
         }
     }
 }
@@ -131,7 +171,14 @@ fn immersive(layout_id: &str, rate: u32) {
     }
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
-    let mut enc = MaEncoder::new(MaConfig { sample_rate: rate, map: map.clone(), bit_res: 24, dialnorm: 0, wide_remap: false, repr_type: None });
+    let mut enc = MaEncoder::new(MaConfig {
+        sample_rate: rate,
+        map: map.clone(),
+        bit_res: 24,
+        dialnorm: 0,
+        wide_remap: false,
+        repr_type: None,
+    });
     let n = enc.frame_samples();
     let nch = map.order.len();
     assert_eq!(nch, layout.channels.len());
@@ -143,18 +190,40 @@ fn immersive(layout_id: &str, rate: u32) {
         let part: Vec<Vec<i32>> = sigs.iter().map(|s| s[f * n..(f + 1) * n].to_vec()).collect();
         stream.extend(enc.encode_frame(&part));
     }
-    let mut file = dtshd_header(&DtsHdHeader { sample_rate: rate, frames: frames as u32, samples_per_frame: n as u16, total_samples: (n * frames) as u64, ch_mask: 0xF, initial_padding: 0 }, stream.len() as u64);
+    let mut file = dtshd_header(
+        &DtsHdHeader {
+            sample_rate: rate,
+            frames: frames as u32,
+            samples_per_frame: n as u16,
+            total_samples: (n * frames) as u64,
+            ch_mask: 0xF,
+            initial_padding: 0,
+        },
+        stream.len() as u64,
+    );
     file.extend_from_slice(&stream);
     let dir = std::env::temp_dir().join(format!("sw_dts_ma_{}_{}_{}", std::process::id(), layout_id, rate));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.dtshd");
     std::fs::write(&path, &file).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "warning", "-channel_order", "coded", "-i"]).arg(&path).args(["-c:a", "pcm_s24le", "-f", "s24le", "-"]).output().unwrap();
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "warning", "-channel_order", "coded", "-i"])
+        .arg(&path)
+        .args(["-c:a", "pcm_s24le", "-f", "s24le", "-"])
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     // the one message FFmpeg prints is its guess at the layout, not a complaint
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.lines().all(|l| l.contains("Guessed Channel Layout")), "{layout_id}: ffmpeg complained: {err}");
-    let dec: Vec<i32> = out.stdout.chunks_exact(3).map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8).collect();
+    assert!(
+        err.lines().all(|l| l.contains("Guessed Channel Layout")),
+        "{layout_id}: ffmpeg complained: {err}"
+    );
+    let dec: Vec<i32> = out
+        .stdout
+        .chunks_exact(3)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], 0]) << 8 >> 8)
+        .collect();
     assert_eq!(dec.len(), n * frames * nch, "{layout_id}: decoded length");
     let mut used = vec![false; nch];
     for (j, sig) in sigs.iter().enumerate() {

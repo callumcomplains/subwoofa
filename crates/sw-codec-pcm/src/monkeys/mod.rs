@@ -134,7 +134,11 @@ impl BlockWriter for MonkeysWriter {
             pending.extend(new);
         }
         while self.pending[0].len() >= FRAME_BLOCKS {
-            let frame: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..FRAME_BLOCKS).collect()).collect();
+            let frame: Vec<Vec<i32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..FRAME_BLOCKS).collect())
+                .collect();
             self.write_frame(&frame)?;
         }
         Ok(())

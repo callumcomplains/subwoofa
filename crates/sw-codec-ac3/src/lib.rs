@@ -8,6 +8,7 @@ pub mod bits;
 pub mod blocksw;
 pub mod mdct;
 pub mod native;
+#[rustfmt::skip]
 pub mod tables;
 
 use bits::{crc16, crc1_field, BitWriter};
@@ -25,7 +26,9 @@ pub const SAMPLES_PER_FRAME: usize = 1536;
 const BLOCKS: usize = 6;
 const BANDS: usize = 50;
 
-const BITRATES: [u32; 19] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640];
+const BITRATES: [u32; 19] = [
+    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640,
+];
 /// Mantissa bits per bap for the ungrouped quantizers (bap 1, 2 and 4 are grouped).
 const BAP_BITS: [u32; 16] = [0, 0, 0, 3, 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16];
 const GROUPED_LEVELS: [i32; 6] = [0, 3, 5, 7, 11, 15];
@@ -74,7 +77,15 @@ pub struct LayoutMap {
 pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
     use Channel::*;
     let find = |c: &[Channel]| layout.channels.iter().position(|x| c.contains(x));
-    let (l, r, c, cs, ls, rs, lfe) = (find(&[L, Lt]), find(&[R, Rt]), find(&[C]), find(&[Cs]), find(&[Ls]), find(&[Rs]), find(&[Lfe]));
+    let (l, r, c, cs, ls, rs, lfe) = (
+        find(&[L, Lt]),
+        find(&[R, Rt]),
+        find(&[C]),
+        find(&[Cs]),
+        find(&[Ls]),
+        find(&[Rs]),
+        find(&[Lfe]),
+    );
     let has = |o: Option<usize>| o.is_some();
     let unsupported = || Error::Unsupported(format!("layout '{}' cannot be carried by AC-3", layout.id));
     let (acmod, order): (u8, Vec<Option<usize>>) = match (has(l) && has(r), has(c), has(cs), has(ls) && has(rs)) {
@@ -87,14 +98,22 @@ pub fn map_layout(layout: &ChannelLayout) -> Result<LayoutMap, Error> {
         (true, true, false, true) => (7, vec![l, c, r, ls, rs]),
         _ => return Err(unsupported()),
     };
-    let mut source_index: Vec<usize> = order.into_iter().map(|o| o.ok_or_else(unsupported)).collect::<Result<_, _>>()?;
+    let mut source_index: Vec<usize> = order
+        .into_iter()
+        .map(|o| o.ok_or_else(unsupported))
+        .collect::<Result<_, _>>()?;
     if layout.channel_count() != source_index.len() + usize::from(lfe.is_some()) {
         return Err(unsupported());
     }
     if let Some(i) = lfe {
         source_index.push(i);
     }
-    Ok(LayoutMap { acmod, lfe: lfe.is_some(), dolby_surround: layout.id == "2.0-ltrt", source_index })
+    Ok(LayoutMap {
+        acmod,
+        lfe: lfe.is_some(),
+        dolby_surround: layout.id == "2.0-ltrt",
+        source_index,
+    })
 }
 
 fn fbw_channels(acmod: u8) -> usize {
@@ -176,7 +195,15 @@ fn calc_psd_from(exp: &[i32], start: usize, end: usize, b2b: &[u8; 256], psd: &m
 }
 
 /// Masking curve of the coupling channel (A/52 7.2.2.4 with the leak start values of cplfleak = cplsleak = 0).
-fn calc_mask_cpl(band_psd: &[i32], start: usize, end: usize, fast_gain: i32, fscod: usize, b2b: &[u8; 256], mask: &mut [i32]) {
+fn calc_mask_cpl(
+    band_psd: &[i32],
+    start: usize,
+    end: usize,
+    fast_gain: i32,
+    fscod: usize,
+    b2b: &[u8; 256],
+    mask: &mut [i32],
+) {
     let (slow_decay, fast_decay) = (SLOW_DECAY[SDCYCOD], FAST_DECAY[FDCYCOD]);
     let (slow_gain, db_per_bit) = (SLOW_GAIN[SGAINCOD], DB_PER_BIT[DBPBCOD]);
     let (band_start, band_end) = (b2b[start] as usize, b2b[end - 1] as usize + 1);
@@ -193,7 +220,15 @@ fn calc_mask_cpl(band_psd: &[i32], start: usize, end: usize, fast_gain: i32, fsc
     }
 }
 
-fn calc_bap_from(mask: &[i32], psd: &[i32], start: usize, end: usize, snr_offset: i32, b2b: &[u8; 256], bap: &mut [u8]) {
+fn calc_bap_from(
+    mask: &[i32],
+    psd: &[i32],
+    start: usize,
+    end: usize,
+    snr_offset: i32,
+    b2b: &[u8; 256],
+    bap: &mut [u8],
+) {
     let floor = FLOOR[FLOORCOD];
     if snr_offset == -960 {
         bap[..end].fill(0);
@@ -327,7 +362,15 @@ fn lowcomp(a: i32, b0: i32, b1: i32, bin: usize) -> i32 {
 }
 
 /// Masking curve per band (A/52 7.2.2.4 - 7.2.2.6), start bin 0, no coupling, no delta allocation.
-fn calc_mask(band_psd: &[i32], end: usize, fast_gain: i32, is_lfe: bool, fscod: usize, b2b: &[u8; 256], mask: &mut [i32]) {
+fn calc_mask(
+    band_psd: &[i32],
+    end: usize,
+    fast_gain: i32,
+    is_lfe: bool,
+    fscod: usize,
+    b2b: &[u8; 256],
+    mask: &mut [i32],
+) {
     let (slow_decay, fast_decay) = (SLOW_DECAY[SDCYCOD], FAST_DECAY[FDCYCOD]);
     let (slow_gain, db_per_bit) = (SLOW_GAIN[SGAINCOD], DB_PER_BIT[DBPBCOD]);
     let mut excite = [0i32; BANDS];
@@ -493,20 +536,29 @@ impl Encoder {
             48_000 => 0,
             44_100 => 1,
             32_000 => 2,
-            r => return Err(Error::Unsupported(format!("AC-3 supports 48, 44.1 and 32 kHz, not {r} Hz"))),
+            r => {
+                return Err(Error::Unsupported(format!(
+                    "AC-3 supports 48, 44.1 and 32 kHz, not {r} Hz"
+                )))
+            }
         };
         let size_idx = if cfg.eac3 {
             // E-AC-3 frames are sized in whole 16-bit words, so any bit rate is possible
             // within a single independent substream.
             if !(8..=1024).contains(&cfg.bitrate_kbps) {
-                return Err(Error::Unsupported(format!("{} kbps is outside the single-substream E-AC-3 range (8 to 1024)", cfg.bitrate_kbps)));
+                return Err(Error::Unsupported(format!(
+                    "{} kbps is outside the single-substream E-AC-3 range (8 to 1024)",
+                    cfg.bitrate_kbps
+                )));
             }
             0
         } else {
-            BITRATES
-                .iter()
-                .position(|b| *b == cfg.bitrate_kbps)
-                .ok_or_else(|| Error::Unsupported(format!("{} kbps is not a standard AC-3 bit rate ({:?})", cfg.bitrate_kbps, BITRATES)))?
+            BITRATES.iter().position(|b| *b == cfg.bitrate_kbps).ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "{} kbps is not a standard AC-3 bit rate ({:?})",
+                    cfg.bitrate_kbps, BITRATES
+                ))
+            })?
         };
         if !(1..=7).contains(&cfg.acmod) {
             return Err(Error::Unsupported("unsupported audio coding mode".into()));
@@ -555,7 +607,14 @@ impl Encoder {
 
     fn bandwidth_bins(cfg: &Config, kbps_per_ch: f64) -> usize {
         let hz = cfg.bandwidth_hz.map(|h| h as f64).unwrap_or_else(|| {
-            let pts = [(24.0, 7000.0), (40.0, 11000.0), (56.0, 15000.0), (72.0, 18000.0), (88.0, 20500.0), (104.0, 1e9)];
+            let pts = [
+                (24.0, 7000.0),
+                (40.0, 11000.0),
+                (56.0, 15000.0),
+                (72.0, 18000.0),
+                (88.0, 20500.0),
+                (104.0, 1e9),
+            ];
             if kbps_per_ch <= pts[0].0 {
                 pts[0].1
             } else {
@@ -606,7 +665,9 @@ impl Encoder {
     fn frame_words(&mut self) -> (usize, u32) {
         if self.cfg.eac3 {
             // any word count works, so track the fraction to hit the average bit rate exactly
-            let exact = self.cfg.bitrate_kbps as f64 * 1000.0 * SAMPLES_PER_FRAME as f64 / self.cfg.sample_rate as f64 / 16.0 + self.frac;
+            let exact =
+                self.cfg.bitrate_kbps as f64 * 1000.0 * SAMPLES_PER_FRAME as f64 / self.cfg.sample_rate as f64 / 16.0
+                    + self.frac;
             let words = exact.floor();
             self.frac = exact - words;
             return ((words as usize).clamp(8, 2048), 0);
@@ -729,18 +790,43 @@ impl Encoder {
             return None;
         }
         let per_ch = self.cfg.bitrate_kbps as f64 / (self.nfch as f64 + 0.1);
-        let begf = if self.cfg.acmod == 2 { if per_ch < 56.0 { 4 } else { 6 } } else if per_ch < 40.0 { 2 } else if per_ch < 56.0 { 4 } else if per_ch < 72.0 { 6 } else { 8 };
+        let begf = if self.cfg.acmod == 2 {
+            if per_ch < 56.0 {
+                4
+            } else {
+                6
+            }
+        } else if per_ch < 40.0 {
+            2
+        } else if per_ch < 56.0 {
+            4
+        } else if per_ch < 72.0 {
+            6
+        } else {
+            8
+        };
         let end_bin = self.end[0];
         let endf = (((end_bin.saturating_sub(37)) / 12).saturating_sub(3)).min(15);
         if std::env::var_os("SW_AC3_DEBUG").is_some() {
             eprintln!("coupling: end_bin {end_bin} begf {begf} endf {endf}");
         }
         // low bandwidth: start coupling as low as the format allows (stereo needs four rematrix bands, begf > 2)
-        let begf = if self.cfg.acmod == 2 { begf.min(endf.saturating_sub(2)).max(3) } else { begf.min(endf.saturating_sub(1)) };
+        let begf = if self.cfg.acmod == 2 {
+            begf.min(endf.saturating_sub(2)).max(3)
+        } else {
+            begf.min(endf.saturating_sub(1))
+        };
         if endf < begf + 1 {
             return None;
         }
-        Some(CplInfo { begf, endf, strt: 37 + 12 * begf, end: 37 + 12 * (endf + 3), coords: Vec::new(), phase: Vec::new() })
+        Some(CplInfo {
+            begf,
+            endf,
+            strt: 37 + 12 * begf,
+            end: 37 + 12 * (endf + 3),
+            coords: Vec::new(),
+            phase: Vec::new(),
+        })
     }
 
     /// Coupling coordinates per set of blocks, from the energy of each channel against the coupling channel.
@@ -781,7 +867,15 @@ impl Encoder {
                 Some(c) if ch < self.nfch => c.strt,
                 _ => self.end[ch],
             };
-            chans.push(ChannelPlan { start: 0, is_cpl: false, end, strat: if is_lfe { Strat::D15 } else { self.strat }, is_lfe, coef, sets: Vec::new() });
+            chans.push(ChannelPlan {
+                start: 0,
+                is_cpl: false,
+                end,
+                strat: if is_lfe { Strat::D15 } else { self.strat },
+                is_lfe,
+                coef,
+                sets: Vec::new(),
+            });
         }
         if let Some(c) = &mut cpl {
             // the coupling channel: the mean of the coupled channels above the coupling start
@@ -825,7 +919,15 @@ impl Encoder {
                     }
                 }
             }
-            chans.push(ChannelPlan { start: c.strt, is_cpl: true, end: c.end, strat: self.strat, is_lfe: false, coef, sets: Vec::new() });
+            chans.push(ChannelPlan {
+                start: c.strt,
+                is_cpl: true,
+                end: c.end,
+                strat: self.strat,
+                is_lfe: false,
+                coef,
+                sets: Vec::new(),
+            });
         }
 
         // 2. exponents, psd and masking per (channel, set of blocks)
@@ -849,7 +951,9 @@ impl Encoder {
                     let mut virt = condition_exponents(&raw, strat);
                     {
                         // pin the reference on the group sequence, then spread the groups over their bins again
-                        let mut seq: Vec<i32> = std::iter::once(virt[0]).chain((0..nbins / g).map(|i| virt[1 + i * g])).collect();
+                        let mut seq: Vec<i32> = std::iter::once(virt[0])
+                            .chain((0..nbins / g).map(|i| virt[1 + i * g]))
+                            .collect();
                         pin_reference(&mut seq);
                         virt[0] = seq[0];
                         for bin in 0..nbins {
@@ -864,19 +968,51 @@ impl Encoder {
                     let mut band_psd = [0i32; BANDS];
                     calc_psd_from(&exp, lo, cp.end, &self.b2b, &mut psd, &mut band_psd);
                     let mut mask = [0i32; BANDS];
-                    calc_mask_cpl(&band_psd, lo, cp.end, FAST_GAIN[FGAINCOD], self.fscod, &self.b2b, &mut mask);
+                    calc_mask_cpl(
+                        &band_psd,
+                        lo,
+                        cp.end,
+                        FAST_GAIN[FGAINCOD],
+                        self.fscod,
+                        &self.b2b,
+                        &mut mask,
+                    );
                     debug_assert_eq!(virt.len(), nbins + 1);
-                    cp.sets.push(SetPlan { strat, virt, exp, psd, mask });
+                    cp.sets.push(SetPlan {
+                        strat,
+                        virt,
+                        exp,
+                        psd,
+                        mask,
+                    });
                     continue;
                 }
-                let strat = if ch < self.nfch && self.cur_blksw[ch][first] { Strat::D45 } else { cp.strat };
+                let strat = if ch < self.nfch && self.cur_blksw[ch][first] {
+                    Strat::D45
+                } else {
+                    cp.strat
+                };
                 let exp = condition_exponents(&min_e, strat);
                 let mut psd = vec![0i32; cp.end];
                 let mut band_psd = [0i32; BANDS];
                 calc_psd(&exp, cp.end, &self.b2b, &mut psd, &mut band_psd);
                 let mut mask = [0i32; BANDS];
-                calc_mask(&band_psd, cp.end, FAST_GAIN[FGAINCOD], cp.is_lfe, self.fscod, &self.b2b, &mut mask);
-                cp.sets.push(SetPlan { strat, virt: Vec::new(), exp, psd, mask });
+                calc_mask(
+                    &band_psd,
+                    cp.end,
+                    FAST_GAIN[FGAINCOD],
+                    cp.is_lfe,
+                    self.fscod,
+                    &self.b2b,
+                    &mut mask,
+                );
+                cp.sets.push(SetPlan {
+                    strat,
+                    virt: Vec::new(),
+                    exp,
+                    psd,
+                    mask,
+                });
             }
         }
         if let Some(c) = cpl.as_mut() {
@@ -918,15 +1054,33 @@ impl Encoder {
     fn baps(&self, cp: &ChannelPlan, set: usize, v: u32) -> Vec<u8> {
         let mut bap = vec![0u8; cp.end];
         if cp.is_cpl {
-            calc_bap_from(&cp.sets[set].mask, &cp.sets[set].psd, cp.start, cp.end, Self::snr_offset(v), &self.b2b, &mut bap);
+            calc_bap_from(
+                &cp.sets[set].mask,
+                &cp.sets[set].psd,
+                cp.start,
+                cp.end,
+                Self::snr_offset(v),
+                &self.b2b,
+                &mut bap,
+            );
             return bap;
         }
-        calc_bap(&cp.sets[set].mask, &cp.sets[set].psd, cp.end, Self::snr_offset(v), &self.b2b, &mut bap);
+        calc_bap(
+            &cp.sets[set].mask,
+            &cp.sets[set].psd,
+            cp.end,
+            Self::snr_offset(v),
+            &self.b2b,
+            &mut bap,
+        );
         bap
     }
 
     fn mantissa_bits(&self, chans: &[ChannelPlan], v: u32) -> usize {
-        let per: Vec<Vec<Vec<u8>>> = chans.iter().map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect();
+        let per: Vec<Vec<Vec<u8>>> = chans
+            .iter()
+            .map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect())
+            .collect();
         let mut total = 0usize;
         for (set, &(_, count)) in self.cur_sets.iter().enumerate() {
             let mut cnt = [0usize; 16];
@@ -944,7 +1098,14 @@ impl Encoder {
     }
 
     /// Serialize a frame. Returns (bits used before mantissas and trailer, frame bytes).
-    fn write_frame(&self, chans: &[ChannelPlan], frmsizecod: u32, words: usize, v: u32, measure_only: bool) -> (usize, Vec<u8>) {
+    fn write_frame(
+        &self,
+        chans: &[ChannelPlan],
+        frmsizecod: u32,
+        words: usize,
+        v: u32,
+        measure_only: bool,
+    ) -> (usize, Vec<u8>) {
         let cfg = &self.cfg;
         let mut w = BitWriter::new();
         // Frame-level exponent strategy (E-AC-3 only): usable when every channel's six-block
@@ -958,7 +1119,11 @@ impl Encoder {
         };
         // E-AC-3 lists the coupling channel's strategy before the channels'
         let cpl_off = usize::from(cfg.eac3 && self.cur_cpl.is_some());
-        let exp_chans: Vec<&ChannelPlan> = chans.iter().filter(|c| c.is_cpl).chain(chans.iter().filter(|c| !c.is_cpl).take(self.nfch)).collect();
+        let exp_chans: Vec<&ChannelPlan> = chans
+            .iter()
+            .filter(|c| c.is_cpl)
+            .chain(chans.iter().filter(|c| !c.is_cpl).take(self.nfch))
+            .collect();
         let frame_expstr: Option<Vec<u32>> = if cfg.eac3 {
             exp_chans
                 .iter()
@@ -987,7 +1152,7 @@ impl Encoder {
             w.put(0, 1); // mixmdate
             w.put(0, 1); // infomdate
             w.put(0, 1); // addbsie
-            // audio frame header
+                         // audio frame header
             w.put(u32::from(frame_expstr.is_none()), 1); // expstre: per-block strategies
             w.put(0, 1); // ahte
             w.put(0, 2); // snroffststr: one offset for the frame
@@ -1027,7 +1192,8 @@ impl Encoder {
             }
             if self.dependent.is_none() {
                 for ch in 0..self.nfch {
-                    w.put(frame_expstr.as_ref().map_or(0, |i| i[ch + cpl_off]), 5); // convexpstr (independent substreams only)
+                    w.put(frame_expstr.as_ref().map_or(0, |i| i[ch + cpl_off]), 5);
+                    // convexpstr (independent substreams only)
                 }
             }
             w.put(csnr, 6);
@@ -1067,11 +1233,18 @@ impl Encoder {
         let baps: Vec<Vec<Vec<u8>>> = if measure_only {
             Vec::new()
         } else {
-            chans.iter().map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect()).collect()
+            chans
+                .iter()
+                .map(|cp| (0..self.cur_sets.len()).map(|s| self.baps(cp, s, v)).collect())
+                .collect()
         };
 
         for blk in 0..BLOCKS {
-            let set = self.cur_sets.iter().position(|&(f, c)| blk >= f && blk < f + c).unwrap();
+            let set = self
+                .cur_sets
+                .iter()
+                .position(|&(f, c)| blk >= f && blk < f + c)
+                .unwrap();
             let new_exps = self.cur_sets[set].0 == blk;
             if !cfg.eac3 {
                 for ch in 0..self.nfch {
@@ -1164,7 +1337,14 @@ impl Encoder {
             }
             if !cfg.eac3 {
                 if self.cur_cpl.is_some() {
-                    w.put(if new_exps { chans.last().unwrap().sets[set].strat.code() } else { 0 }, 2); // cplexpstr
+                    w.put(
+                        if new_exps {
+                            chans.last().unwrap().sets[set].strat.code()
+                        } else {
+                            0
+                        },
+                        2,
+                    ); // cplexpstr
                 }
                 for cp in chans.iter().take(self.nfch) {
                     w.put(if new_exps { cp.sets[set].strat.code() } else { 0 }, 2);
@@ -1179,7 +1359,11 @@ impl Encoder {
                         w.put(((cp.end - 73) / 3) as u32, 6); // chbwcod (coupled channels have none)
                     }
                 } else {
-                    write_cpl_exponents(&mut w, &chans.last().unwrap().sets[set].virt, chans.last().unwrap().sets[set].strat);
+                    write_cpl_exponents(
+                        &mut w,
+                        &chans.last().unwrap().sets[set].virt,
+                        chans.last().unwrap().sets[set].strat,
+                    );
                 }
                 for cp in chans.iter().filter(|c| !c.is_cpl) {
                     write_exponents(&mut w, &cp.sets[set].exp, cp.sets[set].strat, cp.end);
@@ -1247,7 +1431,8 @@ impl Encoder {
                         if b == 0 {
                             continue;
                         }
-                        let m = (cp.coef[blk][bin] * f32::from_bits(((127 + exp[bin]) as u32) << 23)).clamp(-0.999_99, 0.999_99);
+                        let m = (cp.coef[blk][bin] * f32::from_bits(((127 + exp[bin]) as u32) << 23))
+                            .clamp(-0.999_99, 0.999_99);
                         items.push((b, quantize(b, m)));
                     }
                 };
@@ -1443,24 +1628,59 @@ mod tests {
 
     #[test]
     fn frame_has_correct_size_and_valid_crcs() {
-        let cfg = Config { acmod: 7, lfe: true, sample_rate: 48_000, bitrate_kbps: 448, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false };
+        let cfg = Config {
+            acmod: 7,
+            lfe: true,
+            sample_rate: 48_000,
+            bitrate_kbps: 448,
+            dialnorm: 31,
+            dolby_surround: false,
+            bandwidth_hz: None,
+            eac3: false,
+        };
         let mut enc = Encoder::new(cfg).unwrap();
         let sig: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
         let chans: Vec<&[f32]> = (0..6).map(|_| &sig[..]).collect();
         let f = enc.encode_frame(&chans);
         assert_eq!(f.len(), 448 * 2 * 2, "448 kbps @ 48 kHz = 896 words");
         assert_eq!(&f[..2], &[0x0B, 0x77]);
-        assert_eq!(crc16(&f[2..]), 0, "crc2 over the whole frame must leave a zero residual");
+        assert_eq!(
+            crc16(&f[2..]),
+            0,
+            "crc2 over the whole frame must leave a zero residual"
+        );
         let f58 = (((f.len() >> 2) + (f.len() >> 4)) << 1) as usize;
-        assert_eq!(crc16(&f[2..f58]), 0, "crc1 over the first 5/8 must leave a zero residual");
+        assert_eq!(
+            crc16(&f[2..f58]),
+            0,
+            "crc1 over the first 5/8 must leave a zero residual"
+        );
     }
 
     #[test]
     fn rejects_non_standard_bitrates() {
-        let cfg = Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 300, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false };
+        let cfg = Config {
+            acmod: 2,
+            lfe: false,
+            sample_rate: 48_000,
+            bitrate_kbps: 300,
+            dialnorm: 31,
+            dolby_surround: false,
+            bandwidth_hz: None,
+            eac3: false,
+        };
         assert!(Encoder::new(cfg.clone()).is_err());
         // ...but E-AC-3 takes any rate in range
-        assert!(Encoder::new(Config { eac3: true, ..cfg.clone() }).is_ok());
-        assert!(Encoder::new(Config { eac3: true, bitrate_kbps: 2000, ..cfg }).is_err());
+        assert!(Encoder::new(Config {
+            eac3: true,
+            ..cfg.clone()
+        })
+        .is_ok());
+        assert!(Encoder::new(Config {
+            eac3: true,
+            bitrate_kbps: 2000,
+            ..cfg
+        })
+        .is_err());
     }
 }

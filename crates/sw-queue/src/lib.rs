@@ -102,7 +102,12 @@ const MAX_JOBS: usize = 99;
 impl Queue {
     pub fn new(concurrency: usize, notify: Notify) -> Queue {
         let inner = Arc::new(Inner {
-            shared: Mutex::new(Shared { jobs: Vec::new(), next_id: 1, concurrency: concurrency.clamp(1, MAX_WORKERS), shutdown: false }),
+            shared: Mutex::new(Shared {
+                jobs: Vec::new(),
+                next_id: 1,
+                concurrency: concurrency.clamp(1, MAX_WORKERS),
+                shutdown: false,
+            }),
             wake: Condvar::new(),
             notify,
         });
@@ -139,8 +144,22 @@ impl Queue {
             }
             let id = s.next_id;
             s.next_id += 1;
-            let created_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-            s.jobs.push(Job { id, spec, verify, state: State::Pending, progress: 0.0, message: String::new(), cancel: Arc::new(AtomicBool::new(false)), started: None, elapsed: 0.0, created_ms });
+            let created_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            s.jobs.push(Job {
+                id,
+                spec,
+                verify,
+                state: State::Pending,
+                progress: 0.0,
+                message: String::new(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                started: None,
+                elapsed: 0.0,
+                created_ms,
+            });
             (id, Self::snapshot_locked(&s))
         };
         self.inner.wake.notify_all();
@@ -168,7 +187,8 @@ impl Queue {
     pub fn remove(&self, id: u64) {
         let snap = {
             let mut s = self.inner.shared.lock().unwrap();
-            s.jobs.retain(|j| j.id != id || matches!(j.state, State::Running | State::Verifying));
+            s.jobs
+                .retain(|j| j.id != id || matches!(j.state, State::Running | State::Verifying));
             Self::snapshot_locked(&s)
         };
         self.changed(snap);
@@ -211,10 +231,19 @@ fn worker(inner: Arc<Inner>) {
                 if s.shutdown {
                     return;
                 }
-                let running = s.jobs.iter().filter(|j| matches!(j.state, State::Running | State::Verifying)).count();
+                let running = s
+                    .jobs
+                    .iter()
+                    .filter(|j| matches!(j.state, State::Running | State::Verifying))
+                    .count();
                 if running < s.concurrency {
                     // FIFO: oldest pending job first
-                    if let Some(j) = s.jobs.iter_mut().filter(|j| j.state == State::Pending).min_by_key(|j| j.created_ms) {
+                    if let Some(j) = s
+                        .jobs
+                        .iter_mut()
+                        .filter(|j| j.state == State::Pending)
+                        .min_by_key(|j| j.created_ms)
+                    {
                         j.state = State::Running;
                         j.started = Some(Instant::now());
                         let t = (j.id, j.spec.clone(), j.verify, j.cancel.clone());

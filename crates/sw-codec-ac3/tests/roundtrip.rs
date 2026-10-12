@@ -5,7 +5,11 @@ use std::process::Command;
 use sw_codec_ac3::{Config, Encoder, SAMPLES_PER_FRAME};
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Deterministic broadband test signal: a few tones plus shaped noise, distinct per channel.
@@ -32,7 +36,8 @@ fn bass(n: usize, level: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / 48_000.0;
-            ((2.0 * std::f32::consts::PI * 45.0 * t).sin() * 0.5 + (2.0 * std::f32::consts::PI * 90.0 * t).sin() * 0.3) * level
+            ((2.0 * std::f32::consts::PI * 45.0 * t).sin() * 0.5 + (2.0 * std::f32::consts::PI * 90.0 * t).sin() * 0.3)
+                * level
         })
         .collect()
 }
@@ -51,34 +56,79 @@ fn run_codec(eac3: bool, acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[us
     let secs = 3;
     let n = 48_000 * secs;
     let sigs: Vec<Vec<f32>> = (0..nch)
-        .map(|c| if lfe && c == nfch { bass(n, 0.6) } else { signal(c, n, 0.6) })
+        .map(|c| {
+            if lfe && c == nfch {
+                bass(n, 0.6)
+            } else {
+                signal(c, n, 0.6)
+            }
+        })
         .collect();
-    let cfg = Config { acmod, lfe, sample_rate: 48_000, bitrate_kbps: bitrate, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3 };
+    let cfg = Config {
+        acmod,
+        lfe,
+        sample_rate: 48_000,
+        bitrate_kbps: bitrate,
+        dialnorm: 31,
+        dolby_surround: false,
+        bandwidth_hz: None,
+        eac3,
+    };
     let mut enc = Encoder::new(cfg).unwrap();
     let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
     let mut bytes = Vec::new();
     for f in 0..frames {
         let chunk: Vec<Vec<f32>> = sigs
             .iter()
-            .map(|s| (0..SAMPLES_PER_FRAME).map(|i| s.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect())
+            .map(|s| {
+                (0..SAMPLES_PER_FRAME)
+                    .map(|i| s.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0))
+                    .collect()
+            })
             .collect();
         let refs: Vec<&[f32]> = chunk.iter().map(|v| v.as_slice()).collect();
         bytes.extend(enc.encode_frame(&refs));
     }
-    let dir = std::env::temp_dir().join(format!("sw_ac3_rt_{}_{}_{}_{}_{}", std::process::id(), acmod, lfe, eac3, bitrate));
+    let dir = std::env::temp_dir().join(format!(
+        "sw_ac3_rt_{}_{}_{}_{}_{}",
+        std::process::id(),
+        acmod,
+        lfe,
+        eac3,
+        bitrate
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(if eac3 { "t.eac3" } else { "t.ac3" });
     std::fs::write(&path, &bytes).unwrap();
 
     let out = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-err_detect",
+            "crccheck+explode",
+            "-i",
+        ])
         .arg(&path)
         .args(["-f", "f32le", "-"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "decoder rejected the stream: {}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.stderr.is_empty(), "decoder warnings: {}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    assert!(
+        out.status.success(),
+        "decoder rejected the stream: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "decoder warnings: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dec: Vec<f32> = out
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     assert_eq!(dec.len() % nch, 0);
     let dframes = dec.len() / nch;
     assert!(dframes >= n, "decoded {dframes} frames, expected at least {n}");
@@ -96,7 +146,10 @@ fn run_codec(eac3: bool, acmod: u8, lfe: bool, bitrate: u32, decoded_order: &[us
         // gets fewer dB than the full-bandwidth channels, so it has a looser floor
         let is_lfe = lfe && src_ch == nfch;
         let floor = if is_lfe { min_snr as f64 - 6.0 } else { min_snr as f64 };
-        assert!(snr >= floor, "acmod {acmod} channel {src_ch}: SNR {snr:.1} dB < {floor} dB");
+        assert!(
+            snr >= floor,
+            "acmod {acmod} channel {src_ch}: SNR {snr:.1} dB < {floor} dB"
+        );
     }
 }
 
@@ -174,25 +227,61 @@ fn pre_echo_error(switching: bool) -> (f64, usize) {
             let t = i as f32 / 48_000.0;
             let tone = (2.0 * std::f32::consts::PI * 330.0 * t).sin() * 0.01;
             let since = i % 8000;
-            let burst = if since >= 4000 { noise * 1.6 * (-(since as f32 - 4000.0) / 250.0).exp() } else { 0.0 };
+            let burst = if since >= 4000 {
+                noise * 1.6 * (-(since as f32 - 4000.0) / 250.0).exp()
+            } else {
+                0.0
+            };
             tone + burst
         })
         .collect();
-    let mut enc = Encoder::new(Config { acmod: 1, lfe: false, sample_rate: 48_000, bitrate_kbps: 96, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false }).unwrap();
+    let mut enc = Encoder::new(Config {
+        acmod: 1,
+        lfe: false,
+        sample_rate: 48_000,
+        bitrate_kbps: 96,
+        dialnorm: 31,
+        dolby_surround: false,
+        bandwidth_hz: None,
+        eac3: false,
+    })
+    .unwrap();
     enc.set_block_switching(switching);
     let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
     let mut bytes = Vec::new();
     for f in 0..frames {
-        let chunk: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| sig.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
+        let chunk: Vec<f32> = (0..SAMPLES_PER_FRAME)
+            .map(|i| sig.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0))
+            .collect();
         bytes.extend(enc.encode_frame(&[chunk.as_slice()]));
     }
     let dir = std::env::temp_dir().join(format!("sw_ac3_pre_{}_{}", std::process::id(), switching));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.ac3");
     std::fs::write(&path, &bytes).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let out = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-err_detect",
+            "crccheck+explode",
+            "-i",
+        ])
+        .arg(&path)
+        .args(["-f", "f32le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "decoder: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dec: Vec<f32> = out
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     let (mut err, mut count) = (0.0, 0usize);
     let mut burst_start = 4000;
     while burst_start + 8000 < n - 4000 {
@@ -213,7 +302,10 @@ fn block_switching_reduces_pre_echo() {
     }
     let (off, bursts) = pre_echo_error(false);
     let (on, _) = pre_echo_error(true);
-    println!("pre-echo error energy over {bursts} bursts: long blocks {off:.4}, switching {on:.4} ({:.1} dB better)", 10.0 * (off / on).log10());
+    println!(
+        "pre-echo error energy over {bursts} bursts: long blocks {off:.4}, switching {on:.4} ({:.1} dB better)",
+        10.0 * (off / on).log10()
+    );
     assert!(on < off * 0.8, "switching {on} vs long {off}");
 }
 
@@ -230,23 +322,63 @@ fn joint_stereo_run(remat: bool, right_sign: f32, coupling: bool) -> f64 {
     let b = signal(2, n, 0.03);
     let left: Vec<f32> = (0..n).map(|i| common[i] + a[i]).collect();
     let right: Vec<f32> = (0..n).map(|i| right_sign * common[i] + b[i]).collect();
-    let mut enc = Encoder::new(Config { acmod: 2, lfe: false, sample_rate: 48_000, bitrate_kbps: 96, dialnorm: 31, dolby_surround: false, bandwidth_hz: None, eac3: false }).unwrap();
+    let mut enc = Encoder::new(Config {
+        acmod: 2,
+        lfe: false,
+        sample_rate: 48_000,
+        bitrate_kbps: 96,
+        dialnorm: 31,
+        dolby_surround: false,
+        bandwidth_hz: None,
+        eac3: false,
+    })
+    .unwrap();
     enc.set_rematrixing(remat);
     enc.set_coupling(coupling);
     let frames = (n + 256).div_ceil(SAMPLES_PER_FRAME);
     let mut bytes = Vec::new();
     for f in 0..frames {
-        let l: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| left.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
-        let r: Vec<f32> = (0..SAMPLES_PER_FRAME).map(|i| right.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0)).collect();
+        let l: Vec<f32> = (0..SAMPLES_PER_FRAME)
+            .map(|i| left.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0))
+            .collect();
+        let r: Vec<f32> = (0..SAMPLES_PER_FRAME)
+            .map(|i| right.get(f * SAMPLES_PER_FRAME + i).copied().unwrap_or(0.0))
+            .collect();
         bytes.extend(enc.encode_frame(&[l.as_slice(), r.as_slice()]));
     }
-    let dir = std::env::temp_dir().join(format!("sw_ac3_js_{}_{}_{}_{}", std::process::id(), remat, right_sign, coupling));
+    let dir = std::env::temp_dir().join(format!(
+        "sw_ac3_js_{}_{}_{}_{}",
+        std::process::id(),
+        remat,
+        right_sign,
+        coupling
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.ac3");
     std::fs::write(&path, &bytes).unwrap();
-    let out = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&out.stderr));
-    let dec: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let out = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-err_detect",
+            "crccheck+explode",
+            "-i",
+        ])
+        .arg(&path)
+        .args(["-f", "f32le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "decoder: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dec: Vec<f32> = out
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     let (mut s, mut e) = (0.0, 0.0);
     for i in 2000..n - 2000 {
         for (c, x) in [&left, &right].iter().enumerate() {
@@ -323,11 +455,38 @@ fn eac3_seven_one_uses_a_dependent_substream() {
     }
     let mut stems = sw_pcm::StemSet::open(layout, &inputs).unwrap();
     let out = dir.join("t.eac3");
-    let req = Request { layout, bitrate_kbps: 768, dialnorm: 31, start_secs: 0.0, duration_secs: None, output: &out, eac3: true };
-    encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-"]).output().unwrap();
-    assert!(dec.status.success() && dec.stderr.is_empty(), "decoder: {}", String::from_utf8_lossy(&dec.stderr));
-    let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let req = Request {
+        layout,
+        bitrate_kbps: 768,
+        dialnorm: 31,
+        start_secs: 0.0,
+        duration_secs: None,
+        output: &out,
+        eac3: true,
+    };
+    encode_to_file(
+        &mut stems,
+        &req,
+        &mut |_| {},
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let dec = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&out)
+        .args(["-f", "f32le", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        dec.status.success() && dec.stderr.is_empty(),
+        "decoder: {}",
+        String::from_utf8_lossy(&dec.stderr)
+    );
+    let y: Vec<f32> = dec
+        .stdout
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     assert_eq!(y.len() % 8, 0);
     let frames = y.len() / 8;
     assert!(frames >= n);
@@ -346,7 +505,13 @@ fn eac3_seven_one_uses_a_dependent_substream() {
         };
         let here = amp(outc);
         let elsewhere = (0..8).filter(|&c| c != outc).map(amp).fold(0.0, f64::max);
-        assert!((here - 0.4).abs() < 0.08, "source {src} came out at {here:.3} in channel {outc}");
-        assert!(elsewhere < 0.06, "source {src} leaks {elsewhere:.3} into another channel");
+        assert!(
+            (here - 0.4).abs() < 0.08,
+            "source {src} came out at {here:.3} in channel {outc}"
+        );
+        assert!(
+            elsewhere < 0.06,
+            "source {src} leaks {elsewhere:.3} into another channel"
+        );
     }
 }

@@ -13,7 +13,12 @@ pub const TS: usize = 128;
 
 fn coeffs() -> ([f64; 4], [f64; 4], f64, f64) {
     let c = BANK_COEFF;
-    ([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64], [c[4] as f64, c[5] as f64, c[6] as f64, c[7] as f64], c[8] as f64, c[9] as f64)
+    (
+        [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64],
+        [c[4] as f64, c[5] as f64, c[6] as f64, c[7] as f64],
+        c[8] as f64,
+        c[9] as f64,
+    )
 }
 
 /// The 4x8 stage of the decoder: `src[0..8]` are the time samples at positions -4..=3 around the step, the
@@ -146,7 +151,16 @@ pub struct Analysis {
 impl Analysis {
     pub fn new() -> Analysis {
         let scale = (2.0 / HOP as f64) * 131072.0;
-        Analysis { win: analysis_window(), cos: cos_table(), ts: vec![vec![0.0; 4]; BANDS], base: -4, hop: 0, scale, pending: std::collections::VecDeque::new(), committed: 0 }
+        Analysis {
+            win: analysis_window(),
+            cos: cos_table(),
+            ts: vec![vec![0.0; 4]; BANDS],
+            base: -4,
+            hop: 0,
+            scale,
+            pending: std::collections::VecDeque::new(),
+            committed: 0,
+        }
     }
 
     /// MDCT of `x[128h .. 128h + 256)` followed by the adjoint of the band stages; accumulates into the

@@ -4,8 +4,8 @@
 //! This is the day-one engine; native encoders replace it format by format.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use sw_core::{Channel, ChannelLayout, StreamType};
 
@@ -98,7 +98,19 @@ fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), E
         StreamType::DtsHdHra => return Err(Error::Unsupported("DTS-HD High Resolution")),
         StreamType::DtsEs => return Err(Error::Unsupported("DTS-ES")),
         StreamType::Dts9624 => return Err(Error::Unsupported("DTS 96/24")),
-        StreamType::PcmWav | StreamType::PcmAiff | StreamType::PcmCaf | StreamType::Flac | StreamType::OggFlac | StreamType::Alac | StreamType::Tta | StreamType::WavPack | StreamType::MonkeysAudio | StreamType::MpegAls | StreamType::DcpAudio | StreamType::DsdDsf | StreamType::DsdDff => return Err(Error::Unsupported("audio files (written by the native engine)")),
+        StreamType::PcmWav
+        | StreamType::PcmAiff
+        | StreamType::PcmCaf
+        | StreamType::Flac
+        | StreamType::OggFlac
+        | StreamType::Alac
+        | StreamType::Tta
+        | StreamType::WavPack
+        | StreamType::MonkeysAudio
+        | StreamType::MpegAls
+        | StreamType::DcpAudio
+        | StreamType::DsdDsf
+        | StreamType::DsdDff => return Err(Error::Unsupported("audio files (written by the native engine)")),
         StreamType::DtsExpress => return Err(Error::Unsupported("DTS Express")),
     })
 }
@@ -154,7 +166,12 @@ pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String
             parts.push(format!("[{i}:a]apad=pad_len=16384[p{i}]"));
         }
     }
-    let names: Vec<&'static str> = job.layout.channels.iter().map(|c| ff_name(*c).ok_or(Error::Unsupported("channel"))).collect::<Result<_, _>>()?;
+    let names: Vec<&'static str> = job
+        .layout
+        .channels
+        .iter()
+        .map(|c| ff_name(*c).ok_or(Error::Unsupported("channel")))
+        .collect::<Result<_, _>>()?;
     let trim = job.frames.map(|f| format!("atrim=end_sample={f}"));
     if n == 1 {
         let src = pad_label(0);
@@ -163,12 +180,26 @@ pub(crate) fn join_inputs(job: &Job, label: &str) -> Result<(Vec<String>, String
             None => format!("{src}anull[{label}]"),
         });
     } else {
-        let joined = if trim.is_some() { "jx".to_string() } else { label.to_string() };
+        let joined = if trim.is_some() {
+            "jx".to_string()
+        } else {
+            label.to_string()
+        };
         let inputs: String = (0..files.len()).map(pad_label).collect();
         // Explicit input channel -> output channel assignment: without `map`, join matches channel
         // names carried in the files' metadata, which scrambles plain WAVs that have no channel mask.
-        let assign: Vec<String> = sources.iter().zip(&stream_of).zip(&names).map(|(((_, ch), s), name)| format!("{s}.{ch}-{name}")).collect();
-        parts.push(format!("{inputs}join=inputs={}:channel_layout={}:map={}[{joined}]", files.len(), names.join("+"), assign.join("|")));
+        let assign: Vec<String> = sources
+            .iter()
+            .zip(&stream_of)
+            .zip(&names)
+            .map(|(((_, ch), s), name)| format!("{s}.{ch}-{name}"))
+            .collect();
+        parts.push(format!(
+            "{inputs}join=inputs={}:channel_layout={}:map={}[{joined}]",
+            files.len(),
+            names.join("+"),
+            assign.join("|")
+        ));
         if let Some(t) = &trim {
             parts.push(format!("[jx]{t}[{label}]"));
         }
@@ -181,7 +212,9 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
     let (codec, extra) = codec_args(job.stream)?;
     // FFmpeg's E-AC-3 and DTS core encoders stop at 5.1.
     if matches!(job.stream, StreamType::Eac3 | StreamType::DtsDigitalSurround) && job.layout.channel_count() > 6 {
-        return Err(Error::Unsupported("more than 5.1 channels with FFmpeg's encoder for this format"));
+        return Err(Error::Unsupported(
+            "more than 5.1 channels with FFmpeg's encoder for this format",
+        ));
     }
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
     let (input_args, filter) = join_inputs(job, "out")?;
@@ -247,7 +280,11 @@ pub fn run_progress(
     use std::sync::atomic::Ordering;
     let mut args = build_args(job)?;
     args.splice(2..2, ["-progress".to_string(), "pipe:1".into(), "-nostats".into()]);
-    let mut child = Command::new(&job.ffmpeg).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut child = Command::new(&job.ffmpeg)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
     let stderr = child.stderr.take().expect("piped stderr");
     let err_thread = std::thread::spawn(move || {
         let mut s = String::new();
@@ -261,7 +298,10 @@ pub fn run_progress(
             let _ = child.wait();
             return Err(Error::Canceled);
         }
-        if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<i64>().ok()) {
+        if let Some(us) = line
+            .strip_prefix("out_time_us=")
+            .and_then(|v| v.trim().parse::<i64>().ok())
+        {
             if total_secs > 0.0 && us >= 0 {
                 on_progress(((us as f64 / 1e6) / total_secs).clamp(0.0, 1.0) as f32);
             }
@@ -281,7 +321,13 @@ pub fn run_progress(
 }
 
 /// MD5 of `ffmpeg` output for either the source join or a decoded file.
-fn md5_of(ffmpeg: &Path, pre: &[String], filter: Option<&str>, trim_to: Option<u64>, fmt: &str) -> Result<String, Error> {
+fn md5_of(
+    ffmpeg: &Path,
+    pre: &[String],
+    filter: Option<&str>,
+    trim_to: Option<u64>,
+    fmt: &str,
+) -> Result<String, Error> {
     let mut cmd = Command::new(ffmpeg);
     cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"]).args(pre);
     if let Some(f) = filter {
@@ -293,17 +339,29 @@ fn md5_of(ffmpeg: &Path, pre: &[String], filter: Option<&str>, trim_to: Option<u
     cmd.args(["-c:a", fmt, "-f", "md5", "-"]);
     let out = cmd.output()?;
     if !out.status.success() {
-        return Err(Error::Failed(out.status.code().unwrap_or(-1), tail_of(&String::from_utf8_lossy(&out.stderr))));
+        return Err(Error::Failed(
+            out.status.code().unwrap_or(-1),
+            tail_of(&String::from_utf8_lossy(&out.stderr)),
+        ));
     }
     let s = String::from_utf8_lossy(&out.stdout);
-    s.trim().strip_prefix("MD5=").map(str::to_string).ok_or_else(|| Error::Verify(format!("unexpected md5 output: {s}")))
+    s.trim()
+        .strip_prefix("MD5=")
+        .map(str::to_string)
+        .ok_or_else(|| Error::Verify(format!("unexpected md5 output: {s}")))
 }
 
 /// Verify an encode. Lossless streams must decode to exactly the source PCM (MD5 compared);
 /// lossy streams must decode cleanly to roughly the expected length. Returns a one-line report.
 pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
     let out = job.output.to_string_lossy().into_owned();
-    let fmt = if bits <= 16 { "pcm_s16le" } else if bits <= 24 { "pcm_s24le" } else { "pcm_s32le" };
+    let fmt = if bits <= 16 {
+        "pcm_s16le"
+    } else if bits <= 24 {
+        "pcm_s24le"
+    } else {
+        "pcm_s32le"
+    };
     if job.stream.is_lossless() {
         let (input_args, join) = join_inputs(job, "v")?;
         let src = md5_of(&job.ffmpeg, &input_args, Some(&join), None, fmt)?;
@@ -311,11 +369,23 @@ pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
         if src == dec {
             Ok(format!("lossless verified, MD5 {src}"))
         } else {
-            Err(Error::Verify(format!("decoded audio differs from source (source {src}, decoded {dec})")))
+            Err(Error::Verify(format!(
+                "decoded audio differs from source (source {src}, decoded {dec})"
+            )))
         }
     } else {
         let o = Command::new(&job.ffmpeg)
-            .args(["-hide_banner", "-nostats", "-loglevel", "error", "-i", &out, "-f", "null", "-"])
+            .args([
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
+                "-i",
+                &out,
+                "-f",
+                "null",
+                "-",
+            ])
             .output()?;
         let err = String::from_utf8_lossy(&o.stderr);
         if !o.status.success() || !err.trim().is_empty() {
@@ -349,7 +419,9 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
     }
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     std::env::var_os("PATH").and_then(|p| {
-        std::env::split_paths(&p).map(|d| d.join(exe)).find(|c: &PathBuf| Path::new(c).is_file())
+        std::env::split_paths(&p)
+            .map(|d| d.join(exe))
+            .find(|c: &PathBuf| Path::new(c).is_file())
     })
 }
 
@@ -359,8 +431,25 @@ mod tests {
 
     fn job(stream: StreamType) -> Job {
         let layout = ChannelLayout::find("5.1").unwrap();
-        let inputs = layout.channels.iter().map(|c| (*c, PathBuf::from(format!("{}.wav", c.short())))).collect();
-        Job { stream, layout, inputs, output: "out.ac3".into(), bitrate_kbps: Some(448), sample_rate: Some(48_000), dialnorm: Some(31), start_secs: None, duration_secs: None, frames: None, slots: None, ffmpeg: "ffmpeg".into() }
+        let inputs = layout
+            .channels
+            .iter()
+            .map(|c| (*c, PathBuf::from(format!("{}.wav", c.short()))))
+            .collect();
+        Job {
+            stream,
+            layout,
+            inputs,
+            output: "out.ac3".into(),
+            bitrate_kbps: Some(448),
+            sample_rate: Some(48_000),
+            dialnorm: Some(31),
+            start_secs: None,
+            duration_secs: None,
+            frames: None,
+            slots: None,
+            ffmpeg: "ffmpeg".into(),
+        }
     }
 
     #[test]
@@ -374,6 +463,9 @@ mod tests {
 
     #[test]
     fn dtshd_is_unsupported() {
-        assert!(matches!(build_args(&job(StreamType::DtsHdMa)), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            build_args(&job(StreamType::DtsHdMa)),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

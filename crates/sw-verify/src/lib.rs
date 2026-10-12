@@ -93,26 +93,45 @@ pub(crate) struct Collector {
 
 impl Collector {
     fn new(path: &Path, bytes: u64, deep: bool) -> Collector {
-        Collector { report: Report { file: path.display().to_string(), bytes, deep, ..Default::default() } }
+        Collector {
+            report: Report {
+                file: path.display().to_string(),
+                bytes,
+                deep,
+                ..Default::default()
+            },
+        }
     }
     pub fn kv(&mut self, k: &str, v: impl Into<String>) {
         self.report.summary.push((k.to_string(), v.into()));
     }
     pub fn check(&mut self, name: &str, status: Status, detail: impl Into<String>) {
-        self.report.checks.push(Check { name: name.to_string(), status, detail: detail.into() });
+        self.report.checks.push(Check {
+            name: name.to_string(),
+            status,
+            detail: detail.into(),
+        });
     }
     pub fn finding(&mut self, status: Status, offset: Option<u64>, message: impl Into<String>) {
         if self.report.findings.len() < MAX_FINDINGS {
-            self.report.findings.push(Finding { status, message: message.into(), offset });
+            self.report.findings.push(Finding {
+                status,
+                message: message.into(),
+                offset,
+            });
         } else {
             self.report.findings_omitted += 1;
         }
     }
     pub fn section(&mut self, title: &str, rows: Vec<(String, String)>) {
-        self.report.sections.push(Section { title: title.to_string(), rows });
+        self.report.sections.push(Section {
+            title: title.to_string(),
+            rows,
+        });
     }
     fn finish(mut self) -> Report {
-        self.report.passed = !self.report.checks.iter().any(|c| c.status == Status::Fail) && !self.report.findings.iter().any(|f| f.status == Status::Fail);
+        self.report.passed = !self.report.checks.iter().any(|c| c.status == Status::Fail)
+            && !self.report.findings.iter().any(|f| f.status == Status::Fail);
         self.report
     }
 }
@@ -129,7 +148,12 @@ impl Window {
     fn open(path: &Path) -> std::io::Result<Window> {
         let f = File::open(path)?;
         let len = f.metadata()?.len();
-        Ok(Window { f, len, buf: Vec::new(), base: 0 })
+        Ok(Window {
+            f,
+            len,
+            buf: Vec::new(),
+            base: 0,
+        })
     }
     /// `n` bytes at `pos` (fewer at the end of the file).
     pub fn get(&mut self, pos: u64, n: usize) -> &[u8] {
@@ -141,7 +165,11 @@ impl Window {
         let want = n.max(1 << 20);
         let size = (want as u64).min(self.len.saturating_sub(pos)) as usize;
         self.buf.resize(size, 0);
-        let ok = self.f.seek(SeekFrom::Start(pos)).and_then(|_| self.f.read_exact(&mut self.buf)).is_ok();
+        let ok = self
+            .f
+            .seek(SeekFrom::Start(pos))
+            .and_then(|_| self.f.read_exact(&mut self.buf))
+            .is_ok();
         if !ok {
             self.buf.clear();
         }
@@ -178,7 +206,11 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
         Kind::Dts | Kind::DtsHd => probe = Some(dts::verify(&mut w, &mut c, kind == Kind::DtsHd)),
         Kind::TrueHd | Kind::Mlp => probe = Some(thd::verify(&mut w, &mut c, kind == Kind::Mlp)),
         Kind::DtsPacked => {
-            c.check("Recognised stream", Status::Pass, "DTS packed into 14-bit or little-endian 16-bit words (as on a DTS CD or in a WAV file)");
+            c.check(
+                "Recognised stream",
+                Status::Pass,
+                "DTS packed into 14-bit or little-endian 16-bit words (as on a DTS CD or in a WAV file)",
+            );
             c.check("Frame structure", Status::Skipped, "the structure check reads the plain byte-stream form; unpack the stream first, or use deep verification, which decodes it");
         }
         Kind::Unknown => {
@@ -280,7 +312,13 @@ impl Report {
             Status::Skipped => "[skip]",
             Status::Info => "[info]",
         };
-        o.push_str(&format!("{}\n{} - {} bytes{}\n\n", self.file, self.format, self.bytes, if self.deep { " - deep verification" } else { "" }));
+        o.push_str(&format!(
+            "{}\n{} - {} bytes{}\n\n",
+            self.file,
+            self.format,
+            self.bytes,
+            if self.deep { " - deep verification" } else { "" }
+        ));
         for (k, v) in &self.summary {
             o.push_str(&format!("  {k:<32} {v}\n"));
         }
@@ -304,7 +342,14 @@ impl Report {
                 o.push_str(&format!("  {k:<38} {v}\n"));
             }
         }
-        o.push_str(&format!("\n{}\n", if self.passed { "PASSED: the stream shows no errors." } else { "FAILED: see the checks and findings above." }));
+        o.push_str(&format!(
+            "\n{}\n",
+            if self.passed {
+                "PASSED: the stream shows no errors."
+            } else {
+                "FAILED: see the checks and findings above."
+            }
+        ));
         o
     }
 }
