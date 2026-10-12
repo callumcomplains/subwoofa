@@ -59,7 +59,7 @@ Every command prints its version to stderr first, so stdout stays clean for scri
 
 [Getting started](docs/GETTING-STARTED.md) · [Engines and tools](docs/ENGINES.md) · [Formats](docs/FORMATS.md) ·
 [Atmos](docs/ATMOS.md) · [Command line](docs/USAGE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
-[Legal](docs/LEGAL.md) · [Roadmap](docs/ROADMAP.md)
+[Legal](docs/LEGAL.md) · [Roadmap](docs/ROADMAP.md) · [To do](docs/TODO.md)
 
 ## Build from source
 

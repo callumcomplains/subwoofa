@@ -1,0 +1,61 @@
+# To do
+
+Tick a box when the work is finished, tested and committed. Order within a section is the order of work.
+Estimates are focused working time for the work itself.
+
+## Now: the agreed order
+
+- [ ] **WavPack** (`.wv`) native lossless encoder, mono to 5.1+ (about 6 h). Checked by decoding with FFmpeg.
+- [ ] **Monkey's Audio** (`.ape`) native lossless encoder (about 6 h). Checked by decoding with FFmpeg.
+- [ ] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg.
+- [ ] **DTS-HD Express: tonal components** (about 1 day). Express quality is the weakest of what we ship.
+
+Each format means: encoder in `sw-codec-pcm`, stream type and Files destination, CLI, GUI (plate, extension, pcm
+format options), verify support, round-trip tests, docs table row, changelog line.
+
+## Release follow-ups (small)
+
+- [ ] Install the release on a clean machine: SmartScreen, version display, no-FFmpeg banner, a native encode.
+- [ ] Turn on private vulnerability reporting (repository Settings > Advanced Security).
+- [ ] Check the in-app "How" links open the right docs pages.
+- [ ] `CONTRIBUTING.md` (how to build, test, and the code standard below).
+- [ ] Code signing for Windows, once there is a certificate.
+
+## Next, unblocked
+
+- [ ] **Readability pass** over the older code: per-crate guides, module comments on each pipeline, clearer names,
+      shorter lines. Behaviour must not change; existing tests are the proof.
+- [ ] **DCP audio**: 24-bit PCM MXF track files at 48/96 kHz, up to 16 channels (SMPTE and Interop), checked with
+      FFmpeg and asdcplib (about 8 h).
+- [ ] **AC-3 exponent-strategy optimisation** (about half a day).
+- [ ] GUI leftovers: `.swsettings` polish, BWF timecode fields, folder-batch tweaks.
+
+## Blocked on outside files or tools
+
+- [ ] TrueHD Atmos: run on one real Dolby-authored master (built, never run on one).
+- [ ] Bitstream tab extras: the reference encodes in `docs/REFERENCE-ENCODES.md`.
+- [ ] HRA 6.1 at 48 kHz (XCH + XBR): needs its own reference encode.
+- [ ] DVD-Audio disc structure (AOB packs): one real DVD-Audio disc or its `.AOB` files.
+- [ ] Dolby Atmos Theatrical (IAB in MXF): one real cinema track file, after DCP audio.
+- [ ] DTS:X encoding: DTS's licensed encoder.
+- [ ] AAF import: AAF files from a DAW.
+- [ ] E-AC-3 enhanced coupling: a reference decoder.
+
+## Parked (no realistic route yet)
+
+AC-4 (the Dolby Encoding Engine cannot encode it), MPEG-H 3D Audio, Auro-3D, Datasat, DVD-Audio/SACD/DCP
+hardware testing.
+
+## Code standard for everything new
+
+New code is written so it never needs a readability rewrite:
+
+1. **Say what and why.** Every file starts with a module comment: what it is for, which specification it follows
+   (with the section or table names), and the order the pieces run in.
+2. **Names are words.** `quantisation_step`, not `qs`; the spec's abbreviation may appear once in a comment.
+3. **Short functions that do one thing**, ideally under about 40 lines, lines under about 110 characters.
+4. **Constants and tables are named and sourced.** No bare magic numbers; each table says where it comes from.
+5. **Comments explain why**, not what the next line does.
+6. **Each piece has a test** that fails when the piece is wrong, and the round trip is verified by an independent
+   decoder where one exists.
+7. **No dead code, no debug leftovers.**
