@@ -54,8 +54,8 @@ Bold marks where Subwoofa is the smaller file or the faster program.
 - **Against the original DTS encoder:** Subwoofa is faster on Express (6x against 4x real time) and slower on the
   core (10x against 16x), High Resolution (6x against 14x) and Master Audio (6x against 8x). The two make the
   same-size files for core, High Resolution and Express, which is the point of matching the format.
-- **Nothing here is slow for real use.** A two-hour film at 6x real time is 20 minutes. The slowest case, MPEG-4 ALS
-  at 5x, is a two-hour film in about 25 minutes. Encodes of several streams can also run at once (Settings, "Encodes at
+- **Nothing here is slow for real use.** A two-hour film at 6x real time is 20 minutes. The slowest cases, DTS-HD High
+  Resolution and Master Audio at 6x, take about 20 minutes for a two-hour film. Encodes of several streams can also run at once (Settings, "Encodes at
   the same time").
 - **Parallelism:** DTS-HD Express and every audio-file format (FLAC, WavPack on 5.1, Apple Lossless, TTA, ALS,
   Monkey's Audio) now encode on all cores. The first measurement of this page was taken before that for the file
