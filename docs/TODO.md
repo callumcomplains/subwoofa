@@ -8,7 +8,12 @@ Estimates are focused working time for the work itself.
 - [x] **WavPack** (`.wv`) native lossless encoder, mono to 5.1+ (about 6 h). Checked by decoding with FFmpeg. (Done: size within 1% of FFmpeg's default encoder.)
 - [x] **Monkey's Audio** (`.ape`) native lossless encoder (about 6 h). Checked by decoding with FFmpeg. (Done: mono and stereo, 16/24 bit.)
 - [x] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg. (Done, in an MP4 wrapper for the check. Not done: block switching, long-term prediction, BGMC; they would take it from FLAC-sized to about 2% better.)
-- [ ] **DTS-HD Express: tonal components** (about 1 day). Express quality is the weakest of what we ship.
+- [x] **DTS-HD Express: tonal components**: already done earlier (steady notes are coded as tones; this item was stale). Quality against the original was also measured and is at or above it at the same bit rate on most test cases.
+- [ ] **DTS-HD Express, what is really left** (from the notes in the development log):
+  - lower bit-rate floor through band-limit flags (today 5.1 needs at least 146 kbps and a pair about 64 kbps; the format goes lower),
+  - LFE at 24 bits,
+  - speed (5.1 encodes at about 2x real time since the quality work),
+  - the last 1.6 dB at mono 96 kbps: interpolated scale factors and the per-group attenuation curve.
 
 Each format means: encoder in `sw-codec-pcm`, stream type and Files destination, CLI, GUI (plate, extension, pcm
 format options), verify support, round-trip tests, docs table row, changelog line.

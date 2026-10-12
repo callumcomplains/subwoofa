@@ -2,6 +2,11 @@
 
 Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta and goes away at 1.0.
 
+## Unreleased
+
+- New audio-file formats, all written natively and checked by decoding with FFmpeg: **WavPack** (`.wv`), **Monkey's Audio** (`.ape`, mono and stereo) and **MPEG-4 ALS** (`.als`, or an MP4 file when the name ends in `.mp4`). The Apple Lossless writer now shares its MP4 code with ALS.
+- Verify understands all three.
+
 ## b0.1.0 — first public beta
 
 **Encoders (all written from public specifications, no third-party code)**
