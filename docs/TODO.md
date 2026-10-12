@@ -9,11 +9,8 @@ Estimates are focused working time for the work itself.
 - [x] **Monkey's Audio** (`.ape`) native lossless encoder (about 6 h). Checked by decoding with FFmpeg. (Done: mono and stereo, 16/24 bit.)
 - [x] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg. (Done, in an MP4 wrapper for the check. Not done: block switching, long-term prediction, BGMC; they would take it from FLAC-sized to about 2% better.)
 - [x] **DTS-HD Express: tonal components**: already done earlier (steady notes are coded as tones; this item was stale). Quality against the original was also measured and is at or above it at the same bit rate on most test cases.
-- [ ] **DTS-HD Express, what is really left** (from the notes in the development log):
-  - lower bit-rate floor through band-limit flags (today 5.1 needs at least 146 kbps and a pair about 64 kbps; the format goes lower),
-  - LFE at 24 bits,
-  - speed (5.1 encodes at about 2x real time since the quality work),
-  - the last 1.6 dB at mono 96 kbps: interpolated scale factors and the per-group attenuation curve.
+- [x] **DTS-HD Express**, the follow-up round: the encoder is already below the original's own floors (mono 48, stereo 64, 5.1 146 kbps, against the original's 48 / 64 / 192), so no lower floor is needed; quality parity was measured earlier; the quantizer-profile search now runs on all cores (same bytes out, about 3x faster: 5.1 encodes at about 6x real time); the LFE uses the 6-bit coding from 256 kbps (checked with FFmpeg and DTSHDVerify).
+- [ ] Express, small leftovers: interpolated scale factors and the per-group attenuation curve (the last 1.6 dB at mono 96 kbps), parallel tone search.
 
 Each format means: encoder in `sw-codec-pcm`, stream type and Files destination, CLI, GUI (plate, extension, pcm
 format options), verify support, round-trip tests, docs table row, changelog line.
