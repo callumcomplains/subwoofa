@@ -34,7 +34,7 @@ Time in seconds (x real time) and output size in MB.
 | WavPack | 2.2 s (54x), **51.6 MB** | 1.4 s (85x), 55.1 MB | |
 | Apple Lossless | 4.1 s (30x), 52.2 MB | 1.4 s (84x), 52.6 MB | |
 | TTA | 1.6 s (74x), 55.3 MB | 0.8 s (143x), 55.2 MB | |
-| MPEG-4 ALS | 4.3 s (28x), 50.8 MB | not available | |
+| MPEG-4 ALS | 12.3 s (10x), 50.8 MB | not available | |
 | Monkey's Audio (stereo) | 0.9 s (136x), 16.7 MB | not available | |
 | DCP sound (MXF) | 2.4 s (51x), 103.8 MB | not available | |
 | WAV, 24-bit PCM (a plain copy) | 1.9 s (63x), 103.7 MB | 0.2 s (530x), 103.7 MB | |
@@ -59,7 +59,7 @@ Bold marks where Subwoofa is the smaller file or the faster program.
   the same time").
 - **Parallelism:** DTS-HD Express and every audio-file format (FLAC, WavPack on 5.1, Apple Lossless, TTA, ALS,
   Monkey's Audio) now encode on all cores. The first measurement of this page was taken before that for the file
-  formats: Apple Lossless went from 23.9 s to 4.1 s, ALS from 25.8 s to 4.3 s, FLAC from 7.8 s to 2.5 s and
+  formats: Apple Lossless went from 23.9 s to 4.1 s, ALS from 25.8 s to 4.3 s (12.3 s after block switching was added, which makes it 0.1% to 0.3% smaller), FLAC from 7.8 s to 2.5 s and
   Monkey's Audio from 1.7 s to 0.9 s, with byte-identical files. The AC-3, E-AC-3, TrueHD, DTS core, High Resolution
   and Master Audio encoders are still single-threaded, so there is more to gain there.
 
