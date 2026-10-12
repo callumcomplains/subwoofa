@@ -16,11 +16,12 @@ mod predictor;
 mod range_coder;
 
 use crate::crc::SampleCrc;
-use crate::{to_integers, BlockWriter, Params, SampleFormat};
+use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
 use entropy::ValueCoder;
 use neural::{Chain, Spec};
 use predictor::Predictor;
 use range_coder::RangeEncoder;
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -36,6 +37,9 @@ const FRAME_BLOCKS: usize = 73_728 * 4;
 
 /// "The decoder creates the WAV header", so none is stored.
 const FLAG_CREATE_WAV_HEADER: u16 = 32;
+
+/// Frames are encoded in batches of this many, one per core, so a batch is held in memory (about 10 MB per frame).
+const BATCH: usize = 8;
 
 /// The compression level written: "extra high" (4000). The format also has fast (1000, no filters), normal (2000, one
 /// 16-tap filter), high (3000, one 64-tap filter) and insane (5000, three filters up to 1280 taps); on film audio
@@ -85,10 +89,15 @@ impl MonkeysWriter {
         })
     }
 
-    fn write_frame(&mut self, channels: &[Vec<i32>]) -> std::io::Result<()> {
-        let bytes = encode_frame(channels, self.bits);
-        self.frame_sizes.push(bytes.len() as u32);
-        self.out.write_all(&bytes)
+    /// Encodes a batch of frames side by side (they do not depend on each other), then writes them in order.
+    fn write_frames(&mut self, frames: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
+        let bits = self.bits;
+        let coded: Vec<Vec<u8>> = frames.par_iter().map(|channels| encode_frame(channels, bits)).collect();
+        for bytes in coded {
+            self.frame_sizes.push(bytes.len() as u32);
+            self.out.write_all(&bytes)?;
+        }
+        Ok(())
     }
 
     /// The descriptor, header and seek table, now that the frame sizes are known.
@@ -133,21 +142,16 @@ impl BlockWriter for MonkeysWriter {
         for (pending, new) in self.pending.iter_mut().zip(converted) {
             pending.extend(new);
         }
-        while self.pending[0].len() >= FRAME_BLOCKS {
-            let frame: Vec<Vec<i32>> = self
-                .pending
-                .iter_mut()
-                .map(|p| p.drain(..FRAME_BLOCKS).collect())
-                .collect();
-            self.write_frame(&frame)?;
-        }
-        Ok(())
+        let frames = take_frames(&mut self.pending, FRAME_BLOCKS, BATCH);
+        self.write_frames(&frames)
     }
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
+        let frames = take_frames(&mut self.pending, FRAME_BLOCKS, 1);
+        self.write_frames(&frames)?;
         if !self.pending[0].is_empty() {
             let frame: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
-            self.write_frame(&frame)?;
+            self.write_frames(&[frame])?;
         }
         debug_assert_eq!(self.frame_sizes.len(), self.frame_count);
         self.out.flush()?;

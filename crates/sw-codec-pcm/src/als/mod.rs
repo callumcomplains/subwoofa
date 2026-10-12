@@ -16,8 +16,9 @@ mod lpc;
 use crate::bitwriter::BitWriter;
 use crate::crc::SampleCrc;
 use crate::mp4_audio::{self, atom};
-use crate::{to_integers, BlockWriter, Params, SampleFormat};
+use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
 use block::Settings;
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -118,31 +119,27 @@ impl AlsWriter {
         })
     }
 
-    /// Codes one frame (every channel's block) and writes it.
-    fn write_frame(&mut self, samples: &[Vec<i32>]) -> std::io::Result<()> {
-        let extended: Vec<Vec<i32>> = samples
-            .iter()
-            .zip(&self.history)
-            .map(|(s, h)| [h.as_slice(), s].concat())
-            .collect();
-        let mut frame = Vec::new();
-        let mut c = 0;
-        while c < extended.len() {
-            if c + 1 < extended.len() {
-                let (first, second) = pair_blocks(&extended[c], &extended[c + 1], self.cfg);
-                frame.extend(first);
-                frame.extend(second);
-                c += 2;
-            } else {
-                frame.extend(block::encode(&extended[c], MAX_ORDER, false, self.cfg));
-                c += 1;
-            }
+    /// Codes a batch of frames side by side and writes them in order. A frame's predictor looks back at the last
+    /// samples of the frame before it, which are known from the input, so frames do not wait for each other.
+    fn write_frames(&mut self, frames: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
+        let mut history = self.history.clone();
+        let mut extended = Vec::with_capacity(frames.len());
+        for samples in frames {
+            let ext: Vec<Vec<i32>> = samples
+                .iter()
+                .zip(&history)
+                .map(|(s, h)| [h.as_slice(), s].concat())
+                .collect();
+            history = ext.iter().map(|e| e[e.len() - MAX_ORDER..].to_vec()).collect();
+            extended.push(ext);
         }
-        self.frame_sizes.push(frame.len() as u32);
-        self.out.write_all(&frame)?;
-        self.crc.update(samples);
-        for (history, ext) in self.history.iter_mut().zip(&extended) {
-            *history = ext[ext.len() - MAX_ORDER..].to_vec();
+        self.history = history;
+        let cfg = self.cfg;
+        let coded: Vec<Vec<u8>> = extended.par_iter().map(|ext| code_frame(ext, cfg)).collect();
+        for (samples, bytes) in frames.iter().zip(coded) {
+            self.frame_sizes.push(bytes.len() as u32);
+            self.out.write_all(&bytes)?;
+            self.crc.update(samples);
         }
         Ok(())
     }
@@ -228,6 +225,24 @@ impl AlsWriter {
     }
 }
 
+/// One frame: every channel's block, pairs of neighbouring channels together.
+fn code_frame(extended: &[Vec<i32>], cfg: Settings) -> Vec<u8> {
+    let mut frame = Vec::new();
+    let mut c = 0;
+    while c < extended.len() {
+        if c + 1 < extended.len() {
+            let (first, second) = pair_blocks(&extended[c], &extended[c + 1], cfg);
+            frame.extend(first);
+            frame.extend(second);
+            c += 2;
+        } else {
+            frame.extend(block::encode(&extended[c], MAX_ORDER, false, cfg));
+            c += 1;
+        }
+    }
+    frame
+}
+
 /// An MPEG-4 descriptor: tag, length, contents (every length here is below 128).
 fn descriptor(tag: u8, body: &[u8]) -> Vec<u8> {
     debug_assert!(body.len() < 128);
@@ -260,21 +275,14 @@ impl BlockWriter for AlsWriter {
         for (pending, new) in self.pending.iter_mut().zip(converted) {
             pending.extend(new);
         }
-        while self.pending[0].len() >= self.frame_len {
-            let frame: Vec<Vec<i32>> = self
-                .pending
-                .iter_mut()
-                .map(|p| p.drain(..self.frame_len).collect())
-                .collect();
-            self.write_frame(&frame)?;
-        }
-        Ok(())
+        let frames = take_frames(&mut self.pending, self.frame_len, 1);
+        self.write_frames(&frames)
     }
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if !self.pending[0].is_empty() {
             let frame: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
-            self.write_frame(&frame)?;
+            self.write_frames(&[frame])?;
         }
         let data_bytes: u64 = self.frame_sizes.iter().map(|&s| s as u64).sum();
         let output = self.output_kind();

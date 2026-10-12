@@ -159,6 +159,18 @@ impl Params {
     }
 }
 
+/// Cuts the whole frames of `span` samples off the per-channel buffers (`frames[frame][channel]`), once at least
+/// `min_frames` of them are ready: the frames of a batch can then be encoded on all cores at once.
+pub(crate) fn take_frames(pending: &mut [Vec<i32>], span: usize, min_frames: usize) -> Vec<Vec<Vec<i32>>> {
+    let ready = pending[0].len() / span;
+    if ready < min_frames.max(1) {
+        return Vec::new();
+    }
+    (0..ready)
+        .map(|_| pending.iter_mut().map(|p| p.drain(..span).collect()).collect())
+        .collect()
+}
+
 /// Sample bytes for `frames` frames of the file's channels, interleaved.
 pub(crate) fn interleave(
     planar: &[Vec<f32>],
@@ -312,7 +324,8 @@ pub fn encode_to_file(
             )?)
         }
     };
-    let block = 16_384usize;
+    // big reads, so that the writers get batches of frames they can encode in parallel
+    let block = 1usize << 18;
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut written = 0u64;
     while written < wanted {

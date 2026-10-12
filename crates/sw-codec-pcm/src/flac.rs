@@ -7,7 +7,8 @@
 
 use crate::bitwriter::BitWriter;
 use crate::ogg::{build_page, PacketWriter};
-use crate::{to_integers, BlockWriter, Params, SampleFormat};
+use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -630,16 +631,31 @@ impl FlacWriter {
         Some(c)
     }
 
-    fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
-        let n = block[0].len();
-        let code = if n == self.block_size {
-            self.block_size_code
-        } else if n <= 256 {
-            6
-        } else {
-            7
-        };
-        let frame = encode_frame(block, self.bits, self.next_frame, code);
+    /// Encodes a batch of frames side by side, then writes them in order.
+    fn write_frames(&mut self, blocks: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
+        let (size, size_code, bits, first) = (self.block_size, self.block_size_code, self.bits, self.next_frame);
+        let frames: Vec<Vec<u8>> = blocks
+            .par_iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let n = block[0].len();
+                let code = if n == size {
+                    size_code
+                } else if n <= 256 {
+                    6
+                } else {
+                    7
+                };
+                encode_frame(block, bits, first + i as u64, code)
+            })
+            .collect();
+        for (block, frame) in blocks.iter().zip(frames) {
+            self.store_frame(frame, block[0].len())?;
+        }
+        Ok(())
+    }
+
+    fn store_frame(&mut self, frame: Vec<u8>, n: usize) -> std::io::Result<()> {
         self.next_frame += 1;
         self.min_frame_bytes = self.min_frame_bytes.min(frame.len() as u32);
         self.max_frame_bytes = self.max_frame_bytes.max(frame.len() as u32);
@@ -670,23 +686,18 @@ impl BlockWriter for FlacWriter {
         for (pending, new) in self.pending.iter_mut().zip(converted) {
             pending.extend(new);
         }
-        while self.pending[0].len() >= self.block_size {
-            let block: Vec<Vec<i32>> = self
-                .pending
-                .iter_mut()
-                .map(|p| p.drain(..self.block_size).collect())
-                .collect();
-            self.update_md5(&block);
-            self.write_frame(&block)?;
+        let blocks = take_frames(&mut self.pending, self.block_size, 1);
+        for block in &blocks {
+            self.update_md5(block);
         }
-        Ok(())
+        self.write_frames(&blocks)
     }
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if !self.pending[0].is_empty() {
             let block: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
             self.update_md5(&block);
-            self.write_frame(&block)?;
+            self.write_frames(&[block])?;
         }
         // now the totals are known: STREAMINFO is rewritten
         let info = self.stream_info();

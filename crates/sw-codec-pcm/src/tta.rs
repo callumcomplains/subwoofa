@@ -9,7 +9,8 @@
 //! written least significant bit first, and every frame ends with its CRC-32.
 
 use crate::le_bits::LeBitWriter;
-use crate::{to_integers, BlockWriter, Params, SampleFormat};
+use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -243,10 +244,18 @@ impl TtaWriter {
         })
     }
 
-    fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
-        let bytes = encode_frame(block, self.bits / 8);
-        self.frame_sizes.push(bytes.len() as u32);
-        self.out.write_all(&bytes)
+    /// Encodes a batch of frames side by side, then writes them in order.
+    fn write_frames(&mut self, blocks: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
+        let bytes_per_sample = self.bits / 8;
+        let frames: Vec<Vec<u8>> = blocks
+            .par_iter()
+            .map(|block| encode_frame(block, bytes_per_sample))
+            .collect();
+        for bytes in frames {
+            self.frame_sizes.push(bytes.len() as u32);
+            self.out.write_all(&bytes)?;
+        }
+        Ok(())
     }
 }
 
@@ -256,21 +265,14 @@ impl BlockWriter for TtaWriter {
         for (pending, new) in self.pending.iter_mut().zip(converted) {
             pending.extend(new);
         }
-        while self.pending[0].len() >= self.frame_samples {
-            let block: Vec<Vec<i32>> = self
-                .pending
-                .iter_mut()
-                .map(|p| p.drain(..self.frame_samples).collect())
-                .collect();
-            self.write_frame(&block)?;
-        }
-        Ok(())
+        let blocks = take_frames(&mut self.pending, self.frame_samples, 1);
+        self.write_frames(&blocks)
     }
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if !self.pending[0].is_empty() {
             let block: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
-            self.write_frame(&block)?;
+            self.write_frames(&[block])?;
         }
         debug_assert_eq!(self.frame_sizes.len(), self.expected_frames);
         self.out.flush()?;

@@ -1,7 +1,7 @@
 # Speed
 
 How fast Subwoofa encodes, next to FFmpeg and the original DTS-HD Master Audio Suite encoder (DTSHDMASE). Measured
-on 2026-10-12. These are single-machine numbers: use them to see the order of magnitude, not as a benchmark suite.
+on 2026-10-12 and 13. These are single-machine numbers: use them to see the order of magnitude, not as a benchmark suite.
 
 ## What was measured
 
@@ -30,13 +30,13 @@ Time in seconds (x real time) and output size in MB.
 | DTS-HD High Resolution 3018 kbps | 20.4 s (6x), 45.3 MB | not available | 8.5 s (14x), 45.3 MB |
 | DTS-HD Master Audio (core + lossless) | 18.8 s (6x), **57.0 MB** | not available | 14.5 s (8x), 60.1 MB |
 | DTS-HD Express 256 kbps | **19.4 s (6x)**, 3.8 MB | not available | 32.0 s (4x), 3.8 MB |
-| FLAC | 7.8 s (15x), 51.4 MB | 0.6 s (196x), 51.7 MB | |
-| WavPack | 2.9 s (41x), **51.6 MB** | 1.4 s (85x), 55.1 MB | |
-| Apple Lossless | 23.9 s (5x), 52.2 MB | 1.4 s (84x), 52.6 MB | |
-| TTA | 2.3 s (52x), 55.3 MB | 0.8 s (143x), 55.2 MB | |
-| MPEG-4 ALS | 25.8 s (5x), 50.8 MB | not available | |
-| Monkey's Audio (stereo) | 1.7 s (69x), 16.7 MB | not available | |
-| DCP sound (MXF) | 1.9 s (63x), 103.8 MB | not available | |
+| FLAC | 2.5 s (48x), 51.4 MB | 0.6 s (196x), 51.7 MB | |
+| WavPack | 2.2 s (54x), **51.6 MB** | 1.4 s (85x), 55.1 MB | |
+| Apple Lossless | 4.1 s (30x), 52.2 MB | 1.4 s (84x), 52.6 MB | |
+| TTA | 1.6 s (74x), 55.3 MB | 0.8 s (143x), 55.2 MB | |
+| MPEG-4 ALS | 4.3 s (28x), 50.8 MB | not available | |
+| Monkey's Audio (stereo) | 0.9 s (136x), 16.7 MB | not available | |
+| DCP sound (MXF) | 2.4 s (51x), 103.8 MB | not available | |
 | WAV, 24-bit PCM (a plain copy) | 1.9 s (63x), 103.7 MB | 0.2 s (530x), 103.7 MB | |
 
 Bold marks where Subwoofa is the smaller file or the faster program.
@@ -57,8 +57,11 @@ Bold marks where Subwoofa is the smaller file or the faster program.
 - **Nothing here is slow for real use.** A two-hour film at 6x real time is 20 minutes. The slowest case, MPEG-4 ALS
   at 5x, is a two-hour film in about 25 minutes. Encodes of several streams can also run at once (Settings, "Encodes at
   the same time").
-- **Express** got about three times faster in this round (the quantiser search now uses all cores). The other
-  encoders are single-threaded, so more speed is available by the same route if it matters.
+- **Parallelism:** DTS-HD Express and every audio-file format (FLAC, WavPack on 5.1, Apple Lossless, TTA, ALS,
+  Monkey's Audio) now encode on all cores. The first measurement of this page was taken before that for the file
+  formats: Apple Lossless went from 23.9 s to 4.1 s, ALS from 25.8 s to 4.3 s, FLAC from 7.8 s to 2.5 s and
+  Monkey's Audio from 1.7 s to 0.9 s, with byte-identical files. The AC-3, E-AC-3, TrueHD, DTS core, High Resolution
+  and Master Audio encoders are still single-threaded, so there is more to gain there.
 
 ## Repeating it
 

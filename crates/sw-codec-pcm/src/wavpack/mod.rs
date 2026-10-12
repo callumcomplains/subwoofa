@@ -19,6 +19,7 @@ mod word_coder;
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use log_tables::log2;
 use predictor::Chain;
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -63,6 +64,16 @@ struct Group {
     channels: Vec<usize>,
     chain: Chain,
     medians: [Medians; 2],
+}
+
+/// What building a block needs to know about the file, copied so that blocks can be built on several threads.
+struct Context {
+    rate: u32,
+    total_frames: u64,
+    channels: usize,
+    mask: u32,
+    bits: u32,
+    next_index: u64,
 }
 
 pub struct WavPackWriter {
@@ -124,15 +135,31 @@ impl WavPackWriter {
     fn write_frame(&mut self, frame: &[Vec<i32>]) -> std::io::Result<()> {
         let frames = frame[0].len() as u32;
         let last_group = self.groups.len() - 1;
-        for g in 0..self.groups.len() {
-            let mut flags = 0;
-            if g == 0 {
-                flags |= flag::INITIAL;
-            }
-            if g == last_group {
-                flags |= flag::FINAL;
-            }
-            let block = self.build_block(g, frame, flags, frames);
+        let ctx = Context {
+            rate: self.params.rate,
+            total_frames: self.params.total_frames,
+            channels: self.params.channels(),
+            mask: self.params.mask,
+            bits: self.bits,
+            next_index: self.next_index,
+        };
+        // the channel groups do not depend on each other, so their blocks are built side by side
+        let blocks: Vec<Vec<u8>> = self
+            .groups
+            .par_iter_mut()
+            .enumerate()
+            .map(|(g, group)| {
+                let mut flags = 0;
+                if g == 0 {
+                    flags |= flag::INITIAL;
+                }
+                if g == last_group {
+                    flags |= flag::FINAL;
+                }
+                Self::build_block(group, &ctx, frame, flags, frames)
+            })
+            .collect();
+        for block in blocks {
             self.out.write_all(&block)?;
             self.written += block.len() as u64;
         }
@@ -140,13 +167,12 @@ impl WavPackWriter {
         Ok(())
     }
 
-    fn build_block(&mut self, g: usize, frame: &[Vec<i32>], mut flags: u32, frames: u32) -> Vec<u8> {
-        let rate = self.params.rate;
-        let total_samples = self.params.total_frames as u32;
-        let channel_count = self.params.channels();
-        let channel_mask = self.params.mask;
-        let bits = self.bits;
-        let group = &mut self.groups[g];
+    fn build_block(group: &mut Group, ctx: &Context, frame: &[Vec<i32>], mut flags: u32, frames: u32) -> Vec<u8> {
+        let rate = ctx.rate;
+        let total_samples = ctx.total_frames as u32;
+        let channel_count = ctx.channels;
+        let channel_mask = ctx.mask;
+        let bits = ctx.bits;
         let stereo = group.channels.len() == 2;
 
         let samples: Vec<&[i32]> = group.channels.iter().map(|&c| &frame[c][..]).collect();
@@ -210,10 +236,10 @@ impl WavPackWriter {
         block.extend_from_slice(b"wvpk");
         block.extend_from_slice(&((24 + sub.len()) as u32).to_le_bytes());
         block.extend_from_slice(&VERSION.to_le_bytes());
-        block.push((self.next_index >> 32) as u8);
-        block.push((self.params.total_frames >> 32) as u8);
+        block.push((ctx.next_index >> 32) as u8);
+        block.push((ctx.total_frames >> 32) as u8);
         block.extend_from_slice(&total_samples.to_le_bytes());
-        block.extend_from_slice(&(self.next_index as u32).to_le_bytes());
+        block.extend_from_slice(&(ctx.next_index as u32).to_le_bytes());
         block.extend_from_slice(&frames.to_le_bytes());
         block.extend_from_slice(&flags.to_le_bytes());
         block.extend_from_slice(&crc.to_le_bytes());
