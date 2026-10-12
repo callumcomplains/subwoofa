@@ -29,7 +29,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
       shorter lines. Behaviour must not change; existing tests are the proof.
 - [ ] **DCP audio**: 24-bit PCM MXF track files at 48/96 kHz, up to 16 channels (SMPTE and Interop), checked with
       FFmpeg and asdcplib (about 8 h).
-- [ ] **AC-3 exponent-strategy optimisation** (about half a day).
+- [x] **AC-3 exponent-strategy optimisation**: measured instead of built. Eight combinations of exponent strategy and block grouping were tried on film audio (stereo 192 and 384, 5.1 at 448 and 640 kbps, decoded SNR): all within 0.2 dB of the current choice, so the fixed choice stays.
 - [ ] ALS extras: block switching, long-term prediction and the BGMC coder (about 2% smaller files).
 - [ ] GUI leftovers: `.swsettings` polish, BWF timecode fields, folder-batch tweaks.
 
