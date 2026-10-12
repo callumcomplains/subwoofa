@@ -52,7 +52,7 @@ New code is written so it never needs a readability rewrite:
 
 1. **Say what and why.** Every file starts with a module comment: what it is for, which specification it follows
    (with the section or table names), and the order the pieces run in.
-2. **Names are words.** `quantisation_step`, not `qs`; the spec's abbreviation may appear once in a comment.
+2. **Names are short words.** `step`, `window`, `fold_sign`: not `qs`, and not a sentence either. Two or three words at most, test names included (`parameter_tracks_level`, not a description of the whole behaviour). The spec's abbreviation may appear once in a comment.
 3. **Short functions that do one thing**, ideally under about 40 lines, lines under about 110 characters.
 4. **Constants and tables are named and sourced.** No bare magic numbers; each table says where it comes from.
 5. **Comments explain why**, not what the next line does.
