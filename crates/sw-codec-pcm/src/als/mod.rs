@@ -12,6 +12,7 @@
 
 mod block;
 mod lpc;
+mod switching;
 
 use crate::bitwriter::BitWriter;
 use crate::crc::SampleCrc;
@@ -135,7 +136,8 @@ impl AlsWriter {
         }
         self.history = history;
         let cfg = self.cfg;
-        let coded: Vec<Vec<u8>> = extended.par_iter().map(|ext| code_frame(ext, cfg)).collect();
+        let frame_len = self.frame_len;
+        let coded: Vec<Vec<u8>> = extended.par_iter().map(|ext| code_frame(ext, cfg, frame_len)).collect();
         for (samples, bytes) in frames.iter().zip(coded) {
             self.frame_sizes.push(bytes.len() as u32);
             self.out.write_all(&bytes)?;
@@ -171,7 +173,7 @@ impl AlsWriter {
         w.put(self.cfg.table as u64, 2);
         w.put(0, 1); // no long-term prediction
         w.put(MAX_ORDER as u64, 10);
-        w.put(0, 2); // no block switching
+        w.put(switching::CONFIG_LEVEL, 2); // block switching: a 16-bit split field per unit
         w.put(0, 1); // no BGMC
         w.put(1, 1); // sub-blocks for the Rice parameters
         w.put((p.channels() > 1) as u64, 1); // joint stereo
@@ -225,18 +227,31 @@ impl AlsWriter {
     }
 }
 
-/// One frame: every channel's block, pairs of neighbouring channels together.
-fn code_frame(extended: &[Vec<i32>], cfg: Settings) -> Vec<u8> {
+/// One frame: every channel (or pair of neighbouring channels) cut into blocks as it pays, each unit led by its
+/// split field.
+fn code_frame(extended: &[Vec<i32>], cfg: Settings, frame_len: usize) -> Vec<u8> {
+    let len = extended[0].len() - MAX_ORDER;
+    let full = len == frame_len;
     let mut frame = Vec::new();
     let mut c = 0;
     while c < extended.len() {
         if c + 1 < extended.len() {
-            let (first, second) = pair_blocks(&extended[c], &extended[c + 1], cfg);
-            frame.extend(first);
-            frame.extend(second);
+            let (left, right) = (&extended[c], &extended[c + 1]);
+            let difference: Vec<i32> = left.iter().zip(right).map(|(&l, &r)| r.wrapping_sub(l)).collect();
+            let code = |start: usize, n: usize| pair_blocks(left, right, &difference, start, n, cfg);
+            frame.extend(switching::code_unit(len, full, &code));
             c += 2;
         } else {
-            frame.extend(block::encode(&extended[c], MAX_ORDER, false, cfg));
+            let signal = &extended[c];
+            let code = |start: usize, n: usize| {
+                vec![block::encode(
+                    &signal[..MAX_ORDER + start + n],
+                    MAX_ORDER + start,
+                    false,
+                    cfg,
+                )]
+            };
+            frame.extend(switching::code_unit(len, full, &code));
             c += 1;
         }
     }
@@ -251,21 +266,21 @@ fn descriptor(tag: u8, body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The two blocks of a channel pair, with joint stereo used where it makes them smaller.
-fn pair_blocks(left: &[i32], right: &[i32], cfg: Settings) -> (Vec<u8>, Vec<u8>) {
-    let difference: Vec<i32> = left.iter().zip(right).map(|(&l, &r)| r.wrapping_sub(l)).collect();
-    let l = block::encode(left, MAX_ORDER, false, cfg);
-    let r = block::encode(right, MAX_ORDER, false, cfg);
-    let d = block::encode(&difference, MAX_ORDER, true, cfg);
+/// The two blocks of a channel pair for `start..start + n`, with joint stereo used where it makes them smaller.
+fn pair_blocks(left: &[i32], right: &[i32], difference: &[i32], start: usize, n: usize, cfg: Settings) -> Vec<Vec<u8>> {
+    let (from, to) = (MAX_ORDER + start, MAX_ORDER + start + n);
+    let l = block::encode(&left[..to], from, false, cfg);
+    let r = block::encode(&right[..to], from, false, cfg);
+    let d = block::encode(&difference[..to], from, true, cfg);
     let plain = l.len() + r.len();
     let with_difference_first = d.len() + r.len();
     let with_difference_second = l.len() + d.len();
     if plain <= with_difference_first && plain <= with_difference_second {
-        (l, r)
+        vec![l, r]
     } else if with_difference_first <= with_difference_second {
-        (d, r)
+        vec![d, r]
     } else {
-        (l, d)
+        vec![l, d]
     }
 }
 

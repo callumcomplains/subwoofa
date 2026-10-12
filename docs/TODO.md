@@ -29,8 +29,8 @@ format options), verify support, round-trip tests, docs table row, changelog lin
       shorter lines. Behaviour must not change; existing tests are the proof.
 - [x] **DCP audio**: done (SMPTE and Interop, checked against asdcplib's own output and tools; not tried on a cinema server). Encrypted track files and the rest of a DCP (CPL, PKL, ASSETMAP) are not made.
 - [x] **AC-3 exponent-strategy optimisation**: measured instead of built. Eight combinations of exponent strategy and block grouping were tried on film audio (stereo 192 and 384, 5.1 at 448 and 640 kbps, decoded SNR): all within 0.2 dB of the current choice, so the fixed choice stays.
-- [ ] ALS extras: block switching, long-term prediction and the BGMC coder (about 2% smaller files).
-- [ ] GUI leftovers: `.swsettings` polish, BWF timecode fields, folder-batch tweaks.
+- [x] ALS extras, tried: block switching is in (16-bit split field, up to 16 blocks per frame; 0.1% to 0.3% smaller on film and music, about twice the encode time). Predictor orders up to 512 gained 0.02%, so the limit stays at 64. Long-term prediction and the BGMC coder were left out: on this material the gains measured so far were below 0.5%, and BGMC needs the format's arithmetic-coder tables.
+- [x] GUI leftovers: checked against the old encoder's list: presets, folder batch, automatic verify and the peak bit rate in the job log all exist, and a source file's BWF time reference is carried into WAV output. Not there: a field to type a BWF start time by hand.
 
 ## Blocked on outside files or tools
 
