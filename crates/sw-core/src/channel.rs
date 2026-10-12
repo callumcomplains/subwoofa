@@ -1,3 +1,5 @@
+//! Speaker positions (channel IDs): their short names, how file names point at them, and the order they sit in.
+
 use serde::{Deserialize, Serialize};
 
 /// A single speaker position.

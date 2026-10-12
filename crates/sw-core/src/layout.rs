@@ -1,3 +1,5 @@
+//! Channel layouts: the named speaker arrangements (1.0 to 22.2) with the channels each one has, in order.
+
 use crate::channel::Channel::{self, *};
 use serde::Serialize;
 

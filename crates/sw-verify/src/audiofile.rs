@@ -1,5 +1,5 @@
-//! Structure checks for plain audio files: WAV / RF64, AIFF, CAF, FLAC (also in Ogg), ALAC in M4A, TTA, and DSD
-//! (DSF and DSDIFF). Each check reads the headers the way a player would and compares what they say with each other
+//! Structure checks for plain audio files: WAV / RF64, AIFF, CAF, FLAC (also in Ogg), ALAC / ALS in MP4, TTA,
+//! WavPack, Monkey's Audio, raw ALS, MXF sound and DSD (DSF and DSDIFF). Each check reads the headers the way a player would and compares what they say with each other
 //! and with the size of the file. Deep verification then decodes the audio (see `deep.rs`).
 
 use crate::{Collector, Probe, Status, Window};

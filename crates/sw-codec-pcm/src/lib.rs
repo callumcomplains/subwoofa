@@ -1,4 +1,5 @@
-//! Uncompressed and FLAC audio files: WAV (BWF, RF64), AIFF, CAF and FLAC.
+//! Audio files: WAV (BWF, RF64), AIFF, CAF, FLAC (also in Ogg), Apple Lossless, TTA, WavPack, Monkey's Audio,
+//! MPEG-4 ALS, DSD (DSF, DSDIFF) and digital cinema sound (MXF).
 //!
 //! The stems are read as 32-bit floats (exact for anything up to 24 bits), converted to the chosen sample format and
 //! written in blocks. Each container module only knows its own file layout; this file reads the stems, orders the

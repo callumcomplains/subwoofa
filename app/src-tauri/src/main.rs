@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! The desktop app: a Tauri window around the page in `app/ui`. This file is the bridge: every function with
+//! `#[tauri::command]` is something the page can call (the catalogue of formats, probing input files, the queue,
+//! StreamTools, Verify, the tool paths). The encoding itself is in the crates; nothing here does audio work.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

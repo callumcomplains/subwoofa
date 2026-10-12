@@ -10,7 +10,7 @@ Estimates are focused working time for the work itself.
 - [x] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg. (Done, in an MP4 wrapper for the check. Not done: block switching, long-term prediction, BGMC; they would take it from FLAC-sized to about 2% better.)
 - [x] **DTS-HD Express: tonal components**: already done earlier (steady notes are coded as tones; this item was stale). Quality against the original was also measured and is at or above it at the same bit rate on most test cases.
 - [x] **DTS-HD Express**, the follow-up round: the encoder is already below the original's own floors (mono 48, stereo 64, 5.1 146 kbps, against the original's 48 / 64 / 192), so no lower floor is needed; quality parity was measured earlier; the quantizer-profile search now runs on all cores (same bytes out, about 3x faster: 5.1 encodes at about 6x real time); the LFE uses the 6-bit coding from 256 kbps (checked with FFmpeg and DTSHDVerify).
-- [ ] Express, small leftovers: interpolated scale factors and the per-group attenuation curve (the last 1.6 dB at mono 96 kbps), parallel tone search.
+- [x] Express, small leftovers, looked at: interpolating scale factors over time would save about 20 bytes of a 1024-byte frame at mono 96 kbps (about 0.1 dB), the attenuation curve was tried earlier and did not help, and the tone search depends on its own earlier choices, so it cannot run in parallel without changing the result. None is worth the risk.
 
 Each format means: encoder in `sw-codec-pcm`, stream type and Files destination, CLI, GUI (plate, extension, pcm
 format options), verify support, round-trip tests, docs table row, changelog line.
@@ -25,8 +25,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 
 ## Next, unblocked
 
-- [ ] **Readability pass** over the older code (started: the whole code base is now `rustfmt`-formatted at 120 columns and CI checks it; the five dead-code warnings are gone; what is left is the guides, module comments and clearer names): per-crate guides, module comments on each pipeline, clearer names,
-      shorter lines. Behaviour must not change; existing tests are the proof.
+- [x] **Readability pass**, first round: the whole code base is `rustfmt`-formatted at 120 columns and CI checks it; the dead-code warnings are gone; every file has a module comment (five were added, three stale ones corrected); `docs/ARCHITECTURE.md` maps the crates and says how to add a format. Left for later rounds: clearer names in the oldest DTS and TrueHD code, and splitting the few files over 1000 lines (`sw-codec-truehd/src/lib.rs`, `sw-verify/src/dts.rs`, `sw-codec-ac3/src/lib.rs`).
 - [x] **DCP audio**: done (SMPTE and Interop, checked against asdcplib's own output and tools; not tried on a cinema server). Encrypted track files and the rest of a DCP (CPL, PKL, ASSETMAP) are not made.
 - [x] **AC-3 exponent-strategy optimisation**: measured instead of built. Eight combinations of exponent strategy and block grouping were tried on film audio (stereo 192 and 384, 5.1 at 448 and 640 kbps, decoded SNR): all within 0.2 dB of the current choice, so the fixed choice stays.
 - [x] ALS extras, tried: block switching is in (16-bit split field, up to 16 blocks per frame; 0.1% to 0.3% smaller on film and music, about twice the encode time). Predictor orders up to 512 gained 0.02%, so the limit stays at 64. Long-term prediction and the BGMC coder were left out: on this material the gains measured so far were below 0.5%, and BGMC needs the format's arithmetic-coder tables.

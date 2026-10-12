@@ -1,3 +1,7 @@
+//! The capability matrix: destinations, stream types, which combinations are allowed, and the sample rates, bit
+//! rates, channel counts and file extensions that go with each. The app and the command line both read it, so a
+//! format is offered everywhere or nowhere.
+
 use crate::layout::ChannelLayout;
 use serde::Serialize;
 

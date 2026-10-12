@@ -1,3 +1,6 @@
+//! The `subwoofa` command line: encode, verify, StreamTools, Atmos and a few listings. Every run prints its version on
+//! stderr first. The commands are thin: they build the same job the app builds and hand it to `sw-queue`.
+
 use clap::{Args, Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
