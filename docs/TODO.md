@@ -20,7 +20,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 - [ ] Install the release on a clean machine: SmartScreen, version display, no-FFmpeg banner, a native encode.
 - [ ] Turn on private vulnerability reporting (repository Settings > Advanced Security).
 - [ ] Check the in-app "How" links open the right docs pages.
-- [ ] `CONTRIBUTING.md` (how to build, test, and the code standard below).
+- [x] `CONTRIBUTING.md` (how to build, test, and the code standard below).
 - [ ] Code signing for Windows, once there is a certificate.
 
 ## Next, unblocked
