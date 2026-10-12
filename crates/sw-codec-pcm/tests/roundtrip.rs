@@ -80,12 +80,12 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
     assert_eq!(stats.frames, frames as u64, "{name}: frames written");
     assert_eq!(stats.bytes, std::fs::metadata(&out).unwrap().len(), "{name}: reported size");
 
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", decode_format(format), "-"]).output().unwrap();
+    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&out).args(["-f", decode_format(format), "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
 
     // file order of the channels
     let order: Vec<usize> = match container {
-        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta => channels::wav_order(layout).order,
+        Container::Wav | Container::Flac | Container::OggFlac | Container::Alac | Container::Tta | Container::WavPack => channels::wav_order(layout).order,
         _ => (0..layout.channels.len()).collect(),
     };
     let width = format.bytes();
@@ -263,6 +263,21 @@ fn tta_mono_shorter_than_a_frame() {
     check("ttashort", Tta, "tta", Int24, "1.0", 48_000, 1_000);
 }
 
+#[test]
+fn wavpack_16_bit_stereo() {
+    check("wv16", WavPack, "wv", Int16, "2.0", 44_100, 100_001);
+}
+
+#[test]
+fn wavpack_24_bit_five_one() {
+    check("wv51", WavPack, "wv", Int24, "5.1", 48_000, 120_000);
+}
+
+#[test]
+fn wavpack_mono_short() {
+    check("wvshort", WavPack, "wv", Int24, "1.0", 48_000, 1_000);
+}
+
 /// DSD cannot be compared sample for sample: encode a different tone on every channel and check that FFmpeg's
 /// decode of the file has each tone, at half the level (the modulator runs at half scale), in the right channel only.
 fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate: u32, multiplier: u32) {
@@ -287,7 +302,7 @@ fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate:
     let out = dir.join(format!("out.{ext}"));
     let req = Request { layout, container, format: Int24, start_secs: 0.0, duration_secs: None, output: &out, dsd_multiplier: multiplier };
     encode_to_file(&mut stems, &req, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
-    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&out).args(["-f", "f32le", "-ar", "352800", "-"]).output().unwrap();
+    let dec = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-err_detect", "crccheck+explode", "-i"]).arg(&out).args(["-f", "f32le", "-ar", "352800", "-"]).output().unwrap();
     assert!(dec.status.success() && dec.stderr.is_empty(), "{name}: decoder: {}", String::from_utf8_lossy(&dec.stderr));
     let y: Vec<f32> = dec.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     let n = y.len() / nch;

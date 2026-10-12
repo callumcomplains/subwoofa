@@ -5,7 +5,7 @@ Estimates are focused working time for the work itself.
 
 ## Now: the agreed order
 
-- [ ] **WavPack** (`.wv`) native lossless encoder, mono to 5.1+ (about 6 h). Checked by decoding with FFmpeg.
+- [x] **WavPack** (`.wv`) native lossless encoder, mono to 5.1+ (about 6 h). Checked by decoding with FFmpeg. (Done: size within 1% of FFmpeg's default encoder.)
 - [ ] **Monkey's Audio** (`.ape`) native lossless encoder (about 6 h). Checked by decoding with FFmpeg.
 - [ ] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg.
 - [ ] **DTS-HD Express: tonal components** (about 1 day). Express quality is the weakest of what we ship.

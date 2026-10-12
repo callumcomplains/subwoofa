@@ -8,6 +8,7 @@
 //!
 //! written least significant bit first, and every frame ends with its CRC-32.
 
+use crate::le_bits::LeBitWriter;
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -21,46 +22,6 @@ fn shift_1(k: u32) -> u32 {
 /// `16 << k` as the Rice adaptation compares sums (the table is the same one shifted by four places).
 fn shift_16(k: u32) -> u32 {
     shift_1(k + 4)
-}
-
-/// Bits written from the least significant end of each byte.
-#[derive(Default)]
-struct LeBitWriter {
-    bytes: Vec<u8>,
-    pending: u64,
-    pending_bits: u32,
-}
-
-impl LeBitWriter {
-    fn put(&mut self, value: u32, count: u32) {
-        debug_assert!(count <= 32);
-        if count == 0 {
-            return;
-        }
-        self.pending |= ((value as u64) & ((1u64 << count) - 1)) << self.pending_bits;
-        self.pending_bits += count;
-        while self.pending_bits >= 8 {
-            self.bytes.push(self.pending as u8);
-            self.pending >>= 8;
-            self.pending_bits -= 8;
-        }
-    }
-
-    /// `count` one bits.
-    fn put_ones(&mut self, mut count: u32) {
-        while count > 0 {
-            let step = count.min(31);
-            self.put((1u32 << step) - 1, step);
-            count -= step;
-        }
-    }
-
-    fn finish(mut self) -> Vec<u8> {
-        if self.pending_bits > 0 {
-            self.bytes.push(self.pending as u8);
-        }
-        self.bytes
-    }
 }
 
 /// CRC-32 (IEEE, reflected), as the frames and the header use.
@@ -299,15 +260,5 @@ mod tests {
     #[test]
     fn crc_of_the_check_string() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-    }
-
-    #[test]
-    fn bits_are_written_from_the_low_end() {
-        let mut w = LeBitWriter::default();
-        w.put(0b1, 1);
-        w.put(0b10, 2); // bits 1..2 hold 0, 1
-        w.put_ones(3);
-        // bit 0 = 1, bits 1-2 = 0b10 (low bit first: 0, then 1), bits 3-5 = 1
-        assert_eq!(w.finish(), vec![0b0011_1101]);
     }
 }
