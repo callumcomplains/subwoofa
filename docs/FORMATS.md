@@ -26,6 +26,7 @@ Nothing here needs a third-party program except where it says FFmpeg or the Dolb
 | **Verify** (own implementation, no other program needed): AC-3, E-AC-3, DTS, DTS-HD (.dtshd container, core, XBR, XXCH, X96, XLL, LBR), TrueHD, MLP. Simple mode checks sync, sizes, checksums, headers and the container; deep mode adds a full decode, audio measurements and a dump of every header (GUI "Verify" mode and `subwoofa verify [--deep]`) | working |
 | WavPack (`.wv`) lossless, 16/24 bit, any channel count (split into pairs as the format does); about the size of FFmpeg's default WavPack encoder, bit-exact and CRC-checked by FFmpeg's decoder | working |
 | Monkey's Audio (`.ape`, version 3.99, extra high level) lossless, 16/24 bit, mono and stereo (the format's limit in common decoders); about 1.5% smaller than our FLAC on film audio, bit-exact and CRC-checked by FFmpeg's decoder | working |
+| MPEG-4 ALS (`.als`, or an MP4 file when the name ends in `.mp4`) lossless, 16/24 bit, any channel count; linear prediction up to order 64 with joint stereo and Rice coding, about the size of FLAC; the MP4 form is bit-exact and CRC-checked by FFmpeg (FFmpeg cannot open a bare `.als`). No block switching, long-term prediction or BGMC yet | working |
 | Native WAV / BWF / RF64 / AIFF reader, stem-set channel mapping | done |
 | Encode queue: progress, cancel, concurrency, auto-verify (lossless MD5), per-job logs | done |
 | FFmpeg backend: TrueHD / MLP | working; 5.1 verified bit-exact lossless on real PCM |

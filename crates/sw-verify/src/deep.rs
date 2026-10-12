@@ -48,6 +48,12 @@ fn flac_md5_check(path: &Path, ffmpeg: &Path, c: &mut Collector) {
     }
 }
 
+/// A bare `.als` file (the record, then frames) has no container FFmpeg understands.
+fn is_raw_als(path: &Path) -> bool {
+    let mut head = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == b"ALS\0"
+}
+
 // ------------------------------------------------------------------------------------------------
 // bit rate
 
@@ -143,6 +149,10 @@ fn probe_channels(path: &Path, ffmpeg: &Path) -> Option<(usize, u32)> {
 }
 
 fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) -> Decoded {
+    if is_raw_als(path) {
+        c.check("Full decode", Status::Skipped, "FFmpeg cannot read a raw .als file; encode to .mp4 (the same stream in an MP4 file) for a full decode check");
+        return Decoded::Done(Done { channels: 0 });
+    }
     let Some((channels, rate)) = probe_channels(path, ffmpeg) else {
         // either FFmpeg is missing or it cannot read the file at all
         if Command::new(ffmpeg).arg("-version").output().is_err() {

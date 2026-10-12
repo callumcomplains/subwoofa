@@ -238,6 +238,7 @@ fn execute_inner(
             StreamType::Tta => sw_codec_pcm::Container::Tta,
             StreamType::WavPack => sw_codec_pcm::Container::WavPack,
             StreamType::MonkeysAudio => sw_codec_pcm::Container::MonkeysAudio,
+            StreamType::MpegAls => sw_codec_pcm::Container::MpegAls,
             StreamType::DsdDsf => sw_codec_pcm::Container::Dsf,
             StreamType::DsdDff => sw_codec_pcm::Container::Dff,
             _ => sw_codec_pcm::Container::Flac,

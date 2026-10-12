@@ -15,6 +15,7 @@ mod neural;
 mod predictor;
 mod range_coder;
 
+use crate::crc::SampleCrc;
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use entropy::ValueCoder;
 use neural::{Chain, Spec};
@@ -36,42 +37,18 @@ const FRAME_BLOCKS: usize = 73_728 * 4;
 /// "The decoder creates the WAV header", so none is stored.
 const FLAG_CREATE_WAV_HEADER: u16 = 32;
 
-/// The compression levels the format names, as the number written in the header.
-#[derive(Clone, Copy)]
-pub(crate) enum Level {
-    Fast = 1000,
-    Normal = 2000,
-    High = 3000,
-    ExtraHigh = 4000,
-    Insane = 5000,
-}
+/// The compression level written: "extra high" (4000). The format also has fast (1000, no filters), normal (2000, one
+/// 16-tap filter), high (3000, one 64-tap filter) and insane (5000, three filters up to 1280 taps); on film audio
+/// the differences were under 0.2%, so one level does.
+const LEVEL: u16 = 4000;
 
-impl Level {
-    /// The neural filters of this level, in the order the decoder applies them.
-    fn filters(self) -> &'static [Spec] {
-        const NONE: [Spec; 0] = [];
-        const NORMAL: [Spec; 1] = [Spec { order: 16, shift: 11 }];
-        const HIGH: [Spec; 1] = [Spec { order: 64, shift: 11 }];
-        const EXTRA: [Spec; 2] = [Spec { order: 32, shift: 10 }, Spec { order: 256, shift: 13 }];
-        const INSANE: [Spec; 3] = [Spec { order: 16, shift: 11 }, Spec { order: 256, shift: 13 }, Spec { order: 1280, shift: 15 }];
-        match self {
-            Level::Fast => &NONE,
-            Level::Normal => &NORMAL,
-            Level::High => &HIGH,
-            Level::ExtraHigh => &EXTRA,
-            Level::Insane => &INSANE,
-        }
-    }
-}
-
-/// The level used when none is asked for.
-const DEFAULT_LEVEL: Level = Level::ExtraHigh;
+/// The neural filters of that level, in the order the decoder applies them.
+const FILTERS: [Spec; 2] = [Spec { order: 32, shift: 10 }, Spec { order: 256, shift: 13 }];
 
 pub struct MonkeysWriter {
     out: BufWriter<File>,
     params: Params,
     bits: u32,
-    level: Level,
     pending: Vec<Vec<i32>>,
     /// Size in bytes of every frame written so far.
     frame_sizes: Vec<u32>,
@@ -102,7 +79,6 @@ impl MonkeysWriter {
             pending: vec![Vec::new(); params.channels()],
             params,
             bits,
-            level: DEFAULT_LEVEL,
             frame_sizes: Vec::new(),
             frame_count,
             header_len,
@@ -110,7 +86,7 @@ impl MonkeysWriter {
     }
 
     fn write_frame(&mut self, channels: &[Vec<i32>]) -> std::io::Result<()> {
-        let bytes = encode_frame(channels, self.bits, self.level);
+        let bytes = encode_frame(channels, self.bits);
         self.frame_sizes.push(bytes.len() as u32);
         self.out.write_all(&bytes)
     }
@@ -133,7 +109,7 @@ impl MonkeysWriter {
         h.extend_from_slice(&((audio_bytes >> 32) as u32).to_le_bytes());
         h.extend_from_slice(&0u32.to_le_bytes()); // stored WAV tail bytes
         h.extend_from_slice(&[0u8; 16]); // MD5: not stored
-        h.extend_from_slice(&(self.level as u16).to_le_bytes());
+        h.extend_from_slice(&LEVEL.to_le_bytes());
         h.extend_from_slice(&FLAG_CREATE_WAV_HEADER.to_le_bytes());
         h.extend_from_slice(&(FRAME_BLOCKS as u32).to_le_bytes());
         h.extend_from_slice(&last_blocks.to_le_bytes());
@@ -182,13 +158,15 @@ impl BlockWriter for MonkeysWriter {
 }
 
 /// One frame: CRC of the samples, then the range-coded residuals, swapped in 32-bit words.
-fn encode_frame(channels: &[Vec<i32>], bits: u32, level: Level) -> Vec<u8> {
-    let crc = sample_crc(channels, bits);
+fn encode_frame(channels: &[Vec<i32>], bits: u32) -> Vec<u8> {
+    let mut crc = SampleCrc::new(bits);
+    crc.update(channels);
+    let crc = crc.raw();
     let stereo = channels.len() == 2;
     let blocks = channels[0].len();
 
     let mut predictor = Predictor::new();
-    let mut filters: Vec<Chain> = channels.iter().map(|_| Chain::new(level.filters())).collect();
+    let mut filters: Vec<Chain> = channels.iter().map(|_| Chain::new(&FILTERS)).collect();
     let mut coders: Vec<ValueCoder> = channels.iter().map(|_| ValueCoder::new()).collect();
     let mut enc = RangeEncoder::new();
 
@@ -215,37 +193,13 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32, level: Level) -> Vec<u8> {
     bytes
 }
 
-/// CRC-32 (IEEE, reflected, no final inversion) of the samples as little-endian bytes, channels interleaved.
-fn sample_crc(channels: &[Vec<i32>], bits: u32) -> u32 {
-    let width = bits as usize / 8;
-    let mut crc = 0xFFFF_FFFFu32;
-    for n in 0..channels[0].len() {
-        for channel in channels {
-            for &byte in &channel[n].to_le_bytes()[..width] {
-                crc ^= byte as u32;
-                for _ in 0..8 {
-                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-                }
-            }
-        }
-    }
-    crc
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn crc_follows_the_ieee_check() {
-        // the standard check value, before the final inversion
-        let bytes: Vec<i32> = b"123456789".iter().map(|&b| b as i32).collect();
-        assert_eq!(!sample_crc(&[bytes], 8), 0xCBF4_3926);
-    }
-
-    #[test]
     fn frames_are_whole_words() {
         let tone: Vec<i32> = (0..5000).map(|n| ((n as f64 * 0.05).sin() * 3000.0) as i32).collect();
-        assert_eq!(encode_frame(&[tone], 16, Level::Normal).len() % 4, 0);
+        assert_eq!(encode_frame(&[tone], 16).len() % 4, 0);
     }
 }

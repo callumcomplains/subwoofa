@@ -16,6 +16,7 @@ pub(crate) enum AudioKind {
     Tta,
     WavPack,
     Monkeys,
+    Als,
     Dsf,
     Dff,
 }
@@ -32,6 +33,7 @@ impl AudioKind {
             AudioKind::Tta => "TTA (True Audio)",
             AudioKind::WavPack => "WavPack",
             AudioKind::Monkeys => "Monkey's Audio",
+            AudioKind::Als => "MPEG-4 ALS",
             AudioKind::Dsf => "DSD (DSF)",
             AudioKind::Dff => "DSD (DSDIFF)",
         }
@@ -65,6 +67,9 @@ pub(crate) fn sniff(h: &[u8]) -> Option<AudioKind> {
     }
     if h.starts_with(b"TTA1") {
         return Some(AudioKind::Tta);
+    }
+    if h.starts_with(b"ALS\0") {
+        return Some(AudioKind::Als);
     }
     if h.starts_with(b"MAC ") {
         return Some(AudioKind::Monkeys);
@@ -101,6 +106,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, kind: AudioKind) -> Prob
         AudioKind::Tta => tta(w, c),
         AudioKind::WavPack => wavpack(w, c),
         AudioKind::Monkeys => monkeys(w, c),
+        AudioKind::Als => als(w, c),
         AudioKind::Dsf => dsf(w, c),
         AudioKind::Dff => dff(w, c),
     };
@@ -656,6 +662,25 @@ fn wavpack(w: &mut Window, c: &mut Collector) -> Facts {
     c.check("Blocks fill the file", if at == len { Status::Pass } else { Status::Fail }, format!("{blocks} blocks"));
     c.check("Sample count", if total == 0 || total == frames { Status::Pass } else { Status::Fail }, format!("the header says {total}, the blocks hold {frames}"));
     Facts { rate, channels, bits, frames: Some(frames), lossless: true }
+}
+
+// ------------------------------------------------------------------------------------------------
+// MPEG-4 ALS
+
+/// A raw `.als` file starts with its configuration record. The frames have no index, so only the record is read.
+fn als(w: &mut Window, c: &mut Collector) -> Facts {
+    let h = w.get(0, 22).to_vec();
+    if h.len() < 22 {
+        c.check("Configuration", Status::Fail, "the file is shorter than the ALS configuration record");
+        return Facts::default();
+    }
+    let (rate, samples, channels) = (be32(&h[4..8]), be32(&h[8..12]) as u64, be16(&h[12..14]) as u32 + 1);
+    let bits = (((h[14] >> 2) & 7) as u32 + 1) * 8;
+    let frame_length = be16(&h[15..17]) as u32 + 1;
+    c.kv("Frame length", format!("{frame_length} samples"));
+    c.check("Configuration", if rate > 0 && samples > 0 { Status::Pass } else { Status::Fail }, "the record names a rate and a length");
+    c.check("Frames", Status::Info, "frame sizes are not indexed in a raw file; open it as MP4 for a full decode");
+    Facts { rate, channels, bits, frames: Some(samples), lossless: true }
 }
 
 // ------------------------------------------------------------------------------------------------

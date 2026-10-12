@@ -9,10 +9,11 @@
 //! 3. *Entropy coding*: adaptive Golomb-Rice codes whose parameter follows a running average of recent magnitudes,
 //!    with a run-length code for stretches of zeros.
 
+use crate::mp4_audio::{self, atom};
 use crate::bitwriter::BitWriter;
 use crate::{to_integers, BlockWriter, Params, SampleFormat};
 use std::fs::File;
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use sw_core::{Channel, ChannelLayout};
 
@@ -435,10 +436,7 @@ pub struct AlacWriter {
     /// Samples collected for the next frame, per channel in ALAC order.
     pending: Vec<Vec<i32>>,
     frame_sizes: Vec<u32>,
-    /// Offset of the first byte of audio data in the file.
-    data_start: u64,
-    /// Offset of the 64-bit size field of the `mdat` box.
-    mdat_size_at: u64,
+    start: mp4_audio::Start,
     layout_tag: u32,
     samples_done: u64,
 }
@@ -451,22 +449,8 @@ impl AlacWriter {
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "ALAC holds 16 or 24 bit integer samples")),
         };
         let mut out = BufWriter::new(File::create(path)?);
-        let mut ftyp = Vec::new();
-        ftyp.extend_from_slice(b"M4A ");
-        ftyp.extend_from_slice(&0u32.to_be_bytes());
-        for brand in [b"M4A ", b"mp42", b"isom"] {
-            ftyp.extend_from_slice(brand);
-        }
-        ftyp.extend_from_slice(&0u32.to_be_bytes());
-        let ftyp = atom(b"ftyp", &ftyp);
-        out.write_all(&ftyp)?;
-        // `mdat` with a 64-bit size, patched when the length is known
-        let mdat_size_at = ftyp.len() as u64 + 8;
-        out.write_all(&1u32.to_be_bytes())?;
-        out.write_all(b"mdat")?;
-        out.write_all(&0u64.to_be_bytes())?;
-        let data_start = ftyp.len() as u64 + 16;
-        Ok(AlacWriter { out, bits, pending: vec![Vec::new(); params.channels()], frame_sizes: Vec::new(), data_start, mdat_size_at, layout_tag, samples_done: 0, params })
+        let start = mp4_audio::write_start(&mut out, b"M4A ")?;
+        Ok(AlacWriter { out, bits, pending: vec![Vec::new(); params.channels()], frame_sizes: Vec::new(), start, layout_tag, samples_done: 0, params })
     }
 
     fn write_frame(&mut self, block: &[Vec<i32>]) -> std::io::Result<()> {
@@ -476,17 +460,14 @@ impl AlacWriter {
         self.out.write_all(&bytes)
     }
 
-    /// The `moov` box: everything a player needs to find and decode the audio.
-    fn moov(&self, data_end: u64) -> Vec<u8> {
+    /// The boxes inside the sample entry: the `alac` description (Apple's cookie) and a channel layout box.
+    fn entry_boxes(&self) -> Vec<u8> {
         let p = &self.params;
-        let rate = p.rate;
         let total = self.samples_done;
-        let frames = self.frame_sizes.len() as u32;
         let max_frame = self.frame_sizes.iter().copied().max().unwrap_or(0);
         let bytes: u64 = self.frame_sizes.iter().map(|&s| s as u64).sum();
-        let average_bitrate = if total > 0 { (bytes * 8 * rate as u64 / total) as u32 } else { 0 };
+        let average_bitrate = if total > 0 { (bytes * 8 * p.rate as u64 / total) as u32 } else { 0 };
 
-        // sample entry: the 'alac' description (Apple's cookie) and a channel layout box
         let mut cookie = Vec::new();
         cookie.extend_from_slice(&0u32.to_be_bytes()); // version and flags
         cookie.extend_from_slice(&(FRAME_SAMPLES as u32).to_be_bytes());
@@ -499,144 +480,17 @@ impl AlacWriter {
         cookie.extend_from_slice(&255u16.to_be_bytes()); // longest run
         cookie.extend_from_slice(&max_frame.to_be_bytes());
         cookie.extend_from_slice(&average_bitrate.to_be_bytes());
-        cookie.extend_from_slice(&rate.to_be_bytes());
-        let mut entry = Vec::new();
-        entry.extend_from_slice(&[0u8; 6]);
-        entry.extend_from_slice(&1u16.to_be_bytes()); // data reference
-        entry.extend_from_slice(&[0u8; 8]); // version, revision, vendor
-        entry.extend_from_slice(&(p.channels() as u16).to_be_bytes());
-        entry.extend_from_slice(&(self.bits as u16).to_be_bytes());
-        entry.extend_from_slice(&[0u8; 4]); // compression id, packet size
-        entry.extend_from_slice(&((if rate <= 0xFFFF { rate } else { 0 }) << 16).to_be_bytes());
-        entry.extend_from_slice(&atom(b"alac", &cookie));
+        cookie.extend_from_slice(&p.rate.to_be_bytes());
+        let mut boxes = atom(b"alac", &cookie);
         if p.channels() > 2 {
             let mut chan = Vec::new();
             chan.extend_from_slice(&0u32.to_be_bytes());
             chan.extend_from_slice(&self.layout_tag.to_be_bytes());
             chan.extend_from_slice(&0u32.to_be_bytes()); // bitmap
             chan.extend_from_slice(&0u32.to_be_bytes()); // no descriptions
-            entry.extend_from_slice(&atom(b"chan", &chan));
+            boxes.extend_from_slice(&atom(b"chan", &chan));
         }
-        let mut stsd = Vec::new();
-        stsd.extend_from_slice(&0u32.to_be_bytes());
-        stsd.extend_from_slice(&1u32.to_be_bytes());
-        stsd.extend_from_slice(&atom(b"alac", &entry));
-
-        // time to sample: every frame is 4096 samples but the last
-        let mut stts = Vec::new();
-        stts.extend_from_slice(&0u32.to_be_bytes());
-        let last = (total - (frames as u64 - 1) * FRAME_SAMPLES as u64) as u32;
-        if last == FRAME_SAMPLES as u32 {
-            stts.extend_from_slice(&1u32.to_be_bytes());
-            stts.extend_from_slice(&frames.to_be_bytes());
-            stts.extend_from_slice(&(FRAME_SAMPLES as u32).to_be_bytes());
-        } else {
-            stts.extend_from_slice(&2u32.to_be_bytes());
-            stts.extend_from_slice(&(frames - 1).to_be_bytes());
-            stts.extend_from_slice(&(FRAME_SAMPLES as u32).to_be_bytes());
-            stts.extend_from_slice(&1u32.to_be_bytes());
-            stts.extend_from_slice(&last.to_be_bytes());
-        }
-        // all frames in one chunk
-        let mut stsc = Vec::new();
-        stsc.extend_from_slice(&0u32.to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
-        stsc.extend_from_slice(&frames.to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
-        let mut stsz = Vec::new();
-        stsz.extend_from_slice(&0u32.to_be_bytes());
-        stsz.extend_from_slice(&0u32.to_be_bytes()); // sizes follow
-        stsz.extend_from_slice(&frames.to_be_bytes());
-        for s in &self.frame_sizes {
-            stsz.extend_from_slice(&s.to_be_bytes());
-        }
-        let mut chunk_offsets = Vec::new();
-        chunk_offsets.extend_from_slice(&0u32.to_be_bytes());
-        chunk_offsets.extend_from_slice(&1u32.to_be_bytes());
-        let offsets = if data_end > u32::MAX as u64 {
-            chunk_offsets.extend_from_slice(&self.data_start.to_be_bytes());
-            atom(b"co64", &chunk_offsets)
-        } else {
-            chunk_offsets.extend_from_slice(&(self.data_start as u32).to_be_bytes());
-            atom(b"stco", &chunk_offsets)
-        };
-        let mut stbl = Vec::new();
-        stbl.extend_from_slice(&atom(b"stsd", &stsd));
-        stbl.extend_from_slice(&atom(b"stts", &stts));
-        stbl.extend_from_slice(&atom(b"stsc", &stsc));
-        stbl.extend_from_slice(&atom(b"stsz", &stsz));
-        stbl.extend_from_slice(&offsets);
-
-        let mut dref = Vec::new();
-        dref.extend_from_slice(&0u32.to_be_bytes());
-        dref.extend_from_slice(&1u32.to_be_bytes());
-        dref.extend_from_slice(&atom(b"url ", &1u32.to_be_bytes())); // media data in this file
-        let dinf = atom(b"dinf", &atom(b"dref", &dref));
-        let smhd = atom(b"smhd", &[0u8; 8]);
-        let mut minf = Vec::new();
-        minf.extend_from_slice(&smhd);
-        minf.extend_from_slice(&dinf);
-        minf.extend_from_slice(&atom(b"stbl", &stbl));
-
-        let mut mdhd = Vec::new();
-        mdhd.extend_from_slice(&[1, 0, 0, 0]); // version 1: 64-bit times
-        mdhd.extend_from_slice(&0u64.to_be_bytes());
-        mdhd.extend_from_slice(&0u64.to_be_bytes());
-        mdhd.extend_from_slice(&rate.to_be_bytes());
-        mdhd.extend_from_slice(&total.to_be_bytes());
-        mdhd.extend_from_slice(&0x55C4u16.to_be_bytes()); // language: undetermined
-        mdhd.extend_from_slice(&0u16.to_be_bytes());
-        let mut hdlr = Vec::new();
-        hdlr.extend_from_slice(&0u32.to_be_bytes());
-        hdlr.extend_from_slice(&0u32.to_be_bytes());
-        hdlr.extend_from_slice(b"soun");
-        hdlr.extend_from_slice(&[0u8; 12]);
-        hdlr.extend_from_slice(b"SoundHandler\0");
-        let mut mdia = Vec::new();
-        mdia.extend_from_slice(&atom(b"mdhd", &mdhd));
-        mdia.extend_from_slice(&atom(b"hdlr", &hdlr));
-        mdia.extend_from_slice(&atom(b"minf", &minf));
-
-        let matrix: [u32; 9] = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x4000_0000];
-        let mut tkhd = Vec::new();
-        tkhd.extend_from_slice(&[1, 0, 0, 3]); // version 1; enabled and in the movie
-        tkhd.extend_from_slice(&0u64.to_be_bytes());
-        tkhd.extend_from_slice(&0u64.to_be_bytes());
-        tkhd.extend_from_slice(&1u32.to_be_bytes()); // track id
-        tkhd.extend_from_slice(&0u32.to_be_bytes());
-        tkhd.extend_from_slice(&total.to_be_bytes()); // duration in movie time units (= samples)
-        tkhd.extend_from_slice(&[0u8; 8]);
-        tkhd.extend_from_slice(&0u16.to_be_bytes()); // layer
-        tkhd.extend_from_slice(&0u16.to_be_bytes()); // alternate group
-        tkhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
-        tkhd.extend_from_slice(&0u16.to_be_bytes());
-        for m in matrix {
-            tkhd.extend_from_slice(&m.to_be_bytes());
-        }
-        tkhd.extend_from_slice(&[0u8; 8]); // width, height
-        let mut trak = Vec::new();
-        trak.extend_from_slice(&atom(b"tkhd", &tkhd));
-        trak.extend_from_slice(&atom(b"mdia", &mdia));
-
-        let mut mvhd = Vec::new();
-        mvhd.extend_from_slice(&[1, 0, 0, 0]);
-        mvhd.extend_from_slice(&0u64.to_be_bytes());
-        mvhd.extend_from_slice(&0u64.to_be_bytes());
-        mvhd.extend_from_slice(&rate.to_be_bytes()); // movie time scale = sample rate
-        mvhd.extend_from_slice(&total.to_be_bytes());
-        mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // rate 1.0
-        mvhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
-        mvhd.extend_from_slice(&[0u8; 10]);
-        for m in matrix {
-            mvhd.extend_from_slice(&m.to_be_bytes());
-        }
-        mvhd.extend_from_slice(&[0u8; 24]);
-        mvhd.extend_from_slice(&2u32.to_be_bytes()); // next track id
-        let mut moov = Vec::new();
-        moov.extend_from_slice(&atom(b"mvhd", &mvhd));
-        moov.extend_from_slice(&atom(b"trak", &trak));
-        atom(b"moov", &moov)
+        boxes
     }
 }
 
@@ -658,26 +512,18 @@ impl BlockWriter for AlacWriter {
             let block: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
             self.write_frame(&block)?;
         }
-        let data_bytes: u64 = self.frame_sizes.iter().map(|&s| s as u64).sum();
-        let data_end = self.data_start + data_bytes;
-        let moov = self.moov(data_end);
-        self.out.write_all(&moov)?;
-        self.out.flush()?;
-        // the real length of the `mdat` box
-        self.out.seek(SeekFrom::Start(self.mdat_size_at))?;
-        self.out.write_all(&(16 + data_bytes).to_be_bytes())?;
-        self.out.flush()?;
-        Ok(data_end + moov.len() as u64)
+        let track = mp4_audio::Track {
+            rate: self.params.rate,
+            channels: self.params.channels() as u16,
+            bits: self.bits as u16,
+            frame_samples: FRAME_SAMPLES as u32,
+            total_samples: self.samples_done,
+            frame_sizes: &self.frame_sizes,
+            entry_name: b"alac",
+            entry_boxes: self.entry_boxes(),
+        };
+        mp4_audio::finish(&mut self.out, &self.start, &track)
     }
-}
-
-/// An MP4 box: size, four-character name, contents.
-fn atom(name: &[u8; 4], body: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + body.len());
-    out.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
-    out.extend_from_slice(name);
-    out.extend_from_slice(body);
-    out
 }
 
 #[cfg(test)]

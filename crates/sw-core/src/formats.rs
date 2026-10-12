@@ -172,6 +172,7 @@ impl StreamType {
                 | StreamType::Tta
                 | StreamType::WavPack
                 | StreamType::MonkeysAudio
+                | StreamType::MpegAls
                 | StreamType::DsdDsf
                 | StreamType::DsdDff
         )
@@ -509,9 +510,7 @@ mod tests {
 
     #[test]
     fn every_stream_type_is_native() {
-        // listed but not written yet; each moves out of this list when its encoder lands
-        let pending = [StreamType::MpegAls];
-        assert!(StreamType::ALL.iter().filter(|s| !pending.contains(s)).all(|s| s.is_native()));
+        assert!(StreamType::ALL.iter().all(|s| s.is_native()));
     }
 
     #[test]

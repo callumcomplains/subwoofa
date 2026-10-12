@@ -53,6 +53,8 @@ const CASES: &[(Container, &str, u32)] = &[
     (Container::Tta, "tta", 0),
     (Container::WavPack, "wv", 0),
     (Container::MonkeysAudio, "ape", 0),
+    (Container::MpegAls, "als", 0),
+    (Container::MpegAls, "mp4", 0),
     (Container::Dsf, "dsf", 64),
     (Container::Dff, "dff", 64),
 ];

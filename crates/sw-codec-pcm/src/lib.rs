@@ -6,10 +6,13 @@
 
 mod aiff;
 mod alac;
+mod als;
 mod bitwriter;
 mod caf;
+mod crc;
 mod le_bits;
 mod monkeys;
+mod mp4_audio;
 pub mod channels;
 mod dsd;
 mod flac;
@@ -41,6 +44,8 @@ pub enum Container {
     WavPack,
     /// Monkey's Audio (`.ape`), lossless.
     MonkeysAudio,
+    /// MPEG-4 ALS, lossless (`.als`, or an MP4 file).
+    MpegAls,
     /// DSD in a `.dsf` file.
     Dsf,
     /// DSD in a DSDIFF `.dff` file.
@@ -203,7 +208,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         return Err(PcmError::Empty);
     }
     let mask_order = channels::wav_order(req.layout);
-    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac | Container::Tta | Container::WavPack | Container::MonkeysAudio);
+    let wav_style = matches!(req.container, Container::Wav | Container::Flac | Container::OggFlac | Container::Tta | Container::WavPack | Container::MonkeysAudio | Container::MpegAls);
     // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
     let mut layout_tag = 0;
     let dsd_layout = if matches!(req.container, Container::Dsf | Container::Dff) {
@@ -235,6 +240,7 @@ pub fn encode_to_file(stems: &mut StemSet, req: &Request, on_progress: &mut dyn 
         Container::Tta => Box::new(tta::TtaWriter::create(req.output, params)?),
         Container::WavPack => Box::new(wavpack::WavPackWriter::create(req.output, params)?),
         Container::MonkeysAudio => Box::new(monkeys::MonkeysWriter::create(req.output, params)?),
+        Container::MpegAls => Box::new(als::AlsWriter::create(req.output, params)?),
         Container::Dsf | Container::Dff => {
             let file = if req.container == Container::Dsf { dsd::DsdFile::Dsf } else { dsd::DsdFile::Dff };
             Box::new(dsd::DsdWriter::create(req.output, params, file, dsd_layout.as_ref().unwrap(), req.dsd_multiplier)?)

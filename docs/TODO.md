@@ -7,7 +7,7 @@ Estimates are focused working time for the work itself.
 
 - [x] **WavPack** (`.wv`) native lossless encoder, mono to 5.1+ (about 6 h). Checked by decoding with FFmpeg. (Done: size within 1% of FFmpeg's default encoder.)
 - [x] **Monkey's Audio** (`.ape`) native lossless encoder (about 6 h). Checked by decoding with FFmpeg. (Done: mono and stereo, 16/24 bit.)
-- [ ] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg.
+- [x] **MPEG-4 ALS** (`.als`) native lossless encoder (about 8 h). Checked by decoding with FFmpeg. (Done, in an MP4 wrapper for the check. Not done: block switching, long-term prediction, BGMC; they would take it from FLAC-sized to about 2% better.)
 - [ ] **DTS-HD Express: tonal components** (about 1 day). Express quality is the weakest of what we ship.
 
 Each format means: encoder in `sw-codec-pcm`, stream type and Files destination, CLI, GUI (plate, extension, pcm
@@ -28,6 +28,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 - [ ] **DCP audio**: 24-bit PCM MXF track files at 48/96 kHz, up to 16 channels (SMPTE and Interop), checked with
       FFmpeg and asdcplib (about 8 h).
 - [ ] **AC-3 exponent-strategy optimisation** (about half a day).
+- [ ] ALS extras: block switching, long-term prediction and the BGMC coder (about 2% smaller files).
 - [ ] GUI leftovers: `.swsettings` polish, BWF timecode fields, folder-batch tweaks.
 
 ## Blocked on outside files or tools
