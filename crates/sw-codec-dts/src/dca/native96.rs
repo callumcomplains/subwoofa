@@ -3,7 +3,7 @@
 
 use crate::dca::dts96::{Dts96Config, Dts96Encoder};
 use crate::dca::native::{map_layout, NativeError, Request, Stats};
-use std::io::Write;
+use crate::dca::wav_out::{pack_14bit, WavOut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use sw_pcm::StemSet;
 
@@ -73,14 +73,7 @@ pub fn encode_to_file(
         })
     };
     let mut enc = make_enc()?;
-    let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
-    stems.seek_frame(first)?;
-    let avail = stems.frames - first;
-    let want = req
-        .duration_secs
-        .map(|d| (d * rate as f64).round() as u64)
-        .unwrap_or(avail)
-        .min(avail);
+    let want = stems.select_span(req.start_secs, req.duration_secs)?;
     if want == 0 {
         return Err(NativeError::Empty);
     }
@@ -120,9 +113,7 @@ pub fn encode_to_file(
         i
     });
     let mut wav_out = if wav {
-        let mut w = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-        w.write_all(&crate::dca::native::wav_header(44_100, 0))?;
-        Some(w)
+        Some(WavOut::create(req.output, 44_100)?)
     } else {
         None
     };
@@ -131,7 +122,6 @@ pub fn encode_to_file(
     } else {
         Some(crate::container::dtshd::StreamOut::create(req.output, info)?)
     };
-    let mut written = 0u64;
     let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut remaining = want;
     let (mut frames, mut bytes) = (0u64, 0u64);
@@ -166,14 +156,14 @@ pub fn encode_to_file(
             .collect();
         remaining -= got as u64;
         for f in enc.push(&block) {
-            put(&mut out, &mut wav_out, &mut written, &f, core_payload, cd)?;
+            put(&mut out, &mut wav_out, &f, core_payload, cd)?;
             frames += 1;
             bytes += f.len() as u64;
         }
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     for f in enc.finish() {
-        put(&mut out, &mut wav_out, &mut written, &f, core_payload, cd)?;
+        put(&mut out, &mut wav_out, &f, core_payload, cd)?;
         frames += 1;
         bytes += f.len() as u64;
     }
@@ -212,15 +202,8 @@ pub fn encode_to_file(
     if let Some(o) = out {
         o.finish(blackout.as_deref())?;
     }
-    if let Some(mut w) = wav_out {
-        use std::io::{Seek, SeekFrom};
-        let pad = (4 - written % 4) % 4;
-        w.write_all(&vec![0u8; pad as usize])?;
-        w.flush()?;
-        let mut inner = w.into_inner().map_err(|e| e.into_error())?;
-        inner.seek(SeekFrom::Start(0))?;
-        inner.write_all(&crate::dca::native::wav_header(44_100, written + pad))?;
-        inner.flush()?;
+    if let Some(w) = wav_out {
+        w.finish()?;
     }
     on_progress(1.0);
     Ok(Stats { frames, bytes })
@@ -229,20 +212,14 @@ pub fn encode_to_file(
 /// Write one frame: into the `.dtshd` container or raw file, or (a DTS CD) packed into 14-bit words in the WAV file.
 fn put(
     out: &mut Option<crate::container::dtshd::StreamOut>,
-    wav: &mut Option<std::io::BufWriter<std::fs::File>>,
-    written: &mut u64,
+    wav: &mut Option<WavOut>,
     frame: &[u8],
     core_payload: u32,
     cd: bool,
 ) -> std::io::Result<()> {
     if let Some(w) = wav {
-        let data = if cd {
-            crate::dca::native::pack_14bit(frame)
-        } else {
-            frame.to_vec()
-        };
-        w.write_all(&data)?;
-        *written += data.len() as u64;
+        let data = if cd { pack_14bit(frame) } else { frame.to_vec() };
+        w.write(&data)?;
     } else if let Some(o) = out {
         o.write_frame(frame, frame.len().saturating_sub(core_payload as usize))?;
     }

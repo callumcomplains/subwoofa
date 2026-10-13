@@ -274,14 +274,7 @@ pub fn encode_to_file(
     cancel: &AtomicBool,
 ) -> Result<Stats, PcmError> {
     let rate = stems.sample_rate;
-    let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
-    stems.seek_frame(first)?;
-    let available = stems.frames - first;
-    let wanted = req
-        .duration_secs
-        .map(|d| (d * rate as f64).round() as u64)
-        .unwrap_or(available)
-        .min(available);
+    let wanted = stems.select_span(req.start_secs, req.duration_secs)?;
     if wanted == 0 {
         return Err(PcmError::Empty);
     }
@@ -330,7 +323,7 @@ pub fn encode_to_file(
         order,
         mask: mask_order.mask,
         labels,
-        time_reference: stems.time_reference.map(|t| t + first),
+        time_reference: stems.time_reference.map(|t| t + stems.frame_at(req.start_secs)),
         effort: req.effort,
     };
 

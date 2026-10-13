@@ -188,14 +188,7 @@ pub fn encode_to_file(
     core.keep_residual = true;
     let mut xbr = XbrEncoder::new(blocks);
     let mut ext = Encoder::new(mk(2, 2, false, 1_536_000))?;
-    let first = ((req.start_secs * rate as f64).round() as u64).min(stems.frames);
-    stems.seek_frame(first)?;
-    let avail = stems.frames - first;
-    let want = req
-        .duration_secs
-        .map(|d| (d * rate as f64).round() as u64)
-        .unwrap_or(avail)
-        .min(avail);
+    let want = stems.select_span(req.start_secs, req.duration_secs)?;
     if want == 0 {
         return Err(NativeError::Empty);
     }

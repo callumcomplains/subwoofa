@@ -16,4 +16,5 @@ pub mod qmf64;
 pub mod tables;
 #[rustfmt::skip]
 pub mod tables_fixed;
+pub(crate) mod wav_out;
 pub mod x96;

@@ -84,6 +84,24 @@ impl StemSet {
         Ok(())
     }
 
+    /// The frame `secs` seconds in, rounded to the nearest, and no later than the end of the files.
+    pub fn frame_at(&self, secs: f64) -> u64 {
+        ((secs * self.sample_rate as f64).round() as u64).min(self.frames)
+    }
+
+    /// Moves to `start_secs` and returns how many frames to encode from there: `duration_secs` worth, or to the end of
+    /// the files, and never more than they hold. Seconds are rounded to the nearest frame. Zero means nothing is left.
+    pub fn select_span(&mut self, start_secs: f64, duration_secs: Option<f64>) -> Result<u64, Error> {
+        let rate = self.sample_rate as f64;
+        let first = self.frame_at(start_secs);
+        self.seek_frame(first)?;
+        let available = self.frames - first;
+        Ok(duration_secs
+            .map(|d| (d * rate).round() as u64)
+            .unwrap_or(available)
+            .min(available))
+    }
+
     /// Reads the next `total` frames in blocks of `block` and hands each to `use_block(planar, frames)`. The next
     /// block is read on a second thread while the current one is used, so slow input and slow encoding overlap.
     /// Stops at the first error from either side.
