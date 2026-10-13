@@ -351,14 +351,15 @@ impl LbrEncoder {
         let profiles: Vec<u32> = (0..8u32).rev().map(|ol| ol << 3).collect();
         // what the tones must leave room for next time: the coarsest coding of this frame
         {
-            let mut n = 0usize;
-            for pair in 0..npairs {
-                n += self
-                    .write_pair(pair, ts, 0, MIN_K)
-                    .iter()
-                    .map(|c| c.len())
-                    .sum::<usize>();
-            }
+            let n: usize = (0..npairs)
+                .into_par_iter()
+                .map(|pair| {
+                    self.write_pair(pair, ts, 0, MIN_K)
+                        .iter()
+                        .map(|c| c.len())
+                        .sum::<usize>()
+                })
+                .sum();
             self.min_resid.store(n, std::sync::atomic::Ordering::Relaxed);
         }
         // For every profile the widest coding that fits the frame; the one with the least error wins.
@@ -367,11 +368,15 @@ impl LbrEncoder {
             .par_iter()
             .map(|&p| {
                 let eval = |k: usize| {
+                    // the pairs are independent of each other, so they are coded side by side
+                    let pairs: Vec<_> = (0..npairs)
+                        .into_par_iter()
+                        .map(|pair| self.write_pair_ex(pair, ts, p, k, false))
+                        .collect();
                     let mut chunks = Vec::new();
                     let mut err = 0.0;
                     let mut tails = Vec::new();
-                    for pair in 0..npairs {
-                        let (c, e, t) = self.write_pair_ex(pair, ts, p, k, false);
+                    for (c, e, t) in pairs {
                         chunks.extend(c);
                         err += e;
                         tails.extend(t);
@@ -431,7 +436,7 @@ impl LbrEncoder {
     /// and their direct-form coefficients).
     pub(crate) fn plan_prediction(&self, ts: &[Vec<Vec<f64>>]) {
         let mut plans = vec![LpcPlan::default(); ts.len()];
-        for (ch, plan) in plans.iter_mut().enumerate() {
+        plans.par_iter_mut().enumerate().for_each(|(ch, plan)| {
             for sb in 0..3 {
                 let y = &ts[ch][sb];
                 let sets: [&[f64]; 2] = if sb < 2 {
@@ -445,7 +450,7 @@ impl LbrEncoder {
                     plan.cur[sb][set] = crate::express::lpc::direct(&codes);
                 }
             }
-        }
+        });
         *self.lpc_plan.write().unwrap() = plans;
     }
 

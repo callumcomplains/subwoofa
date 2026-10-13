@@ -208,19 +208,45 @@ fn basis_gram(bu: &[[f64; HOP]], bv: &[[f64; HOP]], lo: usize, hi: usize) -> (f6
     (dot(bu, bu, lo, hi), dot(bu, bv, lo, hi), dot(bv, bv, lo, hi))
 }
 
-/// The frequency (in the group's fine steps) near one of the `peaks` where a tone removes the most energy.
+/// The energy a tone at `fp` would remove from the targets, or `None` when its two basis patterns are dependent.
+fn tone_gain(
+    grp: &Group,
+    targets: &[Vec<[f64; HOP]>],
+    fp: u32,
+    bu: &mut [[f64; HOP]],
+    bv: &mut [[f64; HOP]],
+) -> Option<f64> {
+    let (_, lo_l, hi_l) = basis_into(grp, fp, bu, bv);
+    let (uu, uv, vv) = basis_gram(bu, bv, lo_l, hi_l);
+    let det = uu * vv - uv * uv;
+    let mut gain = None;
+    if det.abs() > 1e-12 {
+        let mut total = 0.0;
+        for t in targets {
+            let (tu, tv) = (dot(t, bu, lo_l, hi_l), dot(t, bv, lo_l, hi_l));
+            let a = (tu * vv - tv * uv) / det;
+            let b = (tv * uu - tu * uv) / det;
+            total += a * tu + b * tv;
+        }
+        gain = Some(total);
+    }
+    clear_basis(bu, bv, lo_l, hi_l);
+    gain
+}
+
+/// The frequency (in the group's fine steps) near one of the `peaks` where a tone removes the most energy. The
+/// candidates are tried side by side, each with its own scratch patterns, and the first of equals wins.
 fn best_frequency(
     grp: &Group,
     targets: &[Vec<[f64; HOP]>],
     peaks: &[(usize, f64)],
     tones: &[Tone],
     cfg: &Search,
-    basis: (&mut [[f64; HOP]], &mut [[f64; HOP]]),
 ) -> Option<u32> {
-    let (bu, bv) = basis;
+    use rayon::prelude::*;
     let f = 1u32 << (5 - grp.g);
     let cover = grp.coverage();
-    let mut best: Option<(f64, u32)> = None;
+    let mut candidates: Vec<u32> = Vec::new();
     for &(k0, _) in peaks {
         let lo = ((k0 as u32).saturating_sub(1) * f).max(1);
         let hi = (((k0 as u32) + 1) * f).min(cover - 1);
@@ -235,22 +261,23 @@ fn best_frequency(
             {
                 continue;
             }
-            let (_, lo_l, hi_l) = basis_into(grp, fp, bu, bv);
-            let (uu, uv, vv) = basis_gram(bu, bv, lo_l, hi_l);
-            let det = uu * vv - uv * uv;
-            if det.abs() > 1e-12 {
-                let mut gain = 0.0;
-                for t in targets {
-                    let (tu, tv) = (dot(t, bu, lo_l, hi_l), dot(t, bv, lo_l, hi_l));
-                    let a = (tu * vv - tv * uv) / det;
-                    let b = (tv * uu - tu * uv) / det;
-                    gain += a * tu + b * tv;
-                }
-                if best.is_none_or(|(g, _)| gain > g) {
-                    best = Some((gain, fp));
-                }
+            candidates.push(fp);
+        }
+    }
+    let rows = 2 * grp.steps;
+    let gains: Vec<Option<f64>> = candidates
+        .par_iter()
+        .map_init(
+            || (vec![[0f64; HOP]; rows], vec![[0f64; HOP]; rows]),
+            |(bu, bv), &fp| tone_gain(grp, targets, fp, bu, bv),
+        )
+        .collect();
+    let mut best: Option<(f64, u32)> = None;
+    for (&fp, gain) in candidates.iter().zip(gains) {
+        if let Some(gain) = gain {
+            if best.is_none_or(|(g, _)| gain > g) {
+                best = Some((gain, fp));
             }
-            clear_basis(bu, bv, lo_l, hi_l);
         }
     }
     best.map(|(_, fp)| fp)
@@ -374,7 +401,7 @@ pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_lef
         if peaks.is_empty() {
             break;
         }
-        let Some(fp) = best_frequency(grp, targets, &peaks, &tones, cfg, (&mut bu, &mut bv)) else {
+        let Some(fp) = best_frequency(grp, targets, &peaks, &tones, cfg) else {
             break;
         };
         let (tone, total_gain) = fit_tone(grp, targets, fp, (&mut bu, &mut bv));
