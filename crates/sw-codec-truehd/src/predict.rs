@@ -38,127 +38,190 @@ impl Tools {
     }
 }
 
-pub(crate) fn analyze_channel(x: &[i32], au: usize, quant: u8, tools: Tools) -> ChannelAnalysis {
-    let n = x.len();
-    let mask = !((1i32 << quant) - 1);
-
-    // candidate predictors: none, LPC of a few orders, and LPC + a short moving-average (IIR) stage
-    let mut best_fir = Fir::default();
-    let mut best_iir = Fir::default();
-    let mut best_res: Vec<i32> = x.to_vec();
-    let mut best_cost = estimate_bits(&best_res, quant, au);
-
-    if n > 64 {
-        let xs: Vec<f64> = x.iter().map(|v| (*v >> quant) as f64).collect();
-        let lpcs = levinson(&xs, MAX_ORDER);
-        let mut consider = |fir: Fir, iir: Fir| {
-            let res = apply_filters(x, &fir, &iir, mask);
-            let cost = estimate_bits(&res, quant, au)
-                + 40.0
-                + fir.order as f64 * 14.0
-                + if iir.order > 0 {
-                    40.0 + iir.order as f64 * 14.0
-                } else {
-                    0.0
-                };
-            if cost < best_cost {
-                best_cost = cost;
-                best_fir = fir;
-                best_iir = iir;
-                best_res = res;
-            }
-        };
-        for &order in &[2usize, 4, 8] {
-            if let Some(fir) = quantize_fir(&lpcs[order]) {
-                consider(fir, Fir::default());
-            }
-        }
-        // Fixed two-tap IIR stages (poles close to the unit circle) boost the empty top of the spectrum of
-        // band-limited high-rate material; the FIR then only has to deal with the rest.
-        for &(b1, b2) in FIXED_IIR.iter().filter(|_| tools.fixed_iir) {
-            let mut w = vec![0f64; xs.len()];
-            for i in 0..xs.len() {
-                let mut v = xs[i];
-                if i >= 1 {
-                    v -= b1 * w[i - 1];
-                }
-                if i >= 2 {
-                    v -= b2 * w[i - 2];
-                }
-                w[i] = v;
-            }
-            for order in [6usize, 5] {
-                if let Some(c) = lpc_covariance(&w, order) {
-                    if let Some((fir, iir)) = quantize_pair(&c, &[b1, b2]) {
-                        consider(fir, iir);
-                    }
-                }
-            }
-            let lw = levinson(&w, 6);
-            if let Some((fir, iir)) = quantize_pair(&lw[6], &[b1, b2]) {
-                consider(fir, iir);
-            }
-        }
-        for &order in &[2usize, 4, 8] {
-            if let Some(c) = lpc_covariance(&xs, order) {
-                if let Some(fir) = quantize_fir(&c) {
-                    consider(fir, Fir::default());
-                }
-            }
-        }
-        for &(p, q) in [(6usize, 2usize), (4, 4), (5, 2)]
-            .iter()
-            .filter(|_| tools.moving_average)
-        {
-            let coef = &lpcs[p];
-            // residual of the float FIR, then a moving-average fit on it
-            let r1: Vec<f64> = (0..xs.len())
-                .map(|i| {
-                    let pred: f64 = (0..p.min(i)).map(|k| coef[k] * xs[i - 1 - k]).sum();
-                    xs[i] - pred
-                })
-                .collect();
-            if let Some(b) = fit_moving_average(&r1, q) {
-                if let Some((fir, iir)) = quantize_pair(coef, &b) {
-                    consider(fir, iir);
-                }
-            }
-        }
-    }
-
-    // exact coding choice for the real block layout (first AU = 8 priming samples + the rest): the first AU's two
-    // blocks as the cheapest each, then the other access units by shortest path so that switching codings is paid for
-    let n_au = n / au;
-    let mut codings: Vec<Vec<Coding>> = Vec::with_capacity(n_au);
-    if n_au > 0 {
-        let mut first = Vec::new();
-        for (start, len) in [(0usize, 8usize), (8, au - 8)] {
-            let v: Vec<i32> = best_res[start..start + len].iter().map(|r| r >> quant).collect();
-            first.push(best_coding(&v, quant));
-        }
-        let hold = first[1];
-        codings.push(first);
-        let cands: Vec<Vec<Coding>> = (1..n_au)
-            .map(|a| {
-                let v: Vec<i32> = best_res[a * au..(a + 1) * au].iter().map(|r| r >> quant).collect();
-                coding_candidates(&v, quant)
-            })
-            .collect();
-        for c in choose_codings(&cands, hold) {
-            codings.push(vec![c]);
-        }
-    }
+/// Analyses one channel's samples (`signal`, split into access units of `au`) at quantiser step `quant`: finds the
+/// predictor that leaves the cheapest residual, then the exact codebook for every block of it.
+pub(crate) fn analyze_channel(signal: &[i32], au: usize, quant: u8, tools: Tools) -> ChannelAnalysis {
+    let best = if signal.len() > 64 {
+        search_filters(signal, au, quant, tools)
+    } else {
+        Candidate::unfiltered(signal, quant, au)
+    };
     ChannelAnalysis {
         decor: None,
         quant,
-        fir: best_fir,
-        iir: best_iir,
-        residual: best_res,
-        codings,
+        fir: best.fir,
+        iir: best.iir,
+        codings: choose_block_codings(&best.residual, au, quant),
+        residual: best.residual,
     }
 }
 
-/// Second-order IIR (moving-average of the residual) stages tried ahead of the FIR: (b1, b2).
+/// A predictor and what it leaves, with the estimated cost of coding that residual and the filters themselves.
+struct Candidate {
+    fir: Fir,
+    iir: Fir,
+    residual: Vec<i32>,
+    cost: f64,
+}
+
+impl Candidate {
+    /// No prediction at all: the samples are the residual.
+    fn unfiltered(signal: &[i32], quant: u8, au: usize) -> Candidate {
+        Candidate {
+            fir: Fir::default(),
+            iir: Fir::default(),
+            residual: signal.to_vec(),
+            cost: estimate_bits(signal, quant, au),
+        }
+    }
+}
+
+/// The search over predictor families for one channel: every filter pair offered is run over the signal, and the
+/// cheapest result so far is kept.
+struct FilterSearch<'a> {
+    signal: &'a [i32],
+    /// The samples with their unused low bits shifted away, as floating point (what the analysis works on).
+    scaled: Vec<f64>,
+    quant: u8,
+    au: usize,
+    best: Candidate,
+}
+
+impl FilterSearch<'_> {
+    /// Tries a filter pair; keeps it if the residual plus the cost of sending the filters is the cheapest so far.
+    fn offer(&mut self, fir: Fir, iir: Fir) {
+        let mask = !((1i32 << self.quant) - 1);
+        let residual = apply_filters(self.signal, &fir, &iir, mask);
+        let iir_cost = if iir.order > 0 {
+            40.0 + iir.order as f64 * 14.0
+        } else {
+            0.0
+        };
+        let cost = estimate_bits(&residual, self.quant, self.au) + 40.0 + fir.order as f64 * 14.0 + iir_cost;
+        if cost < self.best.cost {
+            self.best = Candidate {
+                fir,
+                iir,
+                residual,
+                cost,
+            };
+        }
+    }
+
+    /// The plain linear predictors from the autocorrelation method.
+    fn plain_lpc(&mut self, lpc: &[Vec<f64>]) {
+        for order in [2usize, 4, 8] {
+            if let Some(fir) = quantize_fir(&lpc[order]) {
+                self.offer(fir, Fir::default());
+            }
+        }
+    }
+
+    /// Fixed two-pole IIR stages (poles close to the unit circle) boost the empty top of the spectrum of
+    /// band-limited high-rate material; the FIR then only has to deal with the rest.
+    fn behind_fixed_iir(&mut self) {
+        for &(b1, b2) in FIXED_IIR {
+            let mut filtered = vec![0f64; self.scaled.len()];
+            for i in 0..self.scaled.len() {
+                let mut v = self.scaled[i];
+                if i >= 1 {
+                    v -= b1 * filtered[i - 1];
+                }
+                if i >= 2 {
+                    v -= b2 * filtered[i - 2];
+                }
+                filtered[i] = v;
+            }
+            for order in [6usize, 5] {
+                if let Some(coeffs) = lpc_covariance(&filtered, order) {
+                    if let Some((fir, iir)) = quantize_pair(&coeffs, &[b1, b2]) {
+                        self.offer(fir, iir);
+                    }
+                }
+            }
+            let lpc = levinson(&filtered, 6);
+            if let Some((fir, iir)) = quantize_pair(&lpc[6], &[b1, b2]) {
+                self.offer(fir, iir);
+            }
+        }
+    }
+
+    /// Predictors from the covariance method, which needs no window and so can be steeper.
+    fn covariance_lpc(&mut self) {
+        for order in [2usize, 4, 8] {
+            if let Some(coeffs) = lpc_covariance(&self.scaled, order) {
+                if let Some(fir) = quantize_fir(&coeffs) {
+                    self.offer(fir, Fir::default());
+                }
+            }
+        }
+    }
+
+    /// An LPC filter plus a short moving-average (IIR) stage fitted to its residual.
+    fn with_moving_average(&mut self, lpc: &[Vec<f64>]) {
+        for (order, taps) in [(6usize, 2usize), (4, 4), (5, 2)] {
+            let coeffs = &lpc[order];
+            let fir_residual: Vec<f64> = (0..self.scaled.len())
+                .map(|i| {
+                    let predicted: f64 = (0..order.min(i)).map(|k| coeffs[k] * self.scaled[i - 1 - k]).sum();
+                    self.scaled[i] - predicted
+                })
+                .collect();
+            if let Some(average) = fit_moving_average(&fir_residual, taps) {
+                if let Some((fir, iir)) = quantize_pair(coeffs, &average) {
+                    self.offer(fir, iir);
+                }
+            }
+        }
+    }
+}
+
+/// The cheapest predictor for a channel of more than a few samples.
+fn search_filters(signal: &[i32], au: usize, quant: u8, tools: Tools) -> Candidate {
+    let scaled: Vec<f64> = signal.iter().map(|v| (*v >> quant) as f64).collect();
+    let lpc = levinson(&scaled, MAX_ORDER);
+    let mut search = FilterSearch {
+        signal,
+        scaled,
+        quant,
+        au,
+        best: Candidate::unfiltered(signal, quant, au),
+    };
+    search.plain_lpc(&lpc);
+    if tools.fixed_iir {
+        search.behind_fixed_iir();
+    }
+    search.covariance_lpc();
+    if tools.moving_average {
+        search.with_moving_average(&lpc);
+    }
+    search.best
+}
+
+/// The exact coding choice for the real block layout: the first access unit is 8 priming samples and the rest, each
+/// coded as cheaply as possible; the other access units are chosen by shortest path, so that switching codebooks is
+/// paid for.
+fn choose_block_codings(residual: &[i32], au: usize, quant: u8) -> Vec<Vec<Coding>> {
+    let n_au = residual.len() / au;
+    if n_au == 0 {
+        return Vec::new();
+    }
+    let block =
+        |start: usize, len: usize| -> Vec<i32> { residual[start..start + len].iter().map(|r| r >> quant).collect() };
+    let first: Vec<Coding> = [(0usize, 8usize), (8, au - 8)]
+        .into_iter()
+        .map(|(start, len)| best_coding(&block(start, len), quant))
+        .collect();
+    let hold = first[1];
+    let candidates: Vec<Vec<Coding>> = (1..n_au)
+        .map(|a| coding_candidates(&block(a * au, au), quant))
+        .collect();
+    let mut codings = vec![first];
+    codings.extend(choose_codings(&candidates, hold).into_iter().map(|c| vec![c]));
+    codings
+}
+
+/// Two-pole IIR stages tried in front of the FIR (poles at `b1`, `b2` in the denominator).
 pub(crate) const FIXED_IIR: &[(f64, f64)] = &[(0.5, 0.9375), (0.0, 0.9375), (-0.5, 0.9375), (0.5, 0.75)];
 
 /// Total bits of the exact entropy-coding choices of an analysis.
