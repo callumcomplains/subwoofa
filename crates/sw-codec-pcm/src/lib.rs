@@ -279,39 +279,8 @@ pub fn encode_to_file(
         return Err(PcmError::Empty);
     }
     let mask_order = channels::wav_order(req.layout);
-    let wav_style = matches!(
-        req.container,
-        Container::Wav
-            | Container::Flac
-            | Container::OggFlac
-            | Container::Tta
-            | Container::WavPack
-            | Container::MonkeysAudio
-            | Container::MpegAls
-    );
-    // WAV and FLAC reorder the channels by speaker position; AIFF and CAF keep the layout's order
-    let mut layout_tag = 0;
-    let dsd_layout = if matches!(req.container, Container::Dsf | Container::Dff) {
-        Some(dsd::dsd_layout(req.layout).ok_or_else(|| {
-            PcmError::Unsupported(format!(
-                "DSD files have channel arrangements for mono, stereo, 3.0, 3.1, quad, 5.0 and 5.1, not {}",
-                req.layout.id
-            ))
-        })?)
-    } else {
-        None
-    };
-    let order: Vec<usize> = if let Some(d) = &dsd_layout {
-        d.order.clone()
-    } else if req.container == Container::Alac {
-        let (order, tag) = alac::alac_order(req.layout).ok_or_else(|| PcmError::Unsupported(format!("ALAC has no channel arrangement for {} (it takes mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides)", req.layout.id)))?;
-        layout_tag = tag;
-        order
-    } else if wav_style {
-        mask_order.order.clone()
-    } else {
-        (0..req.layout.channels.len()).collect()
-    };
+    let dsd_layout = dsd_arrangement(req)?;
+    let (order, layout_tag) = file_channel_order(req, &mask_order, dsd_layout.as_ref())?;
     let labels = order
         .iter()
         .map(|&i| channels::caf_label(req.layout.channels[i], i))
@@ -326,8 +295,74 @@ pub fn encode_to_file(
         time_reference: stems.time_reference.map(|t| t + stems.frame_at(req.start_secs)),
         effort: req.effort,
     };
+    let mut writer = create_writer(req, params, layout_tag, dsd_layout.as_ref())?;
+    // big reads, so that the writers get batches of frames they can encode in parallel; the next block is read while
+    // the writer is working on this one
+    let block = 1usize << 18;
+    let mut written = 0u64;
+    stems.read_ahead(block, wanted, |planar, got| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(PcmError::Canceled);
+        }
+        writer.write_block(planar, got)?;
+        written += got as u64;
+        on_progress(written as f32 / wanted as f32);
+        Ok(())
+    })?;
+    let bytes = writer.finish()?;
+    on_progress(1.0);
+    Ok(Stats { frames: written, bytes })
+}
 
-    let mut writer: Box<dyn BlockWriter> = match req.container {
+/// The channel arrangement a DSD file has for the layout (`None` for other containers).
+fn dsd_arrangement(req: &Request) -> Result<Option<dsd::DsdLayout>, PcmError> {
+    if !matches!(req.container, Container::Dsf | Container::Dff) {
+        return Ok(None);
+    }
+    dsd::dsd_layout(req.layout).map(Some).ok_or_else(|| {
+        PcmError::Unsupported(format!(
+            "DSD files have channel arrangements for mono, stereo, 3.0, 3.1, quad, 5.0 and 5.1, not {}",
+            req.layout.id
+        ))
+    })
+}
+
+/// Which layout channel goes at each channel of the file, and ALAC's layout tag. WAV and FLAC reorder the channels
+/// by speaker position; AIFF and CAF keep the layout's order.
+fn file_channel_order(
+    req: &Request,
+    mask_order: &channels::MaskOrder,
+    dsd_layout: Option<&dsd::DsdLayout>,
+) -> Result<(Vec<usize>, u32), PcmError> {
+    let wav_style = matches!(
+        req.container,
+        Container::Wav
+            | Container::Flac
+            | Container::OggFlac
+            | Container::Tta
+            | Container::WavPack
+            | Container::MonkeysAudio
+            | Container::MpegAls
+    );
+    if let Some(d) = dsd_layout {
+        Ok((d.order.clone(), 0))
+    } else if req.container == Container::Alac {
+        alac::alac_order(req.layout).ok_or_else(|| PcmError::Unsupported(format!("ALAC has no channel arrangement for {} (it takes mono, stereo, 3.0, 4.0 LCRS, 5.0, 5.1, 6.1 and 7.1 with wides)", req.layout.id)))
+    } else if wav_style {
+        Ok((mask_order.order.clone(), 0))
+    } else {
+        Ok(((0..req.layout.channels.len()).collect(), 0))
+    }
+}
+
+/// The writer for the requested container.
+fn create_writer(
+    req: &Request,
+    params: Params,
+    layout_tag: u32,
+    dsd_layout: Option<&dsd::DsdLayout>,
+) -> Result<Box<dyn BlockWriter>, PcmError> {
+    Ok(match req.container {
         Container::Wav => Box::new(wav::WavWriter::create(req.output, params)?),
         Container::Aiff => Box::new(aiff::AiffWriter::create(req.output, params)?),
         Container::Caf => Box::new(caf::CafWriter::create(req.output, params)?),
@@ -349,27 +384,11 @@ pub fn encode_to_file(
                 req.output,
                 params,
                 file,
-                dsd_layout.as_ref().unwrap(),
+                dsd_layout.expect("a DSD arrangement"),
                 req.dsd_multiplier,
             )?)
         }
-    };
-    // big reads, so that the writers get batches of frames they can encode in parallel; the next block is read while
-    // the writer is working on this one
-    let block = 1usize << 18;
-    let mut written = 0u64;
-    stems.read_ahead(block, wanted, |planar, got| {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(PcmError::Canceled);
-        }
-        writer.write_block(planar, got)?;
-        written += got as u64;
-        on_progress(written as f32 / wanted as f32);
-        Ok(())
-    })?;
-    let bytes = writer.finish()?;
-    on_progress(1.0);
-    Ok(Stats { frames: written, bytes })
+    })
 }
 
 /// A container being written, block by block.
