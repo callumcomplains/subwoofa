@@ -330,6 +330,7 @@ fn coord_gain(mstr: u32, exp: u32, mant: u32) -> f64 {
 }
 
 /// Coupling in use for a frame.
+#[derive(Clone)]
 struct CplInfo {
     begf: usize,
     endf: usize,
@@ -500,13 +501,22 @@ struct ChannelPlan {
     sets: Vec<SetPlan>,
 }
 
+/// A frame after the transform: what the parallel part of the encoder needs.
+struct Analysed {
+    coefs: Vec<Vec<[f32; M]>>,
+    blksw: Vec<[bool; BLOCKS]>,
+    words: usize,
+    frmsizecod: u32,
+}
+
+#[derive(Clone)]
 pub struct Encoder {
     cfg: Config,
     nfch: usize,
     nch: usize,
     fscod: usize,
     size_idx: usize,
-    mdct: Mdct,
+    mdct: std::sync::Arc<Mdct>,
     hist: Vec<[f32; M]>,
     end: Vec<usize>,
     frame_no: u64,
@@ -514,7 +524,7 @@ pub struct Encoder {
     b2b: [u8; 256],
     sets: Vec<(usize, usize)>, // (first block, block count)
     strat: Strat,
-    switched: blocksw::Switched,
+    switched: std::sync::Arc<blocksw::Switched>,
     dets: Vec<blocksw::Detector>,
     block_switching: bool,
     /// Exponent sets and block-switch flags of the frame being encoded.
@@ -583,7 +593,7 @@ impl Encoder {
             nch,
             fscod,
             size_idx,
-            mdct: Mdct::new(MDCT_SCALE),
+            mdct: std::sync::Arc::new(Mdct::new(MDCT_SCALE)),
             hist: vec![[0.0; M]; nch],
             end,
             frame_no: 0,
@@ -591,7 +601,7 @@ impl Encoder {
             b2b: bin_to_band(),
             sets: sets.clone(),
             strat,
-            switched: blocksw::Switched::new(MDCT_SCALE),
+            switched: std::sync::Arc::new(blocksw::Switched::new(MDCT_SCALE)),
             dets: (0..nfch).map(|_| blocksw::Detector::new(cfg.sample_rate)).collect(),
             block_switching: !cfg.eac3 && std::env::var_os("SW_AC3_NOBLKSW").is_none(),
             cur_sets: sets,
@@ -688,36 +698,104 @@ impl Encoder {
     /// Encode one frame. `input` holds one slice of exactly 1536 samples per AC-3 channel
     /// (full-bandwidth channels in bitstream order, LFE last).
     pub fn encode_frame(&mut self, input: &[&[f32]]) -> Vec<u8> {
-        assert_eq!(input.len(), self.nch);
-        let (words, frmsizecod) = self.frame_words();
+        let a = self.analyse(input);
+        self.cur_sets = self.frame_sets(&a.blksw);
+        self.cur_blksw = a.blksw;
+        self.encode_coefficients(a.coefs, a.frmsizecod, a.words)
+    }
 
-        // 1. transform; a channel whose new samples hold a transient uses the two short transforms
-        let mut coefs: Vec<Vec<[f32; M]>> = Vec::with_capacity(self.nch);
-        let mut blksw = vec![[false; BLOCKS]; self.nfch];
-        for ch in 0..self.nch {
-            assert_eq!(input[ch].len(), SAMPLES_PER_FRAME);
-            let mut coef = vec![[0f32; M]; BLOCKS];
-            let mut buf = [0f32; 2 * M];
-            for blk in 0..BLOCKS {
-                let new = &input[ch][blk * M..(blk + 1) * M];
-                let short = self.block_switching && ch < self.nfch && self.dets[ch].block(new);
-                if ch < self.nfch {
-                    blksw[ch][blk] = short;
+    /// The part of a frame that depends on the frames before it: size, transform and block switching.
+    fn analyse(&mut self, input: &[&[f32]]) -> Analysed {
+        assert_eq!(input.len(), self.nch);
+        let frame: Vec<Vec<f32>> = input.iter().map(|c| c.to_vec()).collect();
+        self.analyse_batch(&[frame]).pop().unwrap()
+    }
+
+    /// Frames in order, `frames[n][channel]`. Each channel is transformed on its own thread: it carries only its
+    /// own overlap and detector state from frame to frame.
+    fn analyse_batch(&mut self, frames: &[Vec<Vec<f32>>]) -> Vec<Analysed> {
+        use rayon::prelude::*;
+        let sizes: Vec<(usize, u32)> = frames.iter().map(|_| self.frame_words()).collect();
+        let (nfch, switching) = (self.nfch, self.block_switching);
+        let (mdct, switched) = (&self.mdct, &self.switched);
+        let mut dets = self.dets.iter_mut();
+        let work: Vec<_> = self
+            .hist
+            .iter_mut()
+            .enumerate()
+            .map(|(ch, hist)| (ch, hist, if ch < nfch { dets.next() } else { None }))
+            .collect();
+        // per channel: for every frame, its coefficients and block-switch flags
+        let per_channel: Vec<Vec<(Vec<[f32; M]>, [bool; BLOCKS])>> = work
+            .into_par_iter()
+            .map(|(ch, hist, mut det)| {
+                frames
+                    .iter()
+                    .map(|frame| {
+                        assert_eq!(frame[ch].len(), SAMPLES_PER_FRAME);
+                        let mut coef = vec![[0f32; M]; BLOCKS];
+                        let mut flags = [false; BLOCKS];
+                        let mut buf = [0f32; 2 * M];
+                        for blk in 0..BLOCKS {
+                            let new = &frame[ch][blk * M..(blk + 1) * M];
+                            let short = switching && det.as_mut().is_some_and(|d| d.block(new));
+                            flags[blk] = short;
+                            buf[..M].copy_from_slice(hist);
+                            buf[M..].copy_from_slice(new);
+                            if short {
+                                switched.forward(&buf, true, &mut coef[blk]);
+                            } else {
+                                mdct.forward(&buf, &mut coef[blk]);
+                            }
+                            hist.copy_from_slice(&buf[M..]);
+                        }
+                        (coef, flags)
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut columns: Vec<_> = per_channel.into_iter().map(|c| c.into_iter()).collect();
+        sizes
+            .into_iter()
+            .map(|(words, frmsizecod)| {
+                let mut coefs = Vec::with_capacity(self.nch);
+                let mut blksw = Vec::with_capacity(nfch);
+                for (ch, column) in columns.iter_mut().enumerate() {
+                    let (coef, flags) = column.next().unwrap();
+                    coefs.push(coef);
+                    if ch < nfch {
+                        blksw.push(flags);
+                    }
                 }
-                buf[..M].copy_from_slice(&self.hist[ch]);
-                buf[M..].copy_from_slice(new);
-                if short {
-                    self.switched.forward(&buf, true, &mut coef[blk]);
-                } else {
-                    self.mdct.forward(&buf, &mut coef[blk]);
+                Analysed {
+                    coefs,
+                    blksw,
+                    words,
+                    frmsizecod,
                 }
-                self.hist[ch].copy_from_slice(&buf[M..]);
-            }
-            coefs.push(coef);
-        }
-        self.cur_sets = self.frame_sets(&blksw);
-        self.cur_blksw = blksw;
-        self.encode_coefficients(coefs, frmsizecod, words)
+            })
+            .collect()
+    }
+
+    /// Encodes many frames at once, `frames[n][channel]` being 1536 samples each, and returns them in order.
+    /// The transform and transient detection carry state from frame to frame, so they run in order; what
+    /// follows (coupling, bit allocation, writing) needs only the frame itself and runs on all cores. The bytes
+    /// are the same as `encode_frame` called one frame at a time.
+    pub fn encode_batch(&mut self, frames: &[Vec<Vec<f32>>]) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        let analysed = self.analyse_batch(frames);
+        let worker = self.clone();
+        analysed
+            .into_par_iter()
+            .map_init(
+                || worker.clone(),
+                |enc, a| {
+                    enc.cur_sets = enc.frame_sets(&a.blksw);
+                    enc.cur_blksw = a.blksw;
+                    enc.encode_coefficients(a.coefs, a.frmsizecod, a.words)
+                },
+            )
+            .collect()
     }
 
     /// Exponent sets for a frame: the configured grouping, with every block that is switched in any channel

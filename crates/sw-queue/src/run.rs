@@ -52,6 +52,12 @@ pub struct EncodeSpec {
     /// The Bitstream tab: programme information, seamless branching, secondary-audio mixing metadata, wide 7.1 remapping.
     #[serde(default)]
     pub bitstream: sw_core::BitstreamOptions,
+    /// How hard lossless formats search: "fast", "balanced" (the default, also for an empty string) or "best".
+    #[serde(default)]
+    pub speed: String,
+    /// How many threads the encode may use; 0 means every core.
+    #[serde(default)]
+    pub threads: u32,
 }
 
 /// The dialnorm setting (the dialogue level, 1 to 31 for -1 to -31 dBFS) as the attenuation a DTS decoder applies,
@@ -126,7 +132,9 @@ pub fn execute(
 ) -> Result<Outcome, Failure> {
     let t0 = Instant::now();
     let mut log = String::new();
-    let result = execute_inner(spec, verify, cancel, on_progress, &mut log, t0);
+    let result = crate::threads::with_threads(spec.threads, || {
+        execute_inner(spec, verify, cancel, on_progress, &mut log, t0)
+    });
     // Always leave a log next to the output, whatever happened.
     let status = match &result {
         Ok(o) => format!("RESULT: {}", o.message),
@@ -185,6 +193,8 @@ fn execute_inner(
         )
         .into());
     }
+    let effort = sw_core::Effort::from_id(&spec.speed)
+        .ok_or_else(|| format!("unknown speed '{}' (use fast, balanced or best)", spec.speed))?;
     let start = spec.start.unwrap_or(0.0);
     let total_src = stems.frames as f64 / stems.sample_rate as f64;
     let span = spec
@@ -348,6 +358,7 @@ fn execute_inner(
             output: std::path::Path::new(&spec.output),
             dsd_multiplier,
             dcp,
+            effort,
         };
         sw_codec_pcm::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
             |e| match e {
@@ -363,6 +374,7 @@ fn execute_inner(
             output: std::path::Path::new(&spec.output),
             downmix: spec.downmix,
             mlp: stream == StreamType::Mlp,
+            effort,
         };
         let stats = sw_codec_truehd::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel)
             .map_err(|e| match e {
@@ -420,6 +432,7 @@ fn execute_inner(
             container: spec.output.to_ascii_lowercase().ends_with(".dtshd"),
             x96: spec.core_x96,
             bitstream: spec.bitstream.clone(),
+            effort,
         };
         sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
             |e| match e {
@@ -489,7 +502,12 @@ fn execute_inner(
     let enc_secs = t0.elapsed().as_secs_f64();
     let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
-    let peak_note = peak_bit_rate_note(&spec.output);
+    // audio files have no frames to chart, and opening one as a stream scans the whole file
+    let peak_note = if stream.is_audio_file() {
+        String::new()
+    } else {
+        peak_bit_rate_note(&spec.output)
+    };
     log.push_str(&format!(
         "\nEncoded {} in {:.1} s ({:.0}x real time). Output {:.1} MB, average {:.0} kbps.\n",
         fmt_secs(span),

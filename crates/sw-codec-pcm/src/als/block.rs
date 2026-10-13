@@ -88,12 +88,36 @@ const TAIL_PARAM: u32 = 1;
 const FIRST_MID: usize = 20;
 const FIRST_TAIL: usize = 127;
 
+/// Which predictor orders are coded for real and compared (the analysis picks the order it likes best first).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Candidates {
+    /// Only that order: half the work of `All`, and files 0.02% to 0.06% larger.
+    One,
+    /// That order and half of it.
+    Two,
+    /// None (a block coded without prediction), that order, half of it and double it.
+    All,
+}
+
+impl Candidates {
+    pub(crate) fn for_effort(effort: sw_core::Effort) -> Candidates {
+        match effort {
+            sw_core::Effort::Best => Candidates::All,
+            sw_core::Effort::Balanced => Candidates::One,
+            sw_core::Effort::Fast => Candidates::Two,
+        }
+    }
+}
+
 /// What the block needs to know about the stream.
 #[derive(Clone, Copy)]
 pub(crate) struct Settings {
     pub max_order: usize,
     pub bits: u32,
     pub table: usize,
+    /// Try cutting the frame into shorter blocks (3 times the work for 0.1% to 0.7% smaller files).
+    pub switching: bool,
+    pub candidates: Candidates,
 }
 
 impl Settings {
@@ -165,8 +189,9 @@ pub(crate) fn encode(signal: &[i32], start: usize, joint: bool, cfg: Settings) -
         return w.bytes;
     }
     let mut best: Option<Vec<u8>> = None;
-    for order in order_candidates(own, cfg) {
-        let bytes = encode_with_order(signal, start, joint, cfg, order);
+    let analysis = lpc::analyse(own, cfg.max_order.min(order_limit(own.len(), cfg.max_order)));
+    for order in order_candidates(&analysis, own.len(), cfg.candidates) {
+        let bytes = encode_with_order(signal, start, joint, cfg, order, &analysis);
         if best.as_ref().map_or(true, |b| bytes.len() < b.len()) {
             best = Some(bytes);
         }
@@ -175,15 +200,18 @@ pub(crate) fn encode(signal: &[i32], start: usize, joint: bool, cfg: Settings) -
 }
 
 /// Orders worth coding for real: the one the analysis likes best, half and double of it, and none.
-fn order_candidates(own: &[i32], cfg: Settings) -> Vec<usize> {
-    let limit = cfg.max_order.min(order_limit(own.len(), cfg.max_order));
-    let analysis = lpc::analyse(own, limit);
-    let n = own.len() as f64;
+fn order_candidates(analysis: &lpc::Analysis, len: usize, which: Candidates) -> Vec<usize> {
+    let n = len as f64;
     let estimate = |m: usize| 0.5 * n * (analysis.error[m] / n + 1e-9).log2() + 6.0 * m as f64;
     let best = (0..=analysis.reflection.len())
         .min_by(|&a, &b| estimate(a).total_cmp(&estimate(b)))
         .unwrap_or(0);
     let mut candidates = vec![0, best, best / 2, (best * 2).min(analysis.reflection.len())];
+    match which {
+        Candidates::One => candidates = vec![best],
+        Candidates::Two => candidates = vec![best, best / 2],
+        Candidates::All => {}
+    }
     candidates.sort_unstable();
     candidates.dedup();
     candidates
@@ -200,10 +228,18 @@ fn order_bits(len: usize, max_order: usize) -> u32 {
     32 - (clipped - 1).leading_zeros()
 }
 
-fn encode_with_order(signal: &[i32], start: usize, joint: bool, cfg: Settings, order: usize) -> Vec<u8> {
+/// Codes the block with a predictor of `order`, whose coefficients are the first `order` of `analysis` (the
+/// reflection coefficients of a lower order are the first ones of a higher order's).
+fn encode_with_order(
+    signal: &[i32],
+    start: usize,
+    joint: bool,
+    cfg: Settings,
+    order: usize,
+    analysis: &lpc::Analysis,
+) -> Vec<u8> {
     let own = &signal[start..];
     let (indices, taps) = if order > 0 {
-        let analysis = lpc::analyse(own, order);
         let indices = quantise(&analysis.reflection[..order.min(analysis.reflection.len())]);
         let par: Vec<i32> = indices.iter().enumerate().map(|(k, &q)| dequantise(k, q)).collect();
         (indices, taps_from(&par))
@@ -317,6 +353,8 @@ mod tests {
             max_order: 32,
             bits: 16,
             table: 0,
+            switching: true,
+            candidates: Candidates::All,
         };
         assert_eq!(encode(&vec![0; 3000], 0, false, cfg).len(), 1);
     }

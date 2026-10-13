@@ -17,3 +17,8 @@ clap = { version = "4", features = ["derive"] }
 # Audio DSP in an unoptimised build is unusably slow; keep debug info but optimise.
 [profile.dev]
 opt-level = 2
+
+# Encoders spend their time in tight loops across crate boundaries; whole-program optimisation makes them faster.
+[profile.release]
+lto = "fat"
+codegen-units = 1

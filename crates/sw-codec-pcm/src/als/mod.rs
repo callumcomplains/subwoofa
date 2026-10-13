@@ -18,7 +18,7 @@ use crate::bitwriter::BitWriter;
 use crate::crc::SampleCrc;
 use crate::mp4_audio::{self, atom};
 use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
-use block::Settings;
+use block::{Candidates, Settings};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -110,6 +110,8 @@ impl AlsWriter {
                 max_order: MAX_ORDER,
                 bits,
                 table: coefficient_table(params.rate),
+                switching: params.effort != sw_core::Effort::Fast,
+                candidates: Candidates::for_effort(params.effort),
             },
             frame_len: frame_length(params.rate),
             pending: vec![Vec::new(); channels],
@@ -231,7 +233,7 @@ impl AlsWriter {
 /// split field.
 fn code_frame(extended: &[Vec<i32>], cfg: Settings, frame_len: usize) -> Vec<u8> {
     let len = extended[0].len() - MAX_ORDER;
-    let full = len == frame_len;
+    let full = len == frame_len && cfg.switching;
     let mut frame = Vec::new();
     let mut c = 0;
     while c < extended.len() {
@@ -335,6 +337,7 @@ mod tests {
     #[test]
     fn config_has_its_fixed_size() {
         let params = Params {
+            effort: Default::default(),
             rate: 48_000,
             format: SampleFormat::Int16,
             total_frames: 1000,

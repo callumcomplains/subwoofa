@@ -100,7 +100,9 @@ impl Synthesis {
 /// Built as the matched filter of the synthesis bank: the impulse response of every synthesis band is
 /// measured once, and subband samples are the (normalised) correlation of the input with it.
 pub struct Analysis {
-    resp: Vec<Vec<f64>>,
+    /// `by_tap[tap * BANDS + band]`: the response of every band at one tap, side by side, so that all 32 bands
+    /// accumulate in one pass (each band still adds its taps in the same order as a dot product would).
+    by_tap: Vec<f64>,
     len: usize,
     hist: Vec<f64>,
 }
@@ -134,8 +136,14 @@ impl Analysis {
                 *v /= e;
             }
         }
+        let mut by_tap = vec![0f64; len * BANDS];
+        for (band, r) in resp.iter().enumerate() {
+            for (tap, v) in r.iter().enumerate() {
+                by_tap[tap * BANDS + band] = *v;
+            }
+        }
         Analysis {
-            resp,
+            by_tap,
             len,
             hist: vec![0.0; len],
         }
@@ -152,9 +160,13 @@ impl Analysis {
         self.hist.copy_within(32.., 0);
         let n = self.len;
         self.hist[n - 32..].copy_from_slice(input);
-        for band in 0..BANDS {
-            out[band] = self.resp[band].iter().zip(&self.hist).map(|(f, x)| f * x).sum();
+        let mut acc = [0f64; BANDS];
+        for (row, x) in self.by_tap.chunks_exact(BANDS).zip(&self.hist) {
+            for (a, f) in acc.iter_mut().zip(row) {
+                *a += f * x;
+            }
         }
+        *out = acc;
     }
 }
 

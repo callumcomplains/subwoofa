@@ -294,73 +294,85 @@ pub fn encode_to_file(
     let mut bytes = 0u64;
     // one extra frame flushes the filter bank delay
     let total_frames = (remaining + (mix_delay + lead) as u64).div_ceil(n as u64) + 1;
-    let mut pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; nch + usize::from(xch) + usize::from(map.lfe.is_some())];
-    for _ in 0..total_frames {
+    let slots = nch + usize::from(xch) + usize::from(map.lfe.is_some());
+    let mut coded = 0u64;
+    while coded < total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
         }
-        let zeros = lead_left.min(n);
-        lead_left -= zeros;
-        let got = (remaining as usize).min(n - zeros);
-        if got > 0 {
-            stems.read_planar(&mut planar, got)?;
-        }
-        let consumed = got;
-        if let Some(m) = mixer.as_mut() {
-            // the mixer works on whole blocks (silence past the end of the programme)
-            let block: Vec<Vec<f32>> = (0..req.layout.channels.len())
-                .map(|c| {
-                    // the lead of silence (a container's codec delay) first, then the source
-                    let mut v = vec![0.0f32; zeros];
-                    if got > 0 {
-                        v.extend_from_slice(&planar[c][..got]);
-                    }
-                    v.resize(n, 0.0);
-                    v
-                })
-                .collect();
-            planar = m.process(&block);
-        }
-        // with a mixer the block already holds the lead, so nothing is added in front of it
-        let zeros = if mixer.is_some() { 0 } else { zeros };
-        let got = if mixer.is_some() { n } else { got };
-        for (slot, src) in map.order.iter().copied().chain(cs_slot).chain(map.lfe).enumerate() {
-            let dst = &mut pcm[slot];
-            dst.iter_mut().for_each(|v| *v = 0.0);
-            for i in 0..got {
-                dst[zeros + i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
+        // the input of the next frames, then all of them are encoded together
+        let count = BATCH.min((total_frames - coded) as usize);
+        let mut chunk: Vec<Vec<Vec<f64>>> = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; slots];
+            let zeros = lead_left.min(n);
+            lead_left -= zeros;
+            let got = (remaining as usize).min(n - zeros);
+            if got > 0 {
+                stems.read_planar(&mut planar, got)?;
             }
+            let consumed = got;
+            if let Some(m) = mixer.as_mut() {
+                // the mixer works on whole blocks (silence past the end of the programme)
+                let block: Vec<Vec<f32>> = (0..req.layout.channels.len())
+                    .map(|c| {
+                        // the lead of silence (a container's codec delay) first, then the source
+                        let mut v = vec![0.0f32; zeros];
+                        if got > 0 {
+                            v.extend_from_slice(&planar[c][..got]);
+                        }
+                        v.resize(n, 0.0);
+                        v
+                    })
+                    .collect();
+                planar = m.process(&block);
+            }
+            // with a mixer the block already holds the lead, so nothing is added in front of it
+            let zeros = if mixer.is_some() { 0 } else { zeros };
+            let got = if mixer.is_some() { n } else { got };
+            for (slot, src) in map.order.iter().copied().chain(cs_slot).chain(map.lfe).enumerate() {
+                let dst = &mut pcm[slot];
+                dst.iter_mut().for_each(|v| *v = 0.0);
+                for i in 0..got {
+                    dst[zeros + i] = (planar[src][i] as f64 * 8_388_608.0).clamp(-8_388_608.0, 8_388_607.0);
+                }
+            }
+            remaining -= consumed.min(remaining as usize) as u64;
+            chunk.push(pcm);
         }
-        remaining -= consumed.min(remaining as usize) as u64;
-        let mut data = enc.encode_frame(&pcm);
-        if let Some(h) = hra.as_mut() {
-            data = h.wrap(data, &enc.last_residual);
-        }
-        if wav {
-            // DTS in PCM: either the stream packed into 14-bit words (a DTS CD) or its 16-bit words
-            // byte-swapped into little-endian samples
-            let w = if cd14 {
-                pack_14bit(&data)
+        coded += count as u64;
+        let refs: Vec<&[Vec<f64>]> = chunk.iter().map(|f| f.as_slice()).collect();
+        for (mut data, left) in enc.encode_batch(&refs) {
+            enc.adopt(left);
+            if let Some(h) = hra.as_mut() {
+                data = h.wrap(data, &enc.last_residual);
+            }
+            if wav {
+                // DTS in PCM: either the stream packed into 14-bit words (a DTS CD) or its 16-bit words
+                // byte-swapped into little-endian samples
+                let w = if cd14 {
+                    pack_14bit(&data)
+                } else {
+                    let mut w = data.clone();
+                    if w.len() % 2 == 1 {
+                        w.push(0);
+                    }
+                    for pair in w.chunks_exact_mut(2) {
+                        pair.swap(0, 1);
+                    }
+                    w
+                };
+                out.as_mut().unwrap().write_all(&w)?;
+                bytes += w.len() as u64;
+            } else if let Some(h) = hd.as_mut() {
+                h.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
+                bytes += data.len() as u64;
             } else {
-                let mut w = data.clone();
-                if w.len() % 2 == 1 {
-                    w.push(0);
-                }
-                for pair in w.chunks_exact_mut(2) {
-                    pair.swap(0, 1);
-                }
-                w
-            };
-            out.as_mut().unwrap().write_all(&w)?;
-            bytes += w.len() as u64;
-        } else if let Some(h) = hd.as_mut() {
-            h.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
-            bytes += data.len() as u64;
-        } else {
-            out.as_mut().unwrap().write_all(&data)?;
-            bytes += data.len() as u64;
+                out.as_mut().unwrap().write_all(&data)?;
+                bytes += data.len() as u64;
+            }
+            frames += 1;
         }
-        frames += 1;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     if let Some(o) = out.as_mut() {
@@ -399,6 +411,9 @@ pub fn encode_to_file(
 }
 
 /// Canonical 44-byte WAV header for 16-bit stereo PCM holding `data_len` bytes (a DTS stream in PCM).
+/// Frames encoded together; they are spread over the cores.
+const BATCH: usize = 32;
+
 pub(crate) fn wav_header(rate: u32, data_len: u64) -> Vec<u8> {
     let mut h = Vec::with_capacity(44);
     h.extend_from_slice(b"RIFF");

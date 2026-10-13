@@ -88,6 +88,7 @@ fn check(name: &str, container: Container, ext: &str, format: SampleFormat, layo
         output: &out,
         dsd_multiplier: 0,
         dcp: Default::default(),
+        effort: Default::default(),
     };
     let stats = encode_to_file(
         &mut stems,
@@ -259,6 +260,7 @@ fn flac_refuses_what_it_cannot_hold() {
         output: &out,
         dsd_multiplier: 0,
         dcp: Default::default(),
+        effort: Default::default(),
     };
     assert!(encode_to_file(
         &mut stems,
@@ -398,6 +400,7 @@ fn check_dcp(name: &str, layout_id: &str, rate: u32, frames: usize, options: sw_
         output: &out,
         dsd_multiplier: 0,
         dcp: options,
+        effort: Default::default(),
     };
     let stats = encode_to_file(
         &mut stems,
@@ -524,6 +527,7 @@ fn check_dsd(name: &str, container: Container, ext: &str, layout_id: &str, rate:
         output: &out,
         dsd_multiplier: multiplier,
         dcp: Default::default(),
+        effort: Default::default(),
     };
     encode_to_file(
         &mut stems,

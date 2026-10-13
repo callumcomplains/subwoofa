@@ -292,6 +292,7 @@ mod probe2 {
 /// Transient detector of clause 8.2.2: an 8 kHz high-pass, then peak levels over a three-level tree of
 /// segments of the 256 new samples; a block is switched when a segment peak jumps by more than the level's
 /// threshold over its predecessor.
+#[derive(Clone)]
 pub struct Detector {
     /// Two cascaded biquads: (b0, b1, b2, a1, a2) and transposed direct form II state.
     coef: [[f64; 5]; 2],

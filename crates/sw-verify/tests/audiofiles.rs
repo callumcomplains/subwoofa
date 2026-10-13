@@ -47,6 +47,7 @@ fn make(dir: &std::path::Path, container: Container, ext: &str, multiplier: u32)
         output: &out,
         dsd_multiplier: multiplier,
         dcp: Default::default(),
+        effort: Default::default(),
     };
     encode_to_file(
         &mut stems,

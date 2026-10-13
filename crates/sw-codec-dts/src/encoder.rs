@@ -43,10 +43,6 @@ pub struct Config {
 
 pub const MAX_PRIMARY: usize = 5;
 
-static T_SEARCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static T_PACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static T_EMU: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 fn sfreq_code(rate: u32) -> Option<u32> {
     Some(match rate {
         8000 => 1,
@@ -224,12 +220,99 @@ struct ExactState {
 struct Plan {
     abits: Vec<[u8; BANDS]>,
     scale_idx: Vec<[u8; BANDS]>,
-    /// quantized indexes [ch][band][sample]
+    /// quantized indexes [ch][band][sample]; empty until `fill_indexes` (only the plan that is kept needs them)
     q: Vec<Vec<Vec<i32>>>,
     /// SEL per channel and abits 1..=10 (== GROUP_SIZE means no Huffman)
     sel: Vec<[u8; 10]>,
     bhuff: Vec<u8>,
     bits: usize,
+}
+
+/// What a frame leaves behind besides its bytes, for the extensions that are built on the core.
+#[derive(Default)]
+pub struct Leftovers {
+    /// The PCM the decoder produces for the frame (only with `enable_exact_decode`).
+    pub core_pcm: Vec<Vec<i32>>,
+    /// Input subband samples minus the core's reconstruction (only with `keep_residual`).
+    pub residual: Vec<Vec<Vec<f64>>>,
+    /// The core's reconstructed subband samples (only with `keep_residual`).
+    pub deq: Vec<Vec<Vec<i32>>>,
+}
+
+/// A frame planned and packed, waiting for the part that has to follow the frames before it.
+struct Coded {
+    bytes: Vec<u8>,
+    plan: Plan,
+    offset: f64,
+    planes: Option<(Vec<Vec<Vec<f64>>>, Vec<Vec<Vec<i32>>>)>,
+}
+
+/// One band coded with one quantiser: the scale factor, the indexes, and what each Huffman book would cost.
+struct BandCode {
+    scale_idx: u8,
+    q: Vec<i32>,
+    /// Bits of the indexes with book `s` (only for quantisers 1 to 10, which have books).
+    cost: [u32; 10],
+}
+
+/// What the search of one frame works out once instead of once per candidate offset: the masking level of every
+/// band, the noise each quantiser leaves in it, and the `BandCode` of every (channel, band, quantiser) met.
+/// Neighbouring candidate offsets give most bands the same quantiser.
+struct BandCache {
+    mask: Vec<[f64; BANDS]>,
+    /// `noise[ch][band][k]`: the noise power of quantiser `k` (1 to 25) on this band.
+    noise: Vec<Vec<[f64; 26]>>,
+    codes: Vec<std::sync::OnceLock<BandCode>>,
+}
+
+const QUANTISERS: usize = 27;
+
+impl BandCache {
+    fn new(power: &[[f64; BANDS]], peak: &[[f64; BANDS]]) -> BandCache {
+        let mask = power
+            .iter()
+            .map(|p| {
+                let pdb: Vec<f64> = p.iter().map(|p| 10.0 * (p + 1e-6).log10()).collect();
+                let mut mask = [0f64; BANDS];
+                for (b, m) in mask.iter_mut().enumerate() {
+                    // masking by the neighbourhood: shallow upward spread, steep downward
+                    *m = f64::NEG_INFINITY;
+                    for (b2, p) in pdb.iter().enumerate() {
+                        let d = b as i32 - b2 as i32;
+                        let att = if d >= 0 { 12.0 * d as f64 } else { 25.0 * (-d) as f64 };
+                        *m = m.max(p - att);
+                    }
+                }
+                mask
+            })
+            .collect();
+        let noise = peak
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|peak| {
+                        let mut n = [0f64; 26];
+                        for (k, n) in n.iter_mut().enumerate().skip(1) {
+                            let delta = peak / max_q(k) as f64;
+                            *n = delta * delta / 12.0;
+                        }
+                        n
+                    })
+                    .collect()
+            })
+            .collect();
+        BandCache {
+            mask,
+            noise,
+            codes: (0..power.len() * BANDS * QUANTISERS)
+                .map(|_| std::sync::OnceLock::new())
+                .collect(),
+        }
+    }
+
+    fn get(&self, ch: usize, band: usize, k: usize, make: impl FnOnce() -> BandCode) -> &BandCode {
+        self.codes[(ch * BANDS + band) * QUANTISERS + k].get_or_init(make)
+    }
 }
 
 impl Encoder {
@@ -336,37 +419,118 @@ impl Encoder {
     /// Encode one frame. `pcm[ch]` holds `frame_samples()` samples in 24-bit units, primary channels in
     /// stream order followed by the LFE channel when present.
     pub fn encode_frame(&mut self, pcm: &[Vec<f64>]) -> Vec<u8> {
-        let nch = self.nplan();
-        let blocks = self.cfg.blocks;
-        assert_eq!(pcm.len(), nch + usize::from(self.cfg.lfe));
-        // 1. subband analysis
-        let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
-        {
-            use rayon::prelude::*;
-            self.analysis
-                .par_iter_mut()
-                .zip(sub.par_iter_mut())
-                .zip(pcm.par_iter())
-                .for_each(|((an, out), input)| {
-                    for b in 0..blocks {
-                        let mut o = [0f64; BANDS];
-                        an.step(&input[b * 32..b * 32 + 32], &mut o);
-                        for (band, v) in o.iter().enumerate() {
-                            out[band][b] = v * SUBBAND_GAIN;
-                        }
-                    }
-                });
-        }
-        let lfe = if self.cfg.lfe {
-            Some(self.lfe_samples(&pcm[nch]))
-        } else {
-            None
-        };
-        self.encode_subbands(&sub, lfe)
+        let (bytes, left) = self.run_batch(&[pcm]).pop().unwrap();
+        self.adopt(left);
+        bytes
     }
 
-    /// Keeps the core's reconstruction of this frame (`last_deq`) and what it left over (`last_residual`).
-    fn keep_planes(&mut self, best: &Plan, sub: &[Vec<Vec<f64>>]) {
+    /// Encodes consecutive frames together and returns each one's bytes with what it left behind. The bytes are
+    /// the same as `encode_frame` called frame by frame. The filter banks run in order, the plan search and
+    /// packing of the frames run on all cores, and the decoder emulation (if on) runs in order again. A caller
+    /// that needs the leftovers of a frame (`adopt`) takes them from the result.
+    pub fn encode_batch(&mut self, frames: &[&[Vec<f64>]]) -> Vec<(Vec<u8>, Leftovers)> {
+        self.run_batch(frames)
+    }
+
+    /// Makes the leftovers of a frame from `encode_batch` the ones `last_core_pcm`, `last_residual` and
+    /// `last_deq` report.
+    pub fn adopt(&mut self, left: Leftovers) {
+        self.last_core_pcm = left.core_pcm;
+        self.last_residual = left.residual;
+        self.last_deq = left.deq;
+    }
+
+    fn run_batch(&mut self, frames: &[&[Vec<f64>]]) -> Vec<(Vec<u8>, Leftovers)> {
+        use rayon::prelude::*;
+        let nch = self.nplan();
+        let subbands = self.analyse(frames);
+        let lfe: Vec<Option<(Vec<i32>, u8)>> = frames
+            .iter()
+            .map(|pcm| self.cfg.lfe.then(|| self.lfe_samples(&pcm[nch])))
+            .collect();
+        // a lone frame searches with all cores; many frames keep a core each
+        let spread = frames.len() < 4;
+        let hint = self.last_offset;
+        let me = &*self;
+        let coded: Vec<Coded> = subbands
+            .par_iter()
+            .zip(lfe.par_iter())
+            .map(|(sub, lfe)| me.plan_and_pack(sub, lfe.as_ref(), hint, spread))
+            .collect();
+        coded
+            .into_iter()
+            .zip(&lfe)
+            .map(|(c, lfe)| self.settle(c, lfe.as_ref()))
+            .collect()
+    }
+
+    /// The subband samples `[frame][channel][band][block]` of frames in order. Each channel's filter bank runs on
+    /// its own thread; it only depends on its own earlier input.
+    fn analyse(&mut self, frames: &[&[Vec<f64>]]) -> Vec<Vec<Vec<Vec<f64>>>> {
+        use rayon::prelude::*;
+        let (nch, blocks) = (self.nplan(), self.cfg.blocks);
+        let per_channel: Vec<Vec<Vec<Vec<f64>>>> = self.analysis[..nch]
+            .par_iter_mut()
+            .enumerate()
+            .map(|(ch, an)| {
+                frames
+                    .iter()
+                    .map(|pcm| {
+                        let mut out = vec![vec![0.0; blocks]; BANDS];
+                        for b in 0..blocks {
+                            let mut o = [0f64; BANDS];
+                            an.step(&pcm[ch][b * 32..b * 32 + 32], &mut o);
+                            for (band, v) in o.iter().enumerate() {
+                                out[band][b] = v * SUBBAND_GAIN;
+                            }
+                        }
+                        out
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut columns: Vec<_> = per_channel.into_iter().map(|c| c.into_iter()).collect();
+        (0..frames.len())
+            .map(|_| columns.iter_mut().map(|c| c.next().unwrap()).collect())
+            .collect()
+    }
+
+    /// The plan and bytes of a frame. This needs nothing from the frames around it except the starting point
+    /// `hint` of the search, so frames can be done in any order or together.
+    fn plan_and_pack(&self, sub: &[Vec<Vec<f64>>], lfe: Option<&(Vec<i32>, u8)>, hint: f64, spread: bool) -> Coded {
+        let (offset, plan) = self.plan_for(sub, hint, spread);
+        let bytes = self.pack(&plan, lfe);
+        let planes = self.keep_residual.then(|| self.planes_of(&plan, sub));
+        Coded {
+            bytes,
+            plan,
+            offset,
+            planes,
+        }
+    }
+
+    /// The part of a frame that follows the frames before it: the search's starting point and the decoder
+    /// emulation.
+    fn settle(&mut self, coded: Coded, lfe: Option<&(Vec<i32>, u8)>) -> (Vec<u8>, Leftovers) {
+        self.last_offset = coded.offset;
+        let core_pcm = if self.exact.is_some() {
+            self.emulate_decoder(&coded.plan, lfe)
+        } else {
+            Vec::new()
+        };
+        let (residual, deq) = coded.planes.unwrap_or_default();
+        (
+            coded.bytes,
+            Leftovers {
+                core_pcm,
+                residual,
+                deq,
+            },
+        )
+    }
+
+    /// The core's reconstruction of a frame (`deq`) and what it left over (`residual`), `[channel][band][block]`.
+    fn planes_of(&self, best: &Plan, sub: &[Vec<Vec<f64>>]) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<Vec<i32>>>) {
         let blocks = self.cfg.blocks;
         let planes = self.nplan(); // the primaries, and the XCH channel when there is one
         let mut res = Vec::with_capacity(planes);
@@ -387,14 +551,26 @@ impl Encoder {
             res.push(bands);
             all_deq.push(deqs);
         }
-        self.last_residual = res;
-        self.last_deq = all_deq;
+        (res, all_deq)
     }
 
-    /// Highest quality plan that fits the frame (the budget is the frame minus any X96 reserve).
+    /// Keeps the core's reconstruction of this frame (`last_deq`) and what it left over (`last_residual`).
+    fn keep_planes(&mut self, best: &Plan, sub: &[Vec<Vec<f64>>]) {
+        (self.last_residual, self.last_deq) = self.planes_of(best, sub);
+    }
+
+    /// Highest quality plan that fits the frame, searched from where the last frame ended.
     fn search_plan(&mut self, sub: &[Vec<Vec<f64>>]) -> Plan {
+        let (offset, plan) = self.plan_for(sub, self.last_offset, true);
+        self.last_offset = offset;
+        plan
+    }
+
+    /// Highest quality plan that fits the frame (the budget is the frame minus any X96 reserve), searched around
+    /// the offset `hint`: quality offsets vary slowly from frame to frame. `spread` lets the search use many
+    /// threads for this one frame.
+    fn plan_for(&self, sub: &[Vec<Vec<f64>>], hint: f64, spread: bool) -> (f64, Plan) {
         let blocks = self.cfg.blocks;
-        // 3. allocation: highest quality that fits the frame
         let mut budget = (self.frame_bytes - self.x96_reserve) * 8;
         if let Some(aux) = &self.aux {
             // the audio ends in front of the auxiliary data, with its 6-bit size field
@@ -420,44 +596,17 @@ impl Encoder {
                 p
             })
             .collect();
-        // search around the previous frame's operating point: quality offsets vary slowly
-        let t_a = std::time::Instant::now();
-        let (lo, best) = self.search_offset(sub, &power, &peak, budget);
-        T_SEARCH.fetch_add(t_a.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-        self.last_offset = lo;
-        if std::env::var_os("SW_DTS_DEBUG").is_some() {
-            let used: Vec<f64> = best
-                .abits
-                .iter()
-                .map(|a| a.iter().map(|x| *x as f64).sum::<f64>() / 32.0)
-                .collect();
-            eprintln!("bits {} / {}  lo {:.1}  mean abits {:?}", best.bits, budget, lo, used);
-        }
-        best
+        let cache = BandCache::new(&power, &peak);
+        let (offset, mut best) = self.search_offset(sub, &power, &peak, budget, &cache, hint, spread);
+        self.fill_indexes(&mut best, sub, &cache, &peak);
+        (offset, best)
     }
 
     /// Encode one frame from ready-made subband samples `sub[ch][band][block]` (bypasses the analysis bank).
     pub fn encode_subbands(&mut self, sub: &[Vec<Vec<f64>>], lfe: Option<(Vec<i32>, u8)>) -> Vec<u8> {
-        let best = self.search_plan(sub);
-        let t_b = std::time::Instant::now();
-        let bytes = self.pack(&best, lfe.as_ref());
-        T_PACK.fetch_add(t_b.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-        if self.keep_residual {
-            self.keep_planes(&best, sub);
-        }
-        if self.exact.is_some() {
-            let t_c = std::time::Instant::now();
-            self.emulate_decoder(&best, lfe.as_ref());
-            T_EMU.fetch_add(t_c.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-            if std::env::var_os("SW_TIMING").is_some() {
-                eprintln!(
-                    "core: search {} ms, pack {} ms, emulate {} ms",
-                    T_SEARCH.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
-                    T_PACK.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
-                    T_EMU.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000
-                );
-            }
-        }
+        let coded = self.plan_and_pack(sub, lfe.as_ref(), self.last_offset, true);
+        let (bytes, left) = self.settle(coded, lfe.as_ref());
+        self.adopt(left);
         bytes
     }
 
@@ -497,15 +646,18 @@ impl Encoder {
         power: &[[f64; BANDS]],
         peak: &[[f64; BANDS]],
         budget: usize,
+        cache: &BandCache,
+        hint: f64,
+        spread: bool,
     ) -> (f64, Plan) {
         use rayon::prelude::*;
-        if rayon::current_num_threads() >= 6 {
-            let base = self.last_offset;
+        if spread && rayon::current_num_threads() >= 6 {
+            let base = hint;
             let first: Vec<(f64, Plan)> = (-4..=4)
                 .into_par_iter()
                 .map(|i| {
                     let o = base + 3.0 * i as f64;
-                    (o, self.make_plan(sub, power, peak, o))
+                    (o, self.make_plan(sub, power, peak, o, cache))
                 })
                 .collect();
             let top_fit = first.iter().rposition(|(_, p)| p.bits <= budget);
@@ -518,7 +670,7 @@ impl Encoder {
                         .into_par_iter()
                         .map(|j| {
                             let o = lo + 3.0 * j as f64 / 8.0;
-                            (o, self.make_plan(sub, power, peak, o))
+                            (o, self.make_plan(sub, power, peak, o, cache))
                         })
                         .collect();
                     for (o, p) in fine {
@@ -530,11 +682,11 @@ impl Encoder {
                 }
                 // everything fits: continue upwards from the top candidate
                 let top = first.into_iter().last().unwrap();
-                return self.search_sequential(sub, power, peak, budget, top.0 - 12.0);
+                return self.search_sequential(sub, power, peak, budget, top.0 - 12.0, cache);
             }
-            return self.search_sequential(sub, power, peak, budget, base - 12.0 - 24.0);
+            return self.search_sequential(sub, power, peak, budget, base - 12.0 - 24.0, cache);
         }
-        self.search_sequential(sub, power, peak, budget, self.last_offset - 12.0)
+        self.search_sequential(sub, power, peak, budget, hint - 12.0, cache)
     }
 
     fn search_sequential(
@@ -544,13 +696,14 @@ impl Encoder {
         peak: &[[f64; BANDS]],
         budget: usize,
         start: f64,
+        cache: &BandCache,
     ) -> (f64, Plan) {
         let mut lo = start;
-        let mut best = self.make_plan(sub, power, peak, lo);
+        let mut best = self.make_plan(sub, power, peak, lo, cache);
         let mut guard = 0;
         while best.bits > budget && lo > -200.0 {
             lo -= 24.0;
-            best = self.make_plan(sub, power, peak, lo);
+            best = self.make_plan(sub, power, peak, lo, cache);
             guard += 1;
             if guard > 12 {
                 break;
@@ -558,11 +711,11 @@ impl Encoder {
         }
         if best.bits > budget {
             lo = -200.0;
-            best = self.make_plan(sub, power, peak, lo);
+            best = self.make_plan(sub, power, peak, lo, cache);
         } else {
             let mut hi = lo + 24.0;
             loop {
-                let p = self.make_plan(sub, power, peak, hi);
+                let p = self.make_plan(sub, power, peak, hi, cache);
                 if p.bits <= budget && hi < 200.0 {
                     lo = hi;
                     best = p;
@@ -573,7 +726,7 @@ impl Encoder {
             }
             for _ in 0..6 {
                 let mid = 0.5 * (lo + hi);
-                let p = self.make_plan(sub, power, peak, mid);
+                let p = self.make_plan(sub, power, peak, mid, cache);
                 if p.bits <= budget {
                     lo = mid;
                     best = p;
@@ -585,37 +738,73 @@ impl Encoder {
         (lo, best)
     }
 
-    fn make_plan(&self, sub: &[Vec<Vec<f64>>], power: &[[f64; BANDS]], peak: &[[f64; BANDS]], offset_db: f64) -> Plan {
+    fn make_plan(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        power: &[[f64; BANDS]],
+        peak: &[[f64; BANDS]],
+        offset_db: f64,
+        cache: &BandCache,
+    ) -> Plan {
         let nch = self.nplan();
         let blocks = self.cfg.blocks;
         let mut abits = vec![[0u8; BANDS]; nch];
         for ch in 0..nch {
-            let pdb: Vec<f64> = power[ch].iter().map(|p| 10.0 * (p + 1e-6).log10()).collect();
             for b in 0..BANDS {
-                // masking by the neighbourhood: shallow upward spread, steep downward
-                let mut mask = f64::NEG_INFINITY;
-                for (b2, p) in pdb.iter().enumerate() {
-                    let d = b as i32 - b2 as i32;
-                    let att = if d >= 0 { 12.0 * d as f64 } else { 25.0 * (-d) as f64 };
-                    mask = mask.max(p - att);
-                }
-                let noise_db = self.mask_weight * mask - offset_db;
+                let noise_db = self.mask_weight * cache.mask[ch][b] - offset_db;
                 let noise = 10f64.powf(noise_db / 10.0);
                 if power[ch][b] <= noise || peak[ch][b] < 0.5 {
                     continue;
                 }
-                let mut k = 1;
-                while k < 26 {
-                    let delta = peak[ch][b] / max_q(k) as f64;
-                    if delta * delta / 12.0 <= noise {
-                        break;
-                    }
-                    k += 1;
-                }
+                // the first quantiser coarse enough to stay within the noise (26 when none is)
+                let k = (1..26).find(|&k| cache.noise[ch][b][k] <= noise).unwrap_or(26);
                 abits[ch][b] = k as u8;
             }
         }
-        self.finish_plan(sub, abits, peak, blocks)
+        self.finish_plan(sub, abits, peak, blocks, cache)
+    }
+
+    /// Codes band `b` of channel `ch` with quantiser `k`.
+    fn code_band(&self, sub: &[f64], peak: f64, k: usize) -> BandCode {
+        let step = step_of(k);
+        let mq = max_q(k) as f64;
+        let mut idx = 0usize;
+        while idx < 124 && (SCALE_7[idx] as f64) * step * mq < peak {
+            idx += 1;
+        }
+        let delta = SCALE_7[idx] as f64 * step;
+        let q: Vec<i32> = sub
+            .iter()
+            .map(|v| ((v / delta).round() as i32).clamp(-(mq as i32), mq as i32))
+            .collect();
+        let mut cost = [0u32; 10];
+        if k <= 10 {
+            let off = (QUANT_HUFF[k - 1][0].len() as i32 - 1) / 2;
+            for (s, c) in cost.iter_mut().enumerate().take(GROUP_SIZE[k - 1]) {
+                let t = QUANT_HUFF[k - 1][s];
+                *c = q.iter().map(|v| t[(*v + off) as usize].1 as u32).sum();
+            }
+        }
+        BandCode {
+            scale_idx: idx as u8,
+            q,
+            cost,
+        }
+    }
+
+    /// Puts the quantised indexes into a plan found by the search.
+    fn fill_indexes(&self, plan: &mut Plan, sub: &[Vec<Vec<f64>>], cache: &BandCache, peak: &[[f64; BANDS]]) {
+        let nch = self.nplan();
+        plan.q = vec![vec![Vec::new(); BANDS]; nch];
+        for ch in 0..nch {
+            for b in 0..BANDS {
+                let k = plan.abits[ch][b] as usize;
+                if k > 0 {
+                    let code = cache.get(ch, b, k, || self.code_band(&sub[ch][b], peak[ch][b], k));
+                    plan.q[ch][b] = code.q.clone();
+                }
+            }
+        }
     }
 
     fn finish_plan(
@@ -624,28 +813,18 @@ impl Encoder {
         abits: Vec<[u8; BANDS]>,
         peak: &[[f64; BANDS]],
         blocks: usize,
+        cache: &BandCache,
     ) -> Plan {
         let nch = self.nplan();
         let mut scale_idx = vec![[0u8; BANDS]; nch];
-        let mut q = vec![vec![Vec::new(); BANDS]; nch];
         for ch in 0..nch {
             for b in 0..BANDS {
                 let k = abits[ch][b] as usize;
-                if k == 0 {
-                    continue;
+                if k > 0 {
+                    scale_idx[ch][b] = cache
+                        .get(ch, b, k, || self.code_band(&sub[ch][b], peak[ch][b], k))
+                        .scale_idx;
                 }
-                let step = step_of(k);
-                let mq = max_q(k) as f64;
-                let mut idx = 0usize;
-                while idx < 124 && (SCALE_7[idx] as f64) * step * mq < peak[ch][b] {
-                    idx += 1;
-                }
-                scale_idx[ch][b] = idx as u8;
-                let delta = SCALE_7[idx] as f64 * step;
-                q[ch][b] = sub[ch][b]
-                    .iter()
-                    .map(|v| ((v / delta).round() as i32).clamp(-(mq as i32), mq as i32))
-                    .collect();
             }
         }
         // codebook choices
@@ -699,15 +878,13 @@ impl Encoder {
                 } else {
                     nsamp * raw_bits(k) as usize
                 };
-                let off = (QUANT_HUFF[k - 1][0].len() as i32 - 1) / 2;
                 let mut best = (plain, g as u8);
                 for s in 0..g {
-                    let t = QUANT_HUFF[k - 1][s];
                     let mut c = 2usize; // adjustment index
                     for b in &bands {
-                        for v in &q[ch][*b] {
-                            c += t[(*v + off) as usize].1 as usize;
-                        }
+                        c += cache
+                            .get(ch, *b, k, || self.code_band(&sub[ch][*b], peak[ch][*b], k))
+                            .cost[s] as usize;
                     }
                     if c < best.0 {
                         best = (c, s as u8);
@@ -745,7 +922,7 @@ impl Encoder {
         Plan {
             abits,
             scale_idx,
-            q,
+            q: Vec::new(),
             sel,
             bhuff,
             bits,
@@ -762,7 +939,7 @@ impl Encoder {
     }
 
     /// Run the decoder's integer arithmetic over this frame's coded data.
-    fn emulate_decoder(&mut self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) {
+    fn emulate_decoder(&mut self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) -> Vec<Vec<i32>> {
         let nch = self.cfg.channels;
         let blocks = self.cfg.blocks;
         let st = self.exact.as_mut().unwrap();
@@ -794,7 +971,7 @@ impl Encoder {
             let samples = dequantize_lfe(q, *idx as usize);
             out.push(st.lfe.interpolate(&samples, st.x96));
         }
-        self.last_core_pcm = out;
+        out
     }
 
     fn pack(&self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) -> Vec<u8> {
@@ -979,25 +1156,8 @@ impl Encoder {
     /// `frame_samples()` per channel.
     pub fn encode_xxch(&mut self, pcm: &[Vec<f64>], total_bytes: usize, p: &XxchParams) -> Vec<u8> {
         let nch = self.cfg.channels;
-        let blocks = self.cfg.blocks;
         assert_eq!(pcm.len(), nch);
-        let mut sub: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; blocks]; BANDS]; nch];
-        {
-            use rayon::prelude::*;
-            self.analysis
-                .par_iter_mut()
-                .zip(sub.par_iter_mut())
-                .zip(pcm.par_iter())
-                .for_each(|((an, out), input)| {
-                    for b in 0..blocks {
-                        let mut o = [0f64; BANDS];
-                        an.step(&input[b * 32..b * 32 + 32], &mut o);
-                        for (band, v) in o.iter().enumerate() {
-                            out[band][b] = v * SUBBAND_GAIN;
-                        }
-                    }
-                });
-        }
+        let sub = self.analyse(&[pcm]).pop().unwrap();
         self.frame_bytes = total_bytes;
         self.x96_reserve = 0;
         // fixed parts: frame header, channel set header without the per-channel selector tables, ADPCM flags

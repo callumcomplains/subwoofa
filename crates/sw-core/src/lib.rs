@@ -8,11 +8,13 @@ pub mod autoimport;
 pub mod bitstream;
 pub mod channel;
 pub mod downmix;
+pub mod effort;
 pub mod formats;
 pub mod layout;
 pub mod version;
 
 pub use bitstream::{BitstreamOptions, Downmix};
 pub use channel::Channel;
+pub use effort::Effort;
 pub use formats::{Destination, StreamType};
 pub use layout::{ChannelLayout, LAYOUTS};

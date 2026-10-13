@@ -7,20 +7,59 @@
 
 use crate::bitwriter::BitWriter;
 use crate::ogg::{build_page, PacketWriter};
-use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
+use crate::{roughness, take_frames, to_integers, BlockWriter, Params, SampleFormat};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Highest linear predictor order tried.
-const MAX_LPC_ORDER: usize = 12;
-/// Predictor orders fitted to each block.
-const LPC_ORDERS: [usize; 4] = [2, 4, 8, 12];
-/// Precision (bits) of the quantised predictor coefficients.
+/// What the encoder tries for each block. More of each takes longer and saves a little.
+#[derive(Clone, Copy)]
+struct Search {
+    /// Orders of the linear predictors fitted to a block.
+    lpc_orders: &'static [usize],
+    /// Highest order of the fixed (polynomial) predictors tried, 0 to 4.
+    fixed_max: usize,
+    /// The block is cut into up to `2^max_partition` runs, each with its own Rice parameter.
+    max_partition: u32,
+    /// Code a stereo pair every way and keep the smallest; otherwise pick the way that looks best from the signals.
+    all_stereo: bool,
+}
+
+impl Search {
+    fn for_effort(effort: sw_core::Effort) -> Search {
+        let search = match effort {
+            sw_core::Effort::Best => Search {
+                lpc_orders: &[2, 4, 8, 12],
+                fixed_max: 4,
+                max_partition: 8,
+                all_stereo: true,
+            },
+            sw_core::Effort::Balanced => Search {
+                lpc_orders: &[4, 8, 12],
+                fixed_max: 2,
+                max_partition: 6,
+                all_stereo: false,
+            },
+            sw_core::Effort::Fast => Search {
+                lpc_orders: &[8],
+                fixed_max: 1,
+                max_partition: 5,
+                all_stereo: false,
+            },
+        };
+        search
+    }
+
+    /// Highest order the Levinson-Durbin recursion has to reach.
+    fn top_order(&self) -> usize {
+        self.lpc_orders.iter().copied().max().unwrap_or(0)
+    }
+}
+
 const LPC_PRECISION: u32 = 15;
 /// Largest partition order tried (blocks are split into up to 2^8 Rice partitions).
-const MAX_PARTITION_ORDER: u32 = 8;
 
 // ---------------------------------------------------------------------------------------------------------------
 // bit and checksum helpers
@@ -70,25 +109,72 @@ struct RiceCoding {
 
 /// The cheapest partitioning of `residual`, which follows `predictor_order` warm-up samples in a block of
 /// `block_len` samples.
-fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize) -> RiceCoding {
+///
+/// A partition of a coarser order is a run of partitions of the finest order, so the cost of every Rice parameter
+/// is worked out once for each finest partition and added up for the coarser ones.
+fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize, max_partition: u32) -> RiceCoding {
     let coded: Vec<u64> = residual.iter().map(|&r| zigzag(r as i64)).collect();
-    let mut best: Option<RiceCoding> = None;
-    for order in 0..=MAX_PARTITION_ORDER {
+    let mut finest = 0;
+    for order in 1..=max_partition {
         let parts = 1usize << order;
         if block_len % parts != 0 || block_len / parts <= predictor_order {
             break;
         }
-        let size = block_len / parts;
+        finest = order;
+    }
+    let fine_parts = 1usize << finest;
+    let size = block_len / fine_parts;
+    // the residual covers each partition of the block less the warm-up samples at the start of the first
+    let spans: Vec<(usize, usize)> = (0..fine_parts)
+        .map(|p| {
+            (
+                if p == 0 { 0 } else { p * size - predictor_order },
+                (p + 1) * size - predictor_order,
+            )
+        })
+        .collect();
+    let plain_sums: Vec<u64> = spans.iter().map(|&(a, b)| coded[a..b].iter().sum()).collect();
+    // the parameters worth trying for a partition are the ones around log2 of its mean
+    let guess = |sum: u64, len: usize| 64 - (sum / len.max(1) as u64).leading_zeros();
+    let (mut lowest, mut highest) = (u32::MAX, 0u32);
+    for order in 0..=finest {
+        let group = 1usize << (finest - order);
+        for run in plain_sums.chunks(group).zip(spans.chunks(group)) {
+            let len = run.1.last().unwrap().1 - run.1[0].0;
+            let g = guess(run.0.iter().sum(), len);
+            lowest = lowest.min(g.saturating_sub(2));
+            highest = highest.max((g + 1).min(30));
+        }
+    }
+    // shifted_sums[p][k - lowest]: sum over the finest partition p of (value >> k)
+    let shifted_sums: Vec<Vec<u64>> = spans
+        .iter()
+        .map(|&(a, b)| {
+            (lowest..=highest)
+                .map(|k| coded[a..b].iter().map(|&v| v >> k).sum())
+                .collect()
+        })
+        .collect();
+    let mut best: Option<RiceCoding> = None;
+    for order in 0..=finest {
+        let group = 1usize << (finest - order);
+        let parts = 1usize << order;
         let mut parameters = Vec::with_capacity(parts);
         let mut payload = 0usize;
-        let mut start = 0usize;
         for p in 0..parts {
-            let end = if p == 0 { size - predictor_order } else { start + size };
-            let part = &coded[start..end];
-            let (k, bits) = best_parameter(part);
-            parameters.push(k);
-            payload += bits;
-            start = end;
+            let fine = p * group..(p + 1) * group;
+            let len = spans[fine.end - 1].1 - spans[fine.start].0;
+            let g = guess(plain_sums[fine.clone()].iter().sum(), len);
+            let mut choice = (0u32, usize::MAX);
+            for k in g.saturating_sub(2)..=(g + 1).min(30) {
+                let shifted: u64 = fine.clone().map(|f| shifted_sums[f][(k - lowest) as usize]).sum();
+                let bits = shifted as usize + len * (1 + k as usize);
+                if bits < choice.1 {
+                    choice = (k, bits);
+                }
+            }
+            parameters.push(choice.0);
+            payload += choice.1;
         }
         let wide = parameters.iter().any(|&k| k > 14);
         let bits = 2 + 4 + parts * (4 + usize::from(wide)) + payload;
@@ -102,21 +188,6 @@ fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize) -> Rice
         }
     }
     best.expect("partition order 0 always fits")
-}
-
-/// Rice parameter minimising the size of `values` and that size in bits.
-fn best_parameter(values: &[u64]) -> (u32, usize) {
-    let sum: u64 = values.iter().sum();
-    let mean = sum / values.len().max(1) as u64;
-    let guess = 64 - mean.leading_zeros(); // about log2 of the mean
-    let mut best = (0u32, usize::MAX);
-    for k in guess.saturating_sub(2)..=(guess + 1).min(30) {
-        let bits: usize = values.iter().map(|&v| (v >> k) as usize + 1 + k as usize).sum();
-        if bits < best.1 {
-            best = (k, bits);
-        }
-    }
-    best
 }
 
 fn write_rice(w: &mut BitWriter, residual: &[i32], predictor_order: usize, block_len: usize, coding: &RiceCoding) {
@@ -168,7 +239,7 @@ struct Subframe {
 
 /// Codes one channel with the smallest predictor. `sample_bits` is the sample width of this channel (one more for the
 /// side channel of a stereo pair).
-fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
+fn code_channel(samples: &[i32], sample_bits: u32, search: Search) -> Subframe {
     let n = samples.len();
     let or_all = samples.iter().fold(0i32, |a, &s| a | s);
     if or_all == 0 {
@@ -201,9 +272,9 @@ fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
         return best;
     }
     // fixed polynomial predictors
-    for order in 0..=4usize.min(n.saturating_sub(1)) {
+    for order in 0..=search.fixed_max.min(n.saturating_sub(1)) {
         let residual = fixed_residual(&x, order);
-        let rice = rice_code(&residual, order, n);
+        let rice = rice_code(&residual, order, n, search.max_partition);
         let bits = header + order * bps as usize + rice.bits;
         if bits < best.bits {
             best = Subframe {
@@ -219,9 +290,9 @@ fn code_channel(samples: &[i32], sample_bits: u32) -> Subframe {
     }
     // linear predictors fitted to this block
     if n >= 64 {
-        for (order, coefficients, shift) in fit_linear(&x) {
+        for (order, coefficients, shift) in fit_linear(&x, search) {
             let residual = linear_residual(&x, &coefficients, shift);
-            let rice = rice_code(&residual, order, n);
+            let rice = rice_code(&residual, order, n, search.max_partition);
             let bits = header + 4 + 5 + order * LPC_PRECISION as usize + order * bps as usize + rice.bits;
             if bits < best.bits {
                 best = Subframe {
@@ -269,10 +340,11 @@ fn linear_residual(x: &[i32], coefficients: &[i32], shift: u32) -> Vec<i32> {
         .collect()
 }
 
-/// Linear predictors of the orders in `LPC_ORDERS`: the block is windowed, its autocorrelation is turned into
+/// Linear predictors of the orders in `search.lpc_orders`: the block is windowed, its autocorrelation is turned into
 /// predictor coefficients with the Levinson-Durbin recursion, and the coefficients are rounded to integers with a
 /// common shift. Returns (order, coefficients, shift) for each.
-fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
+fn fit_linear(x: &[i32], search: Search) -> Vec<(usize, Vec<i32>, u32)> {
+    let top = search.top_order();
     let n = x.len();
     // Tukey window (flat in the middle, cosine ramps over the outer quarter at each end)
     let ramp = (n / 4).max(1);
@@ -289,9 +361,15 @@ fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
             s as f64 * w
         })
         .collect();
-    let mut autocorrelation = [0f64; MAX_LPC_ORDER + 1];
-    for (lag, a) in autocorrelation.iter_mut().enumerate() {
-        *a = windowed[lag..].iter().zip(&windowed).map(|(p, q)| p * q).sum();
+    // every lag in one pass (each lag still adds its products in time order); the reversed copy puts the earlier
+    // samples of one position side by side, so the inner loop is a plain vector multiply-add
+    let reversed: Vec<f64> = windowed.iter().rev().copied().collect();
+    let mut autocorrelation = vec![0f64; top + 1];
+    for (j, w) in windowed.iter().enumerate() {
+        let lags = j.min(top);
+        for (slot, earlier) in autocorrelation[..=lags].iter_mut().zip(&reversed[n - 1 - j..]) {
+            *slot += w * earlier;
+        }
     }
     if autocorrelation[0] <= 0.0 {
         return Vec::new();
@@ -302,7 +380,7 @@ fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
     let mut sets: Vec<Vec<f64>> = vec![Vec::new()];
     let mut current: Vec<f64> = Vec::new();
     let mut error = autocorrelation[0];
-    for order in 1..=MAX_LPC_ORDER {
+    for order in 1..=top {
         let acc: f64 = autocorrelation[order]
             - current
                 .iter()
@@ -322,7 +400,8 @@ fn fit_linear(x: &[i32]) -> Vec<(usize, Vec<i32>, u32)> {
             break;
         }
     }
-    LPC_ORDERS
+    search
+        .lpc_orders
         .iter()
         .filter(|&&order| order < sets.len() && order < n)
         .map(|&order| {
@@ -408,14 +487,14 @@ enum Assignment {
 }
 
 /// A frame (all channels of one block) as bytes.
-fn encode_frame(channels: &[Vec<i32>], bits: u32, frame_number: u64, block_size_code: u8) -> Vec<u8> {
+fn encode_frame(channels: &[Vec<i32>], bits: u32, frame_number: u64, block_size_code: u8, search: Search) -> Vec<u8> {
     let n = channels[0].len();
     let (assignment, subframes) = if channels.len() == 2 {
-        choose_stereo(&channels[0], &channels[1], bits)
+        choose_stereo(&channels[0], &channels[1], bits, search)
     } else {
         (
             Assignment::Independent,
-            channels.iter().map(|c| code_channel(c, bits)).collect(),
+            channels.iter().map(|c| code_channel(c, bits, search)).collect(),
         )
     };
     let mut w = BitWriter::default();
@@ -451,24 +530,29 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32, frame_number: u64, block_size_
 }
 
 /// Codes a stereo block as left/right, left/side, right/side or mid/side, whichever is smallest.
-fn choose_stereo(left: &[i32], right: &[i32], bits: u32) -> (Assignment, Vec<Subframe>) {
+fn choose_stereo(left: &[i32], right: &[i32], bits: u32, search: Search) -> (Assignment, Vec<Subframe>) {
     let side: Vec<i32> = left.iter().zip(right).map(|(l, r)| l - r).collect();
     let mid: Vec<i32> = left
         .iter()
         .zip(right)
         .map(|(l, r)| ((*l as i64 + *r as i64) >> 1) as i32)
         .collect();
-    let l = code_channel(left, bits);
-    let r = code_channel(right, bits);
-    let s = code_channel(&side, bits + 1);
-    let m = code_channel(&mid, bits);
-    let options = [
-        (Assignment::Independent, l.bits + r.bits),
-        (Assignment::LeftSide, l.bits + s.bits),
-        (Assignment::RightSide, s.bits + r.bits),
-        (Assignment::MidSide, m.bits + s.bits),
-    ];
-    let (assignment, _) = options.iter().copied().min_by_key(|&(_, b)| b).unwrap();
+    if !search.all_stereo {
+        let (assignment, _) = stereo_options(roughness(left), roughness(right), roughness(&side), roughness(&mid));
+        let code = |x: &[i32], extra: u32| code_channel(x, bits + extra, search);
+        let subframes = match assignment {
+            Assignment::Independent => vec![code(left, 0), code(right, 0)],
+            Assignment::LeftSide => vec![code(left, 0), code(&side, 1)],
+            Assignment::RightSide => vec![code(&side, 1), code(right, 0)],
+            Assignment::MidSide => vec![code(&mid, 0), code(&side, 1)],
+        };
+        return (assignment, subframes);
+    }
+    let l = code_channel(left, bits, search);
+    let r = code_channel(right, bits, search);
+    let s = code_channel(&side, bits + 1, search);
+    let m = code_channel(&mid, bits, search);
+    let (assignment, _) = stereo_options(l.bits, r.bits, s.bits, m.bits);
     let subframes = match assignment {
         Assignment::Independent => vec![l, r],
         Assignment::LeftSide => vec![l, s],
@@ -478,7 +562,19 @@ fn choose_stereo(left: &[i32], right: &[i32], bits: u32) -> (Assignment, Vec<Sub
     (assignment, subframes)
 }
 
-/// FLAC numbers frames with a UTF-8 style variable-length code.
+/// The cheapest of the four ways to code a pair, given a cost for each of left, right, side and mid.
+fn stereo_options(left: usize, right: usize, side: usize, mid: usize) -> (Assignment, usize) {
+    [
+        (Assignment::Independent, left + right),
+        (Assignment::LeftSide, left + side),
+        (Assignment::RightSide, side + right),
+        (Assignment::MidSide, mid + side),
+    ]
+    .into_iter()
+    .min_by_key(|&(_, b)| b)
+    .unwrap()
+}
+
 fn put_utf8_number(w: &mut BitWriter, value: u64) {
     if value < 0x80 {
         w.put(value, 8);
@@ -631,24 +727,25 @@ impl FlacWriter {
         Some(c)
     }
 
-    /// Encodes a batch of frames side by side, then writes them in order.
+    /// Feeds the checksum with the blocks and, meanwhile, encodes them side by side; then writes them in order.
     fn write_frames(&mut self, blocks: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
-        let (size, size_code, bits, first) = (self.block_size, self.block_size_code, self.bits, self.next_frame);
-        let frames: Vec<Vec<u8>> = blocks
-            .par_iter()
-            .enumerate()
-            .map(|(i, block)| {
-                let n = block[0].len();
-                let code = if n == size {
-                    size_code
-                } else if n <= 256 {
-                    6
-                } else {
-                    7
-                };
-                encode_frame(block, bits, first + i as u64, code)
-            })
-            .collect();
+        let bits = self.bits;
+        let framing = Framing {
+            size: self.block_size,
+            size_code: self.block_size_code,
+            bits,
+            first: self.next_frame,
+            search: Search::for_effort(self.params.effort),
+        };
+        let md5 = &mut self.md5;
+        let (_, frames) = rayon::join(
+            || {
+                for block in blocks {
+                    update_md5(md5, bits, block);
+                }
+            },
+            || encode_blocks(blocks, framing),
+        );
         for (block, frame) in blocks.iter().zip(frames) {
             self.store_frame(frame, block[0].len())?;
         }
@@ -666,18 +763,55 @@ impl FlacWriter {
             Sink::Ogg(ogg) => ogg.packet(&frame, self.samples_done),
         }
     }
+}
 
-    /// Feeds the checksum with the samples as a decoder would output them: interleaved little-endian integers.
-    fn update_md5(&mut self, block: &[Vec<i32>]) {
-        let width = (self.bits / 8) as usize;
-        let mut raw = Vec::with_capacity(block[0].len() * block.len() * width);
-        for i in 0..block[0].len() {
-            for channel in block {
-                raw.extend_from_slice(&channel[i].to_le_bytes()[..width]);
-            }
+/// What encoding a batch of blocks needs to know about the stream.
+#[derive(Clone, Copy)]
+struct Framing {
+    size: usize,
+    size_code: u8,
+    bits: u32,
+    /// Number of the first frame of the batch.
+    first: u64,
+    search: Search,
+}
+
+/// The frames for a batch of blocks, encoded side by side.
+fn encode_blocks(blocks: &[Vec<Vec<i32>>], framing: Framing) -> Vec<Vec<u8>> {
+    let Framing {
+        size,
+        size_code,
+        bits,
+        first,
+        search,
+    } = framing;
+    blocks
+        .par_iter()
+        .enumerate()
+        .map(|(i, block)| {
+            let n = block[0].len();
+            let code = if n == size {
+                size_code
+            } else if n <= 256 {
+                6
+            } else {
+                7
+            };
+            encode_frame(block, bits, first + i as u64, code, search)
+        })
+        .collect()
+}
+
+/// Feeds the checksum with the samples as a decoder would output them: interleaved little-endian integers.
+fn update_md5(md5: &mut md5::Context, bits: u32, block: &[Vec<i32>]) {
+    let width = (bits / 8) as usize;
+    let mut raw = Vec::with_capacity(block[0].len() * block.len() * width);
+    for i in 0..block[0].len() {
+        for channel in block {
+            raw.extend_from_slice(&channel[i].to_le_bytes()[..width]);
         }
-        self.md5.consume(&raw);
     }
+    md5.consume(&raw);
 }
 
 impl BlockWriter for FlacWriter {
@@ -687,16 +821,12 @@ impl BlockWriter for FlacWriter {
             pending.extend(new);
         }
         let blocks = take_frames(&mut self.pending, self.block_size, 1);
-        for block in &blocks {
-            self.update_md5(block);
-        }
         self.write_frames(&blocks)
     }
 
     fn finish(mut self: Box<Self>) -> std::io::Result<u64> {
         if !self.pending[0].is_empty() {
             let block: Vec<Vec<i32>> = self.pending.iter_mut().map(std::mem::take).collect();
-            self.update_md5(&block);
             self.write_frames(&[block])?;
         }
         // now the totals are known: STREAMINFO is rewritten
@@ -789,7 +919,7 @@ mod tests {
     #[test]
     fn rice_roundtrip_size() {
         let residual: Vec<i32> = (0..256).map(|i| ((i * 37) % 11) as i32 - 5).collect();
-        let coding = rice_code(&residual, 0, 256);
+        let coding = rice_code(&residual, 0, 256, 8);
         let mut w = BitWriter::default();
         write_rice(&mut w, &residual, 0, 256, &coding);
         w.align();

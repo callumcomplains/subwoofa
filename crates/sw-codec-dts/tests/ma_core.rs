@@ -67,6 +67,7 @@ fn core_roundtrip_dm(name: &str, layout_id: &str, rate: u32, frames: usize, bit_
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout_with(layout, &downmix);
     let mut enc = MaCoreEncoder::new(MaCoreConfig {
+        effort: Default::default(),
         layout,
         sample_rate: rate,
         bit_res,
@@ -199,6 +200,7 @@ fn seven_one_embedded_five_one_downmix() {
     let map = map_layout(layout);
     let frames = 16;
     let mut enc = MaCoreEncoder::new(MaCoreConfig {
+        effort: Default::default(),
         layout,
         sample_rate: 48_000,
         bit_res: 24,

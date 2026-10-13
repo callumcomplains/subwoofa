@@ -11,7 +11,7 @@
 
 use crate::bitwriter::BitWriter;
 use crate::mp4_audio::{self, atom};
-use crate::{take_frames, to_integers, BlockWriter, Params, SampleFormat};
+use crate::{roughness, take_frames, to_integers, BlockWriter, Params, SampleFormat};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -29,7 +29,33 @@ const RICE_MODIFIER: u32 = 4;
 /// Fractional bits of the predictor coefficients.
 const PREDICTOR_SHIFT: u32 = 9;
 /// Predictor orders tried for each channel (0 = no prediction).
-const PREDICTOR_ORDERS: [usize; 4] = [0, 4, 8, 16];
+/// What the encoder tries for each frame. More of each takes longer and saves a little.
+#[derive(Clone, Copy)]
+struct Search {
+    /// Predictor orders tried for each channel (0 is no prediction).
+    orders: &'static [usize],
+    /// Code a stereo pair every way and keep the smallest; otherwise pick the way that looks best from the signals.
+    all_stereo: bool,
+}
+
+impl Search {
+    fn for_effort(effort: sw_core::Effort) -> Search {
+        match effort {
+            sw_core::Effort::Best => Search {
+                orders: &[0, 4, 8, 16],
+                all_stereo: true,
+            },
+            sw_core::Effort::Balanced => Search {
+                orders: &[4, 8, 16],
+                all_stereo: false,
+            },
+            sw_core::Effort::Fast => Search {
+                orders: &[8],
+                all_stereo: false,
+            },
+        }
+    }
+}
 
 /// Syntax element kinds in the frame.
 const ELEMENT_SINGLE: u32 = 0;
@@ -210,7 +236,7 @@ fn fit_coefficients(samples: &[i32], order: usize) -> Option<Vec<i32>> {
     if n < order * 4 + 8 {
         return None;
     }
-    let mut a = vec![vec![0f64; order]; order];
+    let mut flat = vec![0f64; order * order];
     let mut b = vec![0f64; order];
     let mut e = vec![0f64; order];
     for i in order + 1..n {
@@ -221,11 +247,12 @@ fn fit_coefficients(samples: &[i32], order: usize) -> Option<Vec<i32>> {
         let d = samples[i] as f64 - top;
         for p in 0..order {
             b[p] += e[p] * d;
-            for q in p..order {
-                a[p][q] += e[p] * e[q];
+            for (acc, eq) in flat[p * order + p..(p + 1) * order].iter_mut().zip(&e[p..]) {
+                *acc += e[p] * eq;
             }
         }
     }
+    let mut a: Vec<Vec<f64>> = flat.chunks_exact(order).map(|row| row.to_vec()).collect();
     for p in 0..order {
         for q in 0..p {
             a[p][q] = a[q][p];
@@ -378,7 +405,15 @@ fn stereo_variants(left: &[i32], right: &[i32]) -> Vec<(Stereo, Vec<i32>, Vec<i3
 // frames
 
 /// Writes one element (a single channel or a pair) of a frame.
-fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]], bits: u32, verbatim: bool) {
+fn write_element(
+    w: &mut BitWriter,
+    kind: u32,
+    instance: u32,
+    channels: &[&[i32]],
+    bits: u32,
+    verbatim: bool,
+    search: Search,
+) {
     let n = channels[0].len();
     let extra_bits = if verbatim { 0 } else { bits.saturating_sub(16) };
     w.put(kind as u64, 3);
@@ -408,12 +443,17 @@ fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]
         .map(|c| c.iter().map(|v| v >> extra_bits).collect())
         .collect();
     let (stereo, coded): (Stereo, Vec<Vec<i32>>) = if channels.len() == 2 {
-        // try every way of storing the pair with a quick predictor, keep the smallest
+        // try every way of storing the pair with a quick predictor (or judge them by how rough they are), keep
+        // the smallest
         let mut best: Option<(usize, Stereo, Vec<Vec<i32>>)> = None;
         for (s, l, r) in stereo_variants(&high[0], &high[1]) {
-            let cost = best_prediction(&l, width, &[8])
-                .bits
-                .saturating_add(best_prediction(&r, width, &[8]).bits);
+            let cost = if search.all_stereo {
+                best_prediction(&l, width, &[8])
+                    .bits
+                    .saturating_add(best_prediction(&r, width, &[8]).bits)
+            } else {
+                roughness(&l) + roughness(&r)
+            };
             if best.as_ref().map_or(true, |b| cost < b.0) {
                 best = Some((cost, s, vec![l, r]));
             }
@@ -425,10 +465,7 @@ fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]
     };
     w.put(stereo.shift as u64, 8);
     w.put(stereo.left_weight as u64, 8);
-    let predictions: Vec<Predicted> = coded
-        .iter()
-        .map(|c| best_prediction(c, width, &PREDICTOR_ORDERS))
-        .collect();
+    let predictions: Vec<Predicted> = coded.iter().map(|c| best_prediction(c, width, search.orders)).collect();
     for p in &predictions {
         w.put(0, 4); // prediction type
         w.put(PREDICTOR_SHIFT as u64, 4);
@@ -452,7 +489,7 @@ fn write_element(w: &mut BitWriter, kind: u32, instance: u32, channels: &[&[i32]
 }
 
 /// A whole frame (all elements) as bytes.
-fn encode_frame(channels: &[Vec<i32>], bits: u32) -> Vec<u8> {
+fn encode_frame(channels: &[Vec<i32>], bits: u32, search: Search) -> Vec<u8> {
     let n = channels[0].len();
     let max_bytes = {
         let header_bits = 23 + 32 * usize::from(n < FRAME_SAMPLES);
@@ -463,11 +500,19 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32) -> Vec<u8> {
         let (mut singles, mut pairs, mut ch) = (0u32, 0u32, 0usize);
         for &kind in elements_for(channels.len()) {
             if kind == ELEMENT_PAIR {
-                write_element(&mut w, kind, pairs, &[&channels[ch], &channels[ch + 1]], bits, verbatim);
+                write_element(
+                    &mut w,
+                    kind,
+                    pairs,
+                    &[&channels[ch], &channels[ch + 1]],
+                    bits,
+                    verbatim,
+                    search,
+                );
                 pairs += 1;
                 ch += 2;
             } else {
-                write_element(&mut w, kind, singles, &[&channels[ch]], bits, verbatim);
+                write_element(&mut w, kind, singles, &[&channels[ch]], bits, verbatim, search);
                 singles += 1;
                 ch += 1;
             }
@@ -525,7 +570,11 @@ impl AlacWriter {
     /// Encodes a batch of frames side by side, then writes them in order.
     fn write_frames(&mut self, blocks: &[Vec<Vec<i32>>]) -> std::io::Result<()> {
         let bits = self.bits;
-        let frames: Vec<Vec<u8>> = blocks.par_iter().map(|block| encode_frame(block, bits)).collect();
+        let search = Search::for_effort(self.params.effort);
+        let frames: Vec<Vec<u8>> = blocks
+            .par_iter()
+            .map(|block| encode_frame(block, bits, search))
+            .collect();
         for (block, bytes) in blocks.iter().zip(frames) {
             self.frame_sizes.push(bytes.len() as u32);
             self.samples_done += block[0].len() as u64;

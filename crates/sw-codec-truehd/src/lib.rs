@@ -137,6 +137,8 @@ pub struct Config {
     pub downmix: Option<Downmix>,
     /// Predict each channel from the lower-numbered ones with per-interval matrices (lossless).
     pub decorrelate: bool,
+    /// How many predictor families the analysis tries.
+    pub effort: sw_core::Effort,
     /// Write MLP (DVD-Audio style) instead of TrueHD: one substream, no downmix, up to 6 channels.
     pub mlp: Option<Mlp>,
 }
@@ -325,16 +327,24 @@ struct Substream {
     matrices: Vec<MatrixSpec>,
 }
 
+/// One restart interval of input for `Encoder::encode_intervals`: the samples per coded channel (at least as long as
+/// the interval), how many of them are real, and whether it ends the stream.
+#[derive(Clone, Copy)]
+pub struct Interval<'a> {
+    pub chans: &'a [Vec<i32>],
+    pub valid: usize,
+    pub last: bool,
+}
+
 pub struct Encoder {
     cfg: Config,
     au: usize,
     subs: Vec<Substream>,
     rate_code: u32,
-    input_timing: u16,
-    output_timing: u16,
-    /// Running XOR over output samples since the last restart, per substream.
+    /// Access units written so far; the timing fields of the next one follow from it.
+    aus_done: usize,
+    /// Running XOR over output samples of the last interval written, per substream.
     lossless: Vec<u32>,
-    sync_count: usize,
     /// Stereo-presentation samples that exceed 24 bits (a stereo-only decoder would wrap or clip them).
     pub downmix_overflows: u64,
 }
@@ -467,10 +477,8 @@ impl Encoder {
             au,
             subs,
             rate_code,
-            input_timing: (0u16).wrapping_sub(au as u16),
-            output_timing: 0,
+            aus_done: 0,
             lossless: vec![0; nsub],
-            sync_count: 0,
             downmix_overflows: 0,
             cfg,
         })
@@ -616,6 +624,63 @@ impl Encoder {
     /// each at least `valid.div_ceil(au) * au` samples long (zero padded). `valid` is the number of
     /// real samples; if `last` the final access unit is trimmed back to it on decode.
     pub fn encode_interval(&mut self, chans: &[Vec<i32>], valid: usize, last: bool) -> Vec<u8> {
+        let interval = Interval { chans, valid, last };
+        self.encode_intervals(std::slice::from_ref(&interval)).pop().unwrap()
+    }
+
+    /// Encodes consecutive restart intervals together. Each one starts the decoder afresh, so what it needs from
+    /// the ones before it is only where its access units sit in time and a checksum of the previous interval's
+    /// samples; both are known from the input. The intervals are coded on all cores, and the bytes are the same
+    /// as encoding them one at a time.
+    pub fn encode_intervals(&mut self, intervals: &[Interval]) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        let au = self.au;
+        let mut starts = Vec::with_capacity(intervals.len());
+        let mut checks = Vec::with_capacity(intervals.len());
+        let (mut aus, mut check) = (self.aus_done, self.lossless.clone());
+        for iv in intervals {
+            starts.push(aus);
+            checks.push(check.clone());
+            check = self.samples_check(iv.chans, iv.valid.div_ceil(au).max(1) * au);
+            aus += iv.valid.div_ceil(au).max(1);
+        }
+        let me = &*self;
+        let done: Vec<(Vec<u8>, u64)> = intervals
+            .par_iter()
+            .zip(starts.par_iter().zip(checks.par_iter()))
+            .map(|(iv, (&first_au, check))| me.interval(iv, first_au, check))
+            .collect();
+        self.aus_done = aus;
+        self.lossless = check;
+        done.into_iter()
+            .map(|(bytes, overflows)| {
+                self.downmix_overflows += overflows;
+                bytes
+            })
+            .collect()
+    }
+
+    /// The running XOR of the output samples of an interval, per substream (what the next restart header repeats).
+    fn samples_check(&self, chans: &[Vec<i32>], n: usize) -> Vec<u32> {
+        self.subs
+            .iter()
+            .map(|sub| {
+                let mut x = 0u32;
+                for ch in 0..=sub.max {
+                    for v in &chans[ch][..n] {
+                        x ^= ((*v as u32) & 0xFF_FFFF) << ch;
+                    }
+                }
+                x
+            })
+            .collect()
+    }
+
+    /// One restart interval as access units, and how many of its stereo-presentation samples overflow 24 bits.
+    /// `first_au` counts the access units before it; `check` is `samples_check` of the interval before.
+    fn interval(&self, iv: &Interval, first_au: usize, check: &[u32]) -> (Vec<u8>, u64) {
+        let Interval { chans, valid, last } = *iv;
+        let mut downmix_overflows = 0u64;
         assert_eq!(chans.len(), self.cfg.channels);
         let au = self.au;
         let n_au = valid.div_ceil(au).max(1);
@@ -661,7 +726,7 @@ impl Encoder {
         });
         let coded: &[Vec<i32>] = coded_store.as_deref().unwrap_or(chans);
         if self.cfg.downmix.is_some() {
-            self.downmix_overflows += coded[0][..n]
+            downmix_overflows += coded[0][..n]
                 .iter()
                 .chain(coded[1][..n].iter())
                 .filter(|v| v.unsigned_abs() >= 1 << 23)
@@ -697,7 +762,8 @@ impl Encoder {
             .collect();
 
         // 1. analysis: per channel quantizer step, predictor and residual
-        let decorrelate = self.cfg.decorrelate;
+        let decorrelate = self.cfg.decorrelate && self.cfg.effort != sw_core::Effort::Fast;
+        let tools = Tools::for_effort(self.cfg.effort);
         let both: Vec<(ChannelAnalysis, Option<(ChannelAnalysis, usize)>)> = {
             use rayon::prelude::*;
             (0..self.cfg.channels)
@@ -705,7 +771,7 @@ impl Encoder {
                 .map(|c| {
                     let forced = forced_q[c];
                     let allow = decorrelate && !(coarse && (c == 0 || (c == 1 && !unity)));
-                    analyze_with_prediction(coded, c, n, au, forced, allow)
+                    analyze_with_prediction(coded, c, n, au, forced, allow, tools)
                 })
                 .collect()
         };
@@ -780,10 +846,8 @@ impl Encoder {
         let mut out = Vec::new();
         let mut states: Vec<DecState> = vec![DecState::restart(); self.subs.len()];
         // restart header values, taken before this interval's samples accumulate
-        let check_for_header: Vec<u8> = self.lossless.iter().map(|v| fold32(*v)).collect();
-        for l in &mut self.lossless {
-            *l = 0;
-        }
+        let check_for_header: Vec<u8> = check.iter().map(|v| fold32(*v)).collect();
+        let au_timing = |k: usize| (k * au) as u16;
         let max_bits: u32 = chans
             .iter()
             .flat_map(|c| c[..n].iter())
@@ -808,18 +872,12 @@ impl Encoder {
                     restart,
                     is_last_au.then_some(shorten),
                     self.cfg.mlp.is_some(),
-                    self.output_timing,
+                    au_timing(first_au + a),
                     check_for_header[si],
                     max_bits,
                     &bypass,
                 );
                 sub_data.push(data);
-                // accumulate the lossless check over this AU
-                for ch in 0..=sub.max {
-                    for i in a * au..(a + 1) * au {
-                        self.lossless[si] ^= ((chans[ch][i] as u32) & 0xFF_FFFF) << ch;
-                    }
-                }
             }
 
             // access unit assembly
@@ -836,7 +894,7 @@ impl Encoder {
             }
             let total_len = 4 + body.len() + sub_headers.len() + end;
             let words = (total_len / 2) as u16;
-            let timing = self.input_timing;
+            let timing = au_timing(first_au + a).wrapping_sub(au as u16);
             let mut head = [0u8; 4];
             head[0] = (words >> 8) as u8 & 0x0F;
             head[1] = words as u8;
@@ -851,12 +909,8 @@ impl Encoder {
             for d in sub_data {
                 out.extend_from_slice(&d);
             }
-
-            self.input_timing = self.input_timing.wrapping_add(au as u16);
-            self.output_timing = self.output_timing.wrapping_add(au as u16);
         }
-        self.sync_count += 1;
-        out
+        (out, downmix_overflows)
     }
 }
 
@@ -938,7 +992,28 @@ struct ChannelAnalysis {
     codings: Vec<Vec<Coding>>,
 }
 
-fn analyze_channel(x: &[i32], au: usize, quant: u8) -> ChannelAnalysis {
+/// The predictor families the analysis of a channel tries. The plain LPC filters and the covariance-method LPC
+/// are always tried; these two cost most of the time and pay least. Measured on film and music at 48 and 96 kHz,
+/// leaving both out makes files 0.0% to 0.6% larger and the analysis 3 to 4 times faster.
+#[derive(Clone, Copy)]
+struct Tools {
+    /// LPC behind a fixed two-pole filter, which helps band-limited high-rate material (up to 0.6%).
+    fixed_iir: bool,
+    /// LPC with a short moving-average stage fitted to its residual (under 0.1%).
+    moving_average: bool,
+}
+
+impl Tools {
+    fn for_effort(effort: sw_core::Effort) -> Tools {
+        let all = effort == sw_core::Effort::Best;
+        Tools {
+            fixed_iir: all,
+            moving_average: all,
+        }
+    }
+}
+
+fn analyze_channel(x: &[i32], au: usize, quant: u8, tools: Tools) -> ChannelAnalysis {
     let n = x.len();
     let mask = !((1i32 << quant) - 1);
 
@@ -975,7 +1050,7 @@ fn analyze_channel(x: &[i32], au: usize, quant: u8) -> ChannelAnalysis {
         }
         // Fixed two-tap IIR stages (poles close to the unit circle) boost the empty top of the spectrum of
         // band-limited high-rate material; the FIR then only has to deal with the rest.
-        for &(b1, b2) in FIXED_IIR {
+        for &(b1, b2) in FIXED_IIR.iter().filter(|_| tools.fixed_iir) {
             let mut w = vec![0f64; xs.len()];
             for i in 0..xs.len() {
                 let mut v = xs[i];
@@ -1006,7 +1081,10 @@ fn analyze_channel(x: &[i32], au: usize, quant: u8) -> ChannelAnalysis {
                 }
             }
         }
-        for &(p, q) in &[(6usize, 2usize), (4, 4), (5, 2)] {
+        for &(p, q) in [(6usize, 2usize), (4, 4), (5, 2)]
+            .iter()
+            .filter(|_| tools.moving_average)
+        {
             let coef = &lpcs[p];
             // residual of the float FIR, then a moving-average fit on it
             let r1: Vec<f64> = (0..xs.len())
@@ -1072,6 +1150,7 @@ fn analyze_with_prediction(
     au: usize,
     forced: Option<u8>,
     decorrelate: bool,
+    tools: Tools,
 ) -> (ChannelAnalysis, Option<(ChannelAnalysis, usize)>) {
     let x = &coded[c][..n];
     let or_all = x.iter().fold(0i32, |a, v| a | v);
@@ -1080,7 +1159,7 @@ fn analyze_with_prediction(
         None if or_all == 0 => 0,
         None => (or_all.trailing_zeros() as u8).min(15),
     };
-    let base = analyze_channel(x, au, quant);
+    let base = analyze_channel(x, au, quant, tools);
     if !decorrelate || c == 0 || or_all == 0 || n < 256 {
         return (base, None);
     }
@@ -1112,7 +1191,7 @@ fn analyze_with_prediction(
         }
         res.push(r);
     }
-    let mut with = analyze_channel(&res, au, quant);
+    let mut with = analyze_channel(&res, au, quant, tools);
     let side_cost = 17 * (c + 1) + 40;
     let (b0, b1) = (analysis_bits(&base), analysis_bits(&with) + side_cost);
     if b1 < b0 {

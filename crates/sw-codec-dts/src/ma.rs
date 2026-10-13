@@ -660,6 +660,7 @@ pub struct MaConfig {
     pub wide_remap: bool,
     /// Representation type for matrix-encoded stereo (2) instead of speakers.
     pub repr_type: Option<u32>,
+    pub effort: sw_core::Effort,
 }
 
 pub struct MaEncoder {
@@ -691,6 +692,7 @@ impl MaEncoder {
             bit_res: cfg.bit_res,
             frame_samples,
             sets: cfg.map.xll_sets(false),
+            effort: cfg.effort,
         });
         MaEncoder {
             cfg,

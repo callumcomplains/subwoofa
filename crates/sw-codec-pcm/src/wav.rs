@@ -158,6 +158,7 @@ mod tests {
 
     fn params(frames: u64) -> Params {
         Params {
+            effort: Default::default(),
             rate: 48_000,
             format: SampleFormat::Int24,
             total_frames: frames,

@@ -27,6 +27,8 @@ pub struct MaCoreConfig {
     pub wide_remap: bool,
     /// The Downmix tab (embedded stereo set, levels of the folds into 5.1).
     pub downmix: Downmix,
+    /// How hard the lossless stage searches.
+    pub effort: sw_core::Effort,
 }
 
 /// Half-length of the decimator (linear phase, Kaiser window, `2 * half + 1` taps) for a rate ratio of 2 or 4.
@@ -110,9 +112,9 @@ pub struct MaCoreEncoder {
     /// Whole samples (at the source rate) of decimation phase; the fraction lives in the filter taps.
     phase: usize,
     emitted: usize,
-    t_core: std::time::Duration,
-    /// Lossless stage of the previous batch of frames, running while the next batch is core-encoded.
-    pending: Option<std::thread::JoinHandle<Vec<Vec<u8>>>>,
+    /// The previous batch of frames, waiting for its lossless stage, which runs while the next batch is
+    /// core-encoded.
+    pending: Option<Vec<Job>>,
     /// Source samples already discarded from the front of `buf`.
     dropped: usize,
     xll_cfg: XllConfig,
@@ -226,6 +228,7 @@ impl MaCoreEncoder {
             bit_res: cfg.bit_res,
             frame_samples: n,
             sets: xmap.xll_sets(true),
+            effort: cfg.effort,
         };
         let exss = ExssParams {
             sample_rate: cfg.sample_rate,
@@ -311,7 +314,6 @@ impl MaCoreEncoder {
             l48,
             phase,
             emitted: 0,
-            t_core: std::time::Duration::ZERO,
             pending: None,
             dropped: 0,
             xll_cfg,
@@ -343,11 +345,10 @@ impl MaCoreEncoder {
         for (b, f) in self.buf.iter_mut().zip(&sent) {
             b.extend_from_slice(f);
         }
-        let mut jobs = Vec::new();
-        while self.buf[0].len() >= (self.emitted + 1) * self.n + self.lookahead - self.dropped {
-            jobs.push(self.core_stage());
-        }
-        self.finish_jobs(jobs)
+        // every frame whose samples (and the look-ahead behind them) have arrived
+        let arrived = self.buf[0].len() + self.dropped;
+        let ready = (arrived.saturating_sub(self.lookahead) / self.n).saturating_sub(self.emitted);
+        self.next_batch(ready)
     }
 
     /// Flush: pad with silence so every pushed sample is covered by an emitted frame.
@@ -358,34 +359,28 @@ impl MaCoreEncoder {
         for b in self.buf.iter_mut().chain(self.cbuf.iter_mut()) {
             b.resize(want.max(b.len()), 0);
         }
-        let mut jobs = Vec::new();
-        while self.emitted < frames {
-            jobs.push(self.core_stage());
-        }
-        let mut out = self.finish_jobs(jobs);
+        let mut out = self.next_batch(frames.saturating_sub(self.emitted));
         out.extend(self.flush_pending());
         out
     }
 
-    /// Hand the lossless stage of a batch of frames to the worker pool and return the frames of the previous
-    /// batch (which ran meanwhile); `finish` collects the last batch.
-    fn finish_jobs(&mut self, jobs: Vec<Job>) -> Vec<Vec<u8>> {
-        if jobs.is_empty() {
-            return Vec::new();
-        }
-        let cfg = self.xll_cfg.clone();
-        let exss = self.exss.clone();
-        let handle = std::thread::spawn(move || xll_stage(jobs, cfg, exss));
-        match self.pending.replace(handle) {
-            Some(prev) => prev.join().expect("lossless worker panicked"),
-            None => Vec::new(),
-        }
+    /// Core-encodes the next `count` frames while the lossless stage runs on the batch before them, and returns
+    /// the finished frames of that earlier batch (`finish` collects the last one).
+    fn next_batch(&mut self, count: usize) -> Vec<Vec<u8>> {
+        let (cfg, exss) = (self.xll_cfg.clone(), self.exss.clone());
+        let earlier = self.pending.take();
+        let (done, jobs) = rayon::join(
+            move || earlier.map(|jobs| xll_stage(jobs, cfg, exss)).unwrap_or_default(),
+            || self.core_stages(count),
+        );
+        self.pending = (!jobs.is_empty()).then_some(jobs);
+        done
     }
 
     fn flush_pending(&mut self) -> Vec<Vec<u8>> {
         self.pending
             .take()
-            .map(|h| h.join().expect("lossless worker panicked"))
+            .map(|jobs| xll_stage(jobs, self.xll_cfg.clone(), self.exss.clone()))
             .unwrap_or_default()
     }
 
@@ -506,27 +501,41 @@ impl MaCoreEncoder {
         out
     }
 
-    /// Core encoding of the next frame and its residual (sequential: the decoder state carries over).
-    fn core_stage(&mut self) -> Job {
-        let n = self.n;
-        let start = self.emitted * n - self.dropped;
-        let nch = self.buf.len();
-        let ncore = self.xll_to_core.iter().flatten().copied().max().map_or(0, |m| m + 1);
-        let mut core_in: Vec<Vec<f64>> = vec![Vec::new(); ncore];
-        let inputs: Vec<(usize, usize, Vec<f64>)> = {
-            use rayon::prelude::*;
+    /// Core encoding of the next `count` frames and their residuals. The core encodes the frames together; what
+    /// follows for each frame (the X96 block, the residual, dropping old samples) is in order, because it
+    /// reads the core's leftovers of that frame.
+    fn core_stages(&mut self, count: usize) -> Vec<Job> {
+        use rayon::prelude::*;
+        if count == 0 {
+            return Vec::new();
+        }
+        let first = self.emitted;
+        let inputs: Vec<Vec<Vec<f64>>> = {
             let me: &MaCoreEncoder = &*self;
-            let work: Vec<(usize, usize)> = me
-                .xll_to_core
-                .iter()
-                .enumerate()
-                .filter_map(|(x, slot)| slot.map(|s| (x, s)))
-                .collect();
-            work.into_par_iter()
-                .map(|(x, slot)| (x, slot, me.core_input(x, me.emitted)))
+            (first..first + count)
+                .into_par_iter()
+                .map(|frame| me.core_inputs(frame))
                 .collect()
         };
-        for (x, slot, mut v) in inputs {
+        let refs: Vec<&[Vec<f64>]> = inputs.iter().map(|f| f.as_slice()).collect();
+        let coded = self.core.encode_batch(&refs);
+        coded
+            .into_iter()
+            .map(|(bytes, left)| {
+                self.core.adopt(left);
+                self.after_core(bytes)
+            })
+            .collect()
+    }
+
+    /// What the core encodes for `frame`: its input per core slot (primaries in stream order, the XCH plane, then
+    /// the LFE).
+    fn core_inputs(&self, frame: usize) -> Vec<Vec<f64>> {
+        let ncore = self.xll_to_core.iter().flatten().copied().max().map_or(0, |m| m + 1);
+        let mut core_in: Vec<Vec<f64>> = vec![Vec::new(); ncore];
+        for (x, slot) in self.xll_to_core.iter().enumerate() {
+            let Some(slot) = *slot else { continue };
+            let mut v = self.core_input(x, frame);
             if let Some(h) = &self.hier {
                 let g = h.core_gain(x);
                 v.iter_mut().for_each(|s| *s *= g);
@@ -535,12 +544,18 @@ impl MaCoreEncoder {
         }
         if let Some(xs) = self.xch_x {
             // the XCH plane sits between the primaries and the LFE
-            let v = self.core_input(xs, self.emitted);
+            let v = self.core_input(xs, frame);
             core_in.insert(self.nprim, v);
         }
-        let t0 = std::time::Instant::now();
-        let mut core_bytes = self.core.encode_frame(&core_in);
-        self.t_core += t0.elapsed();
+        core_in
+    }
+
+    /// The rest of the next frame after the core has coded it: the X96 block, and the residual the lossless
+    /// stage codes (sequential: the decoder state carries over).
+    fn after_core(&mut self, mut core_bytes: Vec<u8>) -> Job {
+        let n = self.n;
+        let start = self.emitted * n - self.dropped;
+        let nch = self.buf.len();
         if self.x96.is_some() {
             self.add_x96(&mut core_bytes);
         }

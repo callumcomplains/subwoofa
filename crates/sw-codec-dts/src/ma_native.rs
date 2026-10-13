@@ -38,6 +38,8 @@ pub struct MaRequest<'a> {
     pub x96: bool,
     /// Bitstream-tab metadata (programme information, seamless branching, wide 7.1 remapping).
     pub bitstream: sw_core::BitstreamOptions,
+    /// How hard the lossless stage searches for a smaller file.
+    pub effort: sw_core::Effort,
 }
 
 pub struct MaStats {
@@ -117,6 +119,7 @@ pub fn encode_to_file(
                 x96: req.x96,
                 wide_remap,
                 downmix: downmix.clone(),
+                effort: req.effort,
             })?),
             None => Enc::Lossless(MaEncoder::new(MaConfig {
                 sample_rate: rate,
@@ -125,6 +128,7 @@ pub fn encode_to_file(
                 dialnorm: (-req.dialnorm) as u32,
                 wide_remap,
                 repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+                effort: req.effort,
             })),
         })
     };

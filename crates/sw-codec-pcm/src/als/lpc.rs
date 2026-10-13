@@ -63,9 +63,15 @@ pub(crate) fn analyse(samples: &[i32], max_order: usize) -> Analysis {
         })
         .collect();
     let order = max_order.min(n.saturating_sub(1));
+    // every lag in one pass over the samples (each lag still adds its products in time order); the reversed copy
+    // puts the earlier samples of one position side by side, so the inner loop is a plain vector multiply-add
+    let reversed: Vec<f64> = windowed.iter().rev().copied().collect();
     let mut r = vec![0.0f64; order + 1];
-    for (lag, slot) in r.iter_mut().enumerate() {
-        *slot = windowed[lag..].iter().zip(&windowed).map(|(a, b)| a * b).sum();
+    for (j, w) in windowed.iter().enumerate() {
+        let lags = j.min(order);
+        for (slot, earlier) in r[..=lags].iter_mut().zip(&reversed[n - 1 - j..]) {
+            *slot += w * earlier;
+        }
     }
     r[0] = r[0] * (1.0 + 1e-9) + 1e-9;
 

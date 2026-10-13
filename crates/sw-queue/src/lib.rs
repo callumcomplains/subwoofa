@@ -2,6 +2,7 @@
 //! and a per-job log file written next to the output (`<name>_log.txt`).
 
 pub mod run;
+pub mod threads;
 
 pub use run::EncodeSpec;
 

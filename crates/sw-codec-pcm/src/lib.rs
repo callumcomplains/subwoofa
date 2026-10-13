@@ -118,6 +118,8 @@ pub struct Request<'a> {
     pub dsd_multiplier: u32,
     /// DCP sound only: frame rate and label standard.
     pub dcp: DcpOptions,
+    /// How hard the lossless formats search for a smaller file.
+    pub effort: sw_core::Effort,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +154,7 @@ pub(crate) struct Params {
     pub labels: Vec<u32>,
     /// BWF time reference in samples, if the source had one.
     pub time_reference: Option<u64>,
+    pub effort: sw_core::Effort,
 }
 
 impl Params {
@@ -172,6 +175,14 @@ pub(crate) fn take_frames(pending: &mut [Vec<i32>], span: usize, min_frames: usi
         .collect()
 }
 
+/// A cheap stand-in for how many bits a channel will take: the size of its second differences. Encoders use it to
+/// choose between ways of storing a stereo pair without coding each of them.
+pub(crate) fn roughness(x: &[i32]) -> usize {
+    x.windows(3)
+        .map(|w| (w[2] as i64 - 2 * w[1] as i64 + w[0] as i64).unsigned_abs())
+        .sum::<u64>() as usize
+}
+
 /// Sample bytes for `frames` frames of the file's channels, interleaved.
 pub(crate) fn interleave(
     planar: &[Vec<f32>],
@@ -181,28 +192,51 @@ pub(crate) fn interleave(
     big_endian: bool,
     out: &mut Vec<u8>,
 ) {
-    out.clear();
-    out.reserve(frames * order.len() * format.bytes());
-    for i in 0..frames {
-        for &ch in order {
-            let v = planar[ch][i];
-            match format {
-                SampleFormat::Int16 => push(out, (to_int(v, 15) as i16).to_le_bytes().as_slice(), big_endian),
-                SampleFormat::Int24 => push(out, &(to_int(v, 23) as i32).to_le_bytes()[..3], big_endian),
-                SampleFormat::Int32 => push(out, (to_int(v, 31) as i32).to_le_bytes().as_slice(), big_endian),
-                SampleFormat::Float32 => push(out, v.to_le_bytes().as_slice(), big_endian),
-                SampleFormat::Float64 => push(out, (v as f64).to_le_bytes().as_slice(), big_endian),
-            }
-        }
+    match format {
+        SampleFormat::Int16 => interleave_with(planar, order, frames, big_endian, out, |v| {
+            (to_int(v, 15) as i16).to_le_bytes()
+        }),
+        SampleFormat::Int24 => interleave_with(planar, order, frames, big_endian, out, |v| {
+            let b = (to_int(v, 23) as i32).to_le_bytes();
+            [b[0], b[1], b[2]]
+        }),
+        SampleFormat::Int32 => interleave_with(planar, order, frames, big_endian, out, |v| {
+            (to_int(v, 31) as i32).to_le_bytes()
+        }),
+        SampleFormat::Float32 => interleave_with(planar, order, frames, big_endian, out, |v| v.to_le_bytes()),
+        SampleFormat::Float64 => interleave_with(planar, order, frames, big_endian, out, |v| (v as f64).to_le_bytes()),
     }
 }
 
-fn push(out: &mut Vec<u8>, little_endian_bytes: &[u8], big_endian: bool) {
-    if big_endian {
-        out.extend(little_endian_bytes.iter().rev());
-    } else {
-        out.extend_from_slice(little_endian_bytes);
-    }
+/// Interleaving for samples of `W` bytes: `convert` gives a sample's little-endian bytes. Stretches of frames are
+/// filled on all cores.
+fn interleave_with<const W: usize>(
+    planar: &[Vec<f32>],
+    order: &[usize],
+    frames: usize,
+    big_endian: bool,
+    out: &mut Vec<u8>,
+    convert: impl Fn(f32) -> [u8; W] + Sync,
+) {
+    use rayon::prelude::*;
+    const STRETCH: usize = 4096;
+    let frame_bytes = order.len() * W;
+    out.clear();
+    out.resize(frames * frame_bytes, 0);
+    out.par_chunks_mut(STRETCH * frame_bytes.max(1))
+        .enumerate()
+        .for_each(|(stretch, bytes)| {
+            for (i, frame) in bytes.chunks_exact_mut(frame_bytes).enumerate() {
+                let at = stretch * STRETCH + i;
+                for (slot, &ch) in frame.chunks_exact_mut(W).zip(order) {
+                    let mut b = convert(planar[ch][at]);
+                    if big_endian {
+                        b.reverse();
+                    }
+                    slot.copy_from_slice(&b);
+                }
+            }
+        });
 }
 
 /// Rounds a sample in -1.0..1.0 to a signed integer with `magnitude_bits` bits besides the sign, clipping at the ends.
@@ -214,8 +248,9 @@ fn to_int(v: f32, magnitude_bits: u32) -> i64 {
 
 /// The channels as integers of `bits` bits (FLAC works on integers).
 pub(crate) fn to_integers(planar: &[Vec<f32>], order: &[usize], frames: usize, bits: u32) -> Vec<Vec<i32>> {
+    use rayon::prelude::*;
     order
-        .iter()
+        .par_iter()
         .map(|&ch| {
             planar[ch][..frames]
                 .iter()
@@ -296,6 +331,7 @@ pub fn encode_to_file(
         mask: mask_order.mask,
         labels,
         time_reference: stems.time_reference.map(|t| t + first),
+        effort: req.effort,
     };
 
     let mut writer: Box<dyn BlockWriter> = match req.container {
@@ -325,22 +361,19 @@ pub fn encode_to_file(
             )?)
         }
     };
-    // big reads, so that the writers get batches of frames they can encode in parallel
+    // big reads, so that the writers get batches of frames they can encode in parallel; the next block is read while
+    // the writer is working on this one
     let block = 1usize << 18;
-    let mut planar: Vec<Vec<f32>> = Vec::new();
     let mut written = 0u64;
-    while written < wanted {
+    stems.read_ahead(block, wanted, |planar, got| {
         if cancel.load(Ordering::Relaxed) {
             return Err(PcmError::Canceled);
         }
-        let got = stems.read_planar(&mut planar, block.min((wanted - written) as usize))?;
-        if got == 0 {
-            break;
-        }
-        writer.write_block(&planar, got)?;
+        writer.write_block(planar, got)?;
         written += got as u64;
         on_progress(written as f32 / wanted as f32);
-    }
+        Ok(())
+    })?;
     let bytes = writer.finish()?;
     on_progress(1.0);
     Ok(Stats { frames: written, bytes })

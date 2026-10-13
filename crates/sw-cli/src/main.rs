@@ -2,6 +2,11 @@
 //! stderr first. The commands are thin: they build the same job the app builds and hand it to `sw-queue`.
 
 use clap::{Args, Parser, Subcommand};
+
+// the system allocator on Windows takes a lock for every allocation, which stops the encoders scaling over cores
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use sw_backend_ffmpeg as ff;
@@ -308,6 +313,12 @@ enum Cmd {
         /// DCP sound: the frame rate (24, 23.976, 25, 30, 48, 50, 60), then `-interop` for MXF Interop labels, e.g. 25-interop.
         #[arg(long)]
         pcm_format: Option<String>,
+        /// Lossless search effort: fast, balanced (default) or best. Lossy formats ignore it.
+        #[arg(long, default_value = "")]
+        speed: String,
+        /// Threads to use; 0 (default) uses every core.
+        #[arg(long, default_value_t = 0)]
+        threads: u32,
         #[command(flatten)]
         bitstream: BitstreamArgs,
     },
@@ -461,7 +472,17 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    // `encode --threads N` limits the whole run, whichever way the encode is done
+    let threads = match &cli.cmd {
+        Cmd::Encode { threads, .. } => *threads,
+        _ => 0,
+    };
+    sw_queue::threads::with_threads(threads, || run_command(cli.cmd))
+}
+
+fn run_command(cmd: Cmd) -> Result<(), String> {
+    match cmd {
         Cmd::Layouts => {
             for l in LAYOUTS {
                 println!("{:<22} {:<4} {}", l.id, l.short_label(), l.name);
@@ -607,8 +628,12 @@ fn run() -> Result<(), String> {
             source_layout,
             core_96_24,
             pcm_format,
+            speed,
+            threads: _,
             bitstream,
         } => {
+            let effort = sw_core::Effort::from_id(&speed)
+                .ok_or_else(|| format!("unknown speed '{speed}' (use fast, balanced or best)"))?;
             let bitstream = bitstream.options()?;
             let mut progress = Progress::new();
             let order =
@@ -657,6 +682,8 @@ fn run() -> Result<(), String> {
                     core_x96: core_96_24,
                     pcm_format: pcm_format.clone().unwrap_or_default(),
                     bitstream: bitstream.clone(),
+                    speed: speed.clone(),
+                    threads: 0,
                 };
                 let out =
                     sw_queue::run::execute(&spec, false, &std::sync::atomic::AtomicBool::new(false), &mut |p, _| {
@@ -715,6 +742,7 @@ fn run() -> Result<(), String> {
                         output: &output,
                         downmix: !no_downmix,
                         mlp: stream == StreamType::Mlp,
+                        effort,
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_truehd::native::encode_to_file(
@@ -755,6 +783,7 @@ fn run() -> Result<(), String> {
                         container: output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd")),
                         x96: core_96_24,
                         bitstream: bitstream.clone(),
+                        effort,
                     };
                     let t0 = std::time::Instant::now();
                     let stats = sw_codec_dts::ma_native::encode_to_file(

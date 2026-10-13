@@ -72,6 +72,8 @@ fn spec(dir: &Path, name: &str, stream: &str, inputs: &HashMap<String, String>) 
         core_x96: false,
         pcm_format: String::new(),
         bitstream: Default::default(),
+        speed: String::new(),
+        threads: 0,
     }
 }
 

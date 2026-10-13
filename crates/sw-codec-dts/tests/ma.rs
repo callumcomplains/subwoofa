@@ -60,6 +60,7 @@ fn roundtrip(name: &str, layout_id: &str, rate: u32, frames: usize) {
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
     let mut enc = MaEncoder::new(MaConfig {
+        effort: Default::default(),
         sample_rate: rate,
         map: map.clone(),
         bit_res: 24,
@@ -172,6 +173,7 @@ fn immersive(layout_id: &str, rate: u32) {
     let layout = ChannelLayout::find(layout_id).unwrap();
     let map = map_layout(layout);
     let mut enc = MaEncoder::new(MaConfig {
+        effort: Default::default(),
         sample_rate: rate,
         map: map.clone(),
         bit_res: 24,

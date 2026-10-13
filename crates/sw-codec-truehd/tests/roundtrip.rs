@@ -88,6 +88,7 @@ fn run_interval(
     }
     let sigs: Vec<Vec<i32>> = (0..channels).map(|c| signal(kind, c, n)).collect();
     let mut enc = Encoder::new(Config {
+        effort: sw_core::Effort::Best,
         sample_rate: rate,
         chanmap,
         channels,
@@ -357,6 +358,7 @@ fn run_downmix_bits(
         })
         .collect();
     let mut enc = Encoder::new(Config {
+        effort: sw_core::Effort::Best,
         sample_rate: 48_000,
         chanmap,
         channels,
@@ -594,6 +596,7 @@ fn run_mlp(name: &str, arrangement: u8, channels: usize, rate: u32, bits: u32) {
         .map(|c| signal(if bits == 16 { Kind::SixteenBit } else { Kind::Music }, c, n))
         .collect();
     let mut enc = Encoder::new(Config {
+        effort: sw_core::Effort::Best,
         sample_rate: rate,
         chanmap: 0,
         channels,

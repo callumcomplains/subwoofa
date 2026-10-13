@@ -36,6 +36,44 @@ pub struct Stats {
     pub bytes: u64,
 }
 
+/// Frames encoded together; they are spread over the cores.
+const BATCH: usize = 128;
+
+/// The samples of frame `k` of a block holding `got` samples: frames past the end of the input are empty.
+fn frame_span(k: usize, got: usize) -> (usize, usize) {
+    ((k * SAMPLES_PER_FRAME).min(got), ((k + 1) * SAMPLES_PER_FRAME).min(got))
+}
+
+/// Reads the input in batches of frames, passes each to `code(planar, samples, frame_count)` (which returns the
+/// bytes it wrote), then passes empty frames until `total_frames` have been coded: the tail that flushes the
+/// transform delay. Returns the bytes written.
+fn drive(
+    stems: &mut StemSet,
+    want: u64,
+    total_frames: u64,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(f32),
+    mut code: impl FnMut(&[Vec<f32>], usize, usize) -> Result<u64, NativeError>,
+) -> Result<u64, NativeError> {
+    let (mut done, mut bytes) = (0u64, 0u64);
+    stems.read_ahead(BATCH * SAMPLES_PER_FRAME, want, |planar, got| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(NativeError::Canceled);
+        }
+        let count = got.div_ceil(SAMPLES_PER_FRAME);
+        bytes += code(planar, got, count)?;
+        done += count as u64;
+        on_progress(done as f32 / total_frames as f32);
+        Ok(())
+    })?;
+    while done < total_frames {
+        let count = BATCH.min((total_frames - done) as usize);
+        bytes += code(&[], 0, count)?;
+        done += count as u64;
+    }
+    Ok(bytes)
+}
+
 pub fn encode_to_file(
     stems: &mut StemSet,
     req: &Request,
@@ -76,34 +114,26 @@ pub fn encode_to_file(
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
 
     let nch = enc.channels();
-    let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut remaining = want;
-    let mut bytes = 0u64;
-    let mut buf: Vec<Vec<f32>> = vec![vec![0.0; SAMPLES_PER_FRAME]; nch];
-    for f in 0..total_frames {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(NativeError::Canceled);
+    let bytes = drive(stems, want, total_frames, cancel, on_progress, |planar, got, count| {
+        let batch: Vec<Vec<Vec<f32>>> = (0..count)
+            .map(|k| {
+                let (from, to) = frame_span(k, got);
+                let mut frame = vec![vec![0.0f32; SAMPLES_PER_FRAME]; nch];
+                if to > from {
+                    for (ac3_ch, &src) in map.source_index.iter().enumerate() {
+                        frame[ac3_ch][..to - from].copy_from_slice(&planar[src][from..to]);
+                    }
+                }
+                frame
+            })
+            .collect();
+        let mut bytes = 0u64;
+        for frame in enc.encode_batch(&batch) {
+            out.write_all(&frame)?;
+            bytes += frame.len() as u64;
         }
-        let n = (remaining as usize).min(SAMPLES_PER_FRAME);
-        if n > 0 {
-            stems.read_planar(&mut planar, n)?;
-        }
-        for (ac3_ch, &src) in map.source_index.iter().enumerate() {
-            let dst = &mut buf[ac3_ch];
-            dst.fill(0.0);
-            if n > 0 {
-                dst[..n].copy_from_slice(&planar[src][..n]);
-            }
-        }
-        remaining -= n as u64;
-        let refs: Vec<&[f32]> = buf.iter().map(|v| v.as_slice()).collect();
-        let frame = enc.encode_frame(&refs);
-        out.write_all(&frame)?;
-        bytes += frame.len() as u64;
-        if f % 64 == 0 {
-            on_progress(f as f32 / total_frames as f32);
-        }
-    }
+        Ok(bytes)
+    })?;
     out.flush()?;
     on_progress(1.0);
     Ok(Stats {
@@ -180,50 +210,42 @@ fn encode_extended(
         .min(avail);
     let total_frames = (want + 256).div_ceil(SAMPLES_PER_FRAME as u64);
     let mut out = std::io::BufWriter::new(std::fs::File::create(req.output)?);
-    let n = SAMPLES_PER_FRAME;
-    let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut remaining = want;
-    let mut bytes = 0u64;
-    let mut ibuf: Vec<Vec<f32>> = vec![vec![0.0; n]; 5 + usize::from(lfe.is_some())];
-    let mut dbuf: Vec<Vec<f32>> = vec![vec![0.0; n]; 4];
     const FOLD: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    for f in 0..total_frames {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(NativeError::Canceled);
-        }
-        let have = (remaining as usize).min(n);
-        if have > 0 {
-            stems.read_planar(&mut planar, have)?;
-        }
-        for b in ibuf.iter_mut().chain(dbuf.iter_mut()) {
-            b.fill(0.0);
-        }
-        for i in 0..have {
-            ibuf[0][i] = planar[l][i];
-            ibuf[1][i] = planar[c][i];
-            ibuf[2][i] = planar[r][i];
-            ibuf[3][i] = planar[sl][i] + FOLD * planar[bl][i];
-            ibuf[4][i] = planar[sr][i] + FOLD * planar[br][i];
-            if let Some(x) = lfe {
-                ibuf[5][i] = planar[x][i];
+    let bytes = drive(stems, want, total_frames, cancel, on_progress, |planar, got, count| {
+        let n = SAMPLES_PER_FRAME;
+        let mut ibatch: Vec<Vec<Vec<f32>>> = Vec::with_capacity(count);
+        let mut dbatch: Vec<Vec<Vec<f32>>> = Vec::with_capacity(count);
+        for k in 0..count {
+            let (from, to) = frame_span(k, got);
+            let mut ibuf: Vec<Vec<f32>> = vec![vec![0.0; n]; 5 + usize::from(lfe.is_some())];
+            let mut dbuf: Vec<Vec<f32>> = vec![vec![0.0; n]; 4];
+            for i in 0..to - from {
+                let at = from + i;
+                ibuf[0][i] = planar[l][at];
+                ibuf[1][i] = planar[c][at];
+                ibuf[2][i] = planar[r][at];
+                ibuf[3][i] = planar[sl][at] + FOLD * planar[bl][at];
+                ibuf[4][i] = planar[sr][at] + FOLD * planar[br][at];
+                if let Some(x) = lfe {
+                    ibuf[5][i] = planar[x][at];
+                }
+                dbuf[0][i] = planar[sl][at];
+                dbuf[1][i] = planar[sr][at];
+                dbuf[2][i] = planar[bl][at];
+                dbuf[3][i] = planar[br][at];
             }
-            dbuf[0][i] = planar[sl][i];
-            dbuf[1][i] = planar[sr][i];
-            dbuf[2][i] = planar[bl][i];
-            dbuf[3][i] = planar[br][i];
+            ibatch.push(ibuf);
+            dbatch.push(dbuf);
         }
-        remaining -= have as u64;
-        let irefs: Vec<&[f32]> = ibuf.iter().map(|v| v.as_slice()).collect();
-        let drefs: Vec<&[f32]> = dbuf.iter().map(|v| v.as_slice()).collect();
-        let a = indep.encode_frame(&irefs);
-        let b = dep.encode_frame(&drefs);
-        out.write_all(&a)?;
-        out.write_all(&b)?;
-        bytes += (a.len() + b.len()) as u64;
-        if f % 64 == 0 {
-            on_progress(f as f32 / total_frames as f32);
+        let (a, b) = rayon::join(|| indep.encode_batch(&ibatch), || dep.encode_batch(&dbatch));
+        let mut bytes = 0u64;
+        for (a, b) in a.iter().zip(&b) {
+            out.write_all(a)?;
+            out.write_all(b)?;
+            bytes += (a.len() + b.len()) as u64;
         }
-    }
+        Ok(bytes)
+    })?;
     out.flush()?;
     on_progress(1.0);
     Ok(Stats {

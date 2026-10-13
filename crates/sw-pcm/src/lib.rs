@@ -312,11 +312,9 @@ impl PcmReader {
         self.scratch.resize(want * self.frame_bytes, 0);
         self.file.read_exact(&mut self.scratch).map_err(io_err(&self.path))?;
         let (bits, float, be) = (self.info.bits, self.info.float, self.big_endian);
-        let bytes = bits as usize / 8;
-        out.reserve(want * self.info.channels as usize);
-        for s in self.scratch.chunks_exact(bytes) {
-            out.push(sample_to_f32(s, bits, float, be));
-        }
+        let start = out.len();
+        out.resize(start + want * self.info.channels as usize, 0.0);
+        convert(&self.scratch, &mut out[start..], bits, float, be);
         self.pos += want as u64;
         Ok(want)
     }
@@ -335,6 +333,33 @@ fn check_depth(name: &str, bits: u16, float: bool) -> Result<(), Error> {
             name.to_string(),
             format!("{bits}-bit {}", if float { "float" } else { "integer" }),
         ))
+    }
+}
+
+/// Turns a block of raw samples into `f32`. The common cases are plain loops over fixed-size chunks, which the
+/// compiler turns into vector code; the rest go sample by sample.
+fn convert(raw: &[u8], out: &mut [f32], bits: u16, float: bool, be: bool) {
+    match (bits, float, be) {
+        (16, false, false) => {
+            for (o, s) in out.iter_mut().zip(raw.chunks_exact(2)) {
+                *o = i16::from_le_bytes([s[0], s[1]]) as f32 * (1.0 / 32768.0);
+            }
+        }
+        (24, false, false) => {
+            for (o, s) in out.iter_mut().zip(raw.chunks_exact(3)) {
+                *o = (i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8) as f32 * (1.0 / 8_388_608.0);
+            }
+        }
+        (32, false, false) => {
+            for (o, s) in out.iter_mut().zip(raw.chunks_exact(4)) {
+                *o = i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f32 * (1.0 / 2_147_483_648.0);
+            }
+        }
+        _ => {
+            for (o, s) in out.iter_mut().zip(raw.chunks_exact(bits as usize / 8)) {
+                *o = sample_to_f32(s, bits, float, be);
+            }
+        }
     }
 }
 
@@ -723,6 +748,42 @@ impl StemSet {
             r.seek_frame(frame)?;
         }
         Ok(())
+    }
+
+    /// Reads the next `total` frames in blocks of `block` and hands each to `use_block(planar, frames)`. The next
+    /// block is read on a second thread while the current one is used, so slow input and slow encoding overlap.
+    /// Stops at the first error from either side.
+    pub fn read_ahead<E: From<Error>>(
+        &mut self,
+        block: usize,
+        total: u64,
+        mut use_block: impl FnMut(&[Vec<f32>], usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let (send, receive) = std::sync::mpsc::sync_channel::<Result<(Vec<Vec<f32>>, usize), Error>>(2);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut left = total;
+                while left > 0 {
+                    let mut planar = Vec::new();
+                    let item = self.read_planar(&mut planar, block.min(left as usize));
+                    let (stop, got) = match &item {
+                        Ok(0) | Err(_) => (true, 0),
+                        Ok(n) => (false, *n as u64),
+                    };
+                    if send.send(item.map(|n| (planar, n))).is_err() || stop {
+                        return;
+                    }
+                    left -= got;
+                }
+            });
+            for item in receive {
+                let (planar, got) = item?;
+                if got > 0 {
+                    use_block(&planar, got)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Read up to `max_frames` into `planar` (one Vec per layout channel, replaced).

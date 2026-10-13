@@ -45,6 +45,8 @@ pub struct XllConfig {
     /// Samples per channel in one frame.
     pub frame_samples: usize,
     pub sets: Vec<SetCfg>,
+    /// How many predictors are tried for every channel.
+    pub effort: sw_core::Effort,
 }
 
 pub fn crc16(data: &[u8]) -> u16 {
@@ -155,13 +157,15 @@ fn reflection_coefficients(x: &[i32], max_order: usize) -> Vec<f64> {
             *v as f64 * w
         })
         .collect();
+    // all lags in one pass; each lag still adds its products in time order. The reversed copy makes the lags of
+    // one sample contiguous, so the inner loop is a plain vector multiply-add.
+    let reversed: Vec<f64> = xs.iter().rev().copied().collect();
     let mut r = vec![0f64; max_order + 1];
-    for lag in 0..=max_order {
-        let mut s = 0.0;
-        for i in lag..n {
-            s += xs[i] * xs[i - lag];
+    for (i, xi) in xs.iter().enumerate() {
+        let lags = i.min(max_order);
+        for (acc, past) in r[..=lags].iter_mut().zip(&reversed[n - 1 - i..]) {
+            *acc += xi * past;
         }
-        r[lag] = s;
     }
     r[0] = r[0] * (1.0 + 1e-9) + 1e-3;
     let mut a = vec![0f64; max_order + 1];
@@ -191,18 +195,24 @@ fn covariance_reflection(x: &[i32], order: usize) -> Option<Vec<f64>> {
     if n <= 4 * order {
         return None;
     }
-    let xs: Vec<f64> = x.iter().map(|v| *v as f64).collect();
-    let mut m = vec![vec![0f64; order]; order];
+    // `back[k]` is the sample k places before the end, so the `order` samples before time t are a contiguous
+    // window and the inner loop is a plain vector multiply-add (each cell still adds in time order).
+    let back: Vec<f64> = x.iter().rev().map(|v| *v as f64).collect();
+    let mut flat = vec![0f64; order * order];
     let mut r = vec![0f64; order];
     for t in order..n {
+        let from_end = n - t;
+        let window = &back[from_end..from_end + order]; // window[j] is the sample j + 1 before t
+        let now = back[from_end - 1];
         for i in 0..order {
-            let xi = xs[t - 1 - i];
-            r[i] -= xi * xs[t];
-            for j in i..order {
-                m[i][j] += xi * xs[t - 1 - j];
+            let xi = window[i];
+            r[i] -= xi * now;
+            for (acc, w) in flat[i * order + i..(i + 1) * order].iter_mut().zip(&window[i..]) {
+                *acc += xi * w;
             }
         }
     }
+    let mut m: Vec<Vec<f64>> = flat.chunks_exact(order).map(|row| row.to_vec()).collect();
     let mut trace = 0.0;
     for i in 0..order {
         for j in 0..i {
@@ -585,8 +595,15 @@ impl XllEncoder {
         }
         if max_order > 0 && x.iter().any(|v| *v != 0) {
             let ks = reflection_coefficients(&x, max_order);
-            for (cov, order) in (1usize..=15).flat_map(|o| [(false, o), (true, o)]) {
-                if order > max_order {
+            // the covariance method costs half the time of the whole encode and, in most material, gains a few
+            // hundredths of a per cent; Fast also tries fewer orders
+            let covariance = self.cfg.effort == sw_core::Effort::Best;
+            let orders: &[usize] = match self.cfg.effort {
+                sw_core::Effort::Fast => &[2, 4, 8, 12, 15],
+                _ => &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            };
+            for (cov, order) in orders.iter().flat_map(|&o| [(false, o), (true, o)]) {
+                if order > max_order || (cov && !covariance) {
                     continue;
                 }
                 let idx: Vec<i32> = if cov {
