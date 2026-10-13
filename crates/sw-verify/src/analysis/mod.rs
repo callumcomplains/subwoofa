@@ -1,7 +1,7 @@
 //! What a QC report shows beyond the checks: the loudness of the decoded programme, how the bit rate moves, and a
 //! spectrogram of every channel. It is gathered while the deep verification decodes the file.
 
-mod fft;
+pub(crate) mod fft;
 mod spectro;
 
 use crate::Probe;
@@ -33,7 +33,7 @@ pub struct Analysis {
 }
 
 /// The channels a decode of `n` channels carries, in the order FFmpeg writes them.
-fn decoded_channels(n: usize) -> Vec<Channel> {
+pub(crate) fn decoded_channels(n: usize) -> Vec<Channel> {
     use Channel::*;
     let standard = [L, R, C, Lfe, Ls, Rs, Lsr, Rsr];
     match n {

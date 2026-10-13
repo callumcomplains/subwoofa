@@ -135,6 +135,9 @@ impl Report {
             h.push_str(&bitrate_chart(&a.bitrate_kbps));
             h.push_str(&spectrograms(&a.spectrograms));
         }
+        if let Some(c) = &self.comparison {
+            h.push_str(&comparison_table(c));
+        }
         for s in &self.sections {
             let _ = write!(h, "<details><summary>{}</summary><table>", esc(&s.title));
             for (k, v) in &s.rows {
@@ -189,6 +192,31 @@ fn peaks_table(a: &Analysis) -> String {
             esc(&c.name),
             lufs(c.true_peak, "dBTP"),
             lufs(c.sample_peak, "dBFS")
+        );
+    }
+    h.push_str("</table>");
+    h
+}
+
+/// How each channel compares with the source.
+fn comparison_table(c: &crate::Comparison) -> String {
+    let mut h = format!(
+        "<h2>Against the source</h2><p class=\"note\">The decode starts {} samples {} the source; {} frames compared{}.</p>         <table class=\"peaks\"><tr><th>Channel</th><th>Signal to noise</th><th>Largest error</th><th>Differing samples</th></tr>",
+        c.lag_samples.unsigned_abs(),
+        if c.lag_samples >= 0 { "after" } else { "before" },
+        c.compared_frames,
+        if c.exact { ", identical at 24 bits" } else { "" }
+    );
+    for m in &c.channels {
+        let _ = write!(
+            h,
+            "<tr><th>{}</th><td>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(&m.name),
+            m.snr_db
+                .map_or_else(|| "identical".to_string(), |v| format!("{v:.1} dB")),
+            m.peak_error_dbfs
+                .map_or_else(|| "none".to_string(), |v| format!("{v:.1} dBFS")),
+            m.mismatches
         );
     }
     h.push_str("</table>");

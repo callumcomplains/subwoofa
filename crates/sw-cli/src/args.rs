@@ -493,4 +493,19 @@ pub(crate) struct VerifyArgs {
     /// channel. Implies --deep.
     #[arg(long, value_name = "FILE.html")]
     pub(crate) report: Option<PathBuf>,
+    /// Compare the decode with the audio the file was made from (one file): the L (first channel) file, or a
+    /// multichannel file. Lossless formats must match sample for sample; lossy ones get a signal-to-noise figure.
+    #[arg(long, value_name = "SOURCE")]
+    pub(crate) against: Option<PathBuf>,
+    /// Explicit source channel file for --against, e.g. `--source-input C=center.wav` (repeatable).
+    #[arg(long = "source-input", value_name = "CH=FILE")]
+    pub(crate) source_inputs: Vec<String>,
+    /// Layout of the source (see `subwoofa layouts`).
+    #[arg(long, default_value = "5.1")]
+    pub(crate) layout: String,
+    /// The part of the source the file was made from: where it starts, and how long (seconds), as in the encode.
+    #[arg(long)]
+    pub(crate) source_start: Option<f64>,
+    #[arg(long)]
+    pub(crate) source_duration: Option<f64>,
 }

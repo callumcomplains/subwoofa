@@ -7,6 +7,7 @@ mod stats;
 
 use crate::{Collector, Options, Probe, Status};
 use compare::{bitrate_section, core_comparison, reference};
+pub(crate) use decode::probe_channels;
 use decode::{decode, Decoded};
 use std::io::Read;
 use std::path::{Path, PathBuf};

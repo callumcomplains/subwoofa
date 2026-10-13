@@ -15,10 +15,12 @@ mod crc;
 mod deep;
 mod dts;
 mod html;
+mod source;
 mod thd;
 
 pub use analysis::{Analysis, Spectrogram};
 use serde::Serialize;
+pub use source::{compare_with_source, ChannelMatch, Comparison, Source};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -79,6 +81,9 @@ pub struct Report {
     /// Loudness, bit rate chart and spectrograms, when asked for (`Options::analyse`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis: Option<Analysis>,
+    /// The decode set against the audio it was made from (`compare_with_source`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<Comparison>,
 }
 
 #[derive(Debug, Clone, Default)]

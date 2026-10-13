@@ -11,11 +11,11 @@ thiserror = { workspace = true }
 sw-codec-truehd = { path = "../sw-codec-truehd" }
 sw-core = { path = "../sw-core" }
 sw-loudness = { path = "../sw-loudness" }
+sw-pcm = { path = "../sw-pcm" }
 
 [dev-dependencies]
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
 sw-codec-pcm = { path = "../sw-codec-pcm" }
-sw-pcm = { path = "../sw-pcm" }
 
 [lints]
 workspace = true

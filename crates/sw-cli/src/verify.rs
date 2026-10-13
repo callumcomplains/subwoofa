@@ -9,9 +9,15 @@ pub(crate) fn verify_cmd(args: VerifyArgs) -> Result<(), String> {
         json,
         ffmpeg,
         report,
+        against,
+        source_inputs,
+        layout,
+        source_start,
+        source_duration,
     } = args;
-    if report.is_some() && files.len() != 1 {
-        return Err("--report writes one page: give one file".into());
+    let compare = against.is_some() || !source_inputs.is_empty();
+    if (report.is_some() || compare) && files.len() != 1 {
+        return Err("--report and --against work on one file at a time".into());
     }
     let opt = sw_verify::Options {
         // a QC report holds the decoded audio's loudness, so it needs the decode
@@ -20,6 +26,7 @@ pub(crate) fn verify_cmd(args: VerifyArgs) -> Result<(), String> {
         ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg),
         reference_verifier: None,
     };
+    let ffmpeg_path = opt.ffmpeg.clone();
     let mut reports = Vec::new();
     for file in &files {
         match sw_verify::verify(file, &opt) {
@@ -34,6 +41,19 @@ pub(crate) fn verify_cmd(args: VerifyArgs) -> Result<(), String> {
                 });
             }
         }
+    }
+    if compare {
+        let layout = crate::encode::find_layout(&layout)?;
+        let inputs = crate::encode::collect_inputs(layout, against, &source_inputs)?;
+        let source = sw_verify::Source {
+            layout,
+            inputs: &inputs,
+            order: sw_pcm::ChannelOrder::Auto,
+            start: source_start,
+            duration: source_duration,
+        };
+        let ffmpeg = ffmpeg_path.ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
+        sw_verify::compare_with_source(&mut reports[0], &files[0], &ffmpeg, &source)?;
     }
     if json {
         // one file: the report itself, as before; several: a list
