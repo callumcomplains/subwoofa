@@ -230,13 +230,97 @@ impl XbrEncoder {
     }
 
     fn pack(&self, cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>], sets: &[usize], _budget: usize) -> Vec<u8> {
-        let nch: usize = sets.iter().sum();
-        let mut active = Vec::new();
-        let mut nab = Vec::new();
-        let mut nscale = Vec::new();
-        for ch in 0..nch {
+        let widths = Widths::of(cands, pick);
+        // channel set data, one block per set
+        let mut set_data: Vec<Vec<u8>> = Vec::new();
+        let mut first = 0;
+        for &n in sets {
+            set_data.push(self.write_set(cands, pick, first..first + n, &widths));
+            first += n;
+        }
+        frame_header(sets, &set_data, &widths.active, hdr_bits(sets))
+    }
+
+    /// One channel set: bit widths, bit allocation, scale factors and the samples.
+    fn write_set(
+        &self,
+        cands: &[Vec<Vec<Cand>>],
+        pick: &[Vec<usize>],
+        chans: std::ops::Range<usize>,
+        widths: &Widths,
+    ) -> Vec<u8> {
+        let (active, nab, nscale) = (&widths.active, &widths.nab, &widths.nscale);
+        let mut w = BitWriter::new();
+        for ch in chans.clone() {
+            w.put(nab[ch] - 2, 2);
+        }
+        for ch in chans.clone() {
+            for b in 0..active[ch] {
+                w.put(cands[ch][b][pick[ch][b]].abits as u32, nab[ch]);
+            }
+        }
+        for ch in chans.clone() {
+            w.put(nscale[ch], 3);
+        }
+        for ch in chans.clone() {
+            for b in 0..active[ch] {
+                let c = &cands[ch][b][pick[ch][b]];
+                if c.abits > 0 {
+                    w.put(c.scale as u32, nscale[ch]);
+                }
+            }
+        }
+        let nssc = self.nsamples / 8;
+        for ss in 0..nssc {
+            for ch in chans.clone() {
+                for b in 0..active[ch] {
+                    let c = &cands[ch][b][pick[ch][b]];
+                    if c.abits == 0 {
+                        continue;
+                    }
+                    let vals = &c.q[ss * 8..ss * 8 + 8];
+                    if c.abits > 7 {
+                        for v in vals {
+                            w.put_signed(*v, c.abits as u32 - 3);
+                        }
+                    } else {
+                        let levels = QUANT_LEVELS[c.abits] as i32;
+                        let off = (levels - 1) / 2;
+                        for blk in vals.chunks(4) {
+                            let mut code = 0i32;
+                            for v in blk.iter().rev() {
+                                code = code * levels + (*v + off);
+                            }
+                            w.put(code as u32, BLOCK_BITS[c.abits - 1]);
+                        }
+                    }
+                }
+            }
+        }
+        w.put(0xFFFF, 16);
+        w.put(0xFFFF, 16);
+        w.into_bytes()
+    }
+}
+
+/// Per channel: how many bands are coded and how many bits the bit allocation and the scale factors need.
+struct Widths {
+    active: Vec<usize>,
+    nab: Vec<u32>,
+    nscale: Vec<u32>,
+}
+
+impl Widths {
+    fn of(cands: &[Vec<Vec<Cand>>], pick: &[Vec<usize>]) -> Widths {
+        let mut w = Widths {
+            active: Vec::new(),
+            nab: Vec::new(),
+            nscale: Vec::new(),
+        };
+        for ch in 0..pick.len() {
             let chosen: Vec<&Cand> = pick[ch].iter().enumerate().map(|(b, &i)| &cands[ch][b][i]).collect();
-            active.push(chosen.iter().rposition(|c| c.abits > 0).map_or(1, |p| p + 1));
+            w.active
+                .push(chosen.iter().rposition(|c| c.abits > 0).map_or(1, |p| p + 1));
             let max_a = chosen.iter().map(|c| c.abits).max().unwrap_or(0);
             let max_s = chosen
                 .iter()
@@ -244,94 +328,46 @@ impl XbrEncoder {
                 .map(|c| c.scale)
                 .max()
                 .unwrap_or(0);
-            nab.push(bits_for(max_a).clamp(2, 5));
-            nscale.push(bits_for(max_s));
+            w.nab.push(bits_for(max_a).clamp(2, 5));
+            w.nscale.push(bits_for(max_s));
         }
-        // ---- channel set data, one block per set
-        let mut set_data: Vec<Vec<u8>> = Vec::new();
-        let mut first = 0;
-        for &n in sets {
-            let chans = first..first + n;
-            first += n;
-            let mut w = BitWriter::new();
-            for ch in chans.clone() {
-                w.put(nab[ch] - 2, 2);
-            }
-            for ch in chans.clone() {
-                for b in 0..active[ch] {
-                    w.put(cands[ch][b][pick[ch][b]].abits as u32, nab[ch]);
-                }
-            }
-            for ch in chans.clone() {
-                w.put(nscale[ch], 3);
-            }
-            for ch in chans.clone() {
-                for b in 0..active[ch] {
-                    let c = &cands[ch][b][pick[ch][b]];
-                    if c.abits > 0 {
-                        w.put(c.scale as u32, nscale[ch]);
-                    }
-                }
-            }
-            let nssc = self.nsamples / 8;
-            for ss in 0..nssc {
-                for ch in chans.clone() {
-                    for b in 0..active[ch] {
-                        let c = &cands[ch][b][pick[ch][b]];
-                        if c.abits == 0 {
-                            continue;
-                        }
-                        let vals = &c.q[ss * 8..ss * 8 + 8];
-                        if c.abits > 7 {
-                            for v in vals {
-                                w.put_signed(*v, c.abits as u32 - 3);
-                            }
-                        } else {
-                            let levels = QUANT_LEVELS[c.abits] as i32;
-                            let off = (levels - 1) / 2;
-                            for blk in vals.chunks(4) {
-                                let mut code = 0i32;
-                                for v in blk.iter().rev() {
-                                    code = code * levels + (*v + off);
-                                }
-                                w.put(code as u32, BLOCK_BITS[c.abits - 1]);
-                            }
-                        }
-                    }
-                }
-            }
-            w.put(0xFFFF, 16);
-            set_data.push(w.into_bytes());
-        }
-
-        // ---- frame header
-        let mut h = BitWriter::new();
-        h.put(SYNC_XBR, 32);
-        let hbits = 32 + 6 + 2 + 14 * sets.len() + 1 + sets.iter().map(|n| 3 + 2 + 5 * n).sum::<usize>();
-        let hsize = hbits.div_ceil(8) + 2;
-        h.put(hsize as u32 - 1, 6);
-        h.put(sets.len() as u32 - 1, 2);
-        for s in &set_data {
-            h.put(s.len() as u32 - 1, 14);
-        }
-        h.put(0, 1); // transient modes not used
-        let mut first = 0;
-        for &n in sets {
-            h.put(n as u32 - 1, 3);
-            h.put(0, 2); // 5-bit active band counts
-            for ch in first..first + n {
-                h.put(active[ch] as u32 - 1, 5);
-            }
-            first += n;
-        }
-        h.align(8);
-        let mut hb = h.into_bytes();
-        let crc = crc16(&hb[4..]);
-        hb.extend_from_slice(&crc.to_be_bytes());
-        assert_eq!(hb.len(), hsize);
-        for s in &set_data {
-            hb.extend_from_slice(s);
-        }
-        hb
+        w
     }
+}
+
+/// Bits of the frame header before its CRC: sync, size, set count, set sizes, transient flag, per set its channel
+/// count and band counts.
+fn hdr_bits(sets: &[usize]) -> usize {
+    32 + 6 + 2 + 14 * sets.len() + 1 + sets.iter().map(|n| 3 + 2 + 5 * n).sum::<usize>()
+}
+
+/// The frame header followed by the channel set data.
+fn frame_header(sets: &[usize], set_data: &[Vec<u8>], active: &[usize], hbits: usize) -> Vec<u8> {
+    let mut h = BitWriter::new();
+    h.put(SYNC_XBR, 32);
+    let hsize = hbits.div_ceil(8) + 2;
+    h.put(hsize as u32 - 1, 6);
+    h.put(sets.len() as u32 - 1, 2);
+    for s in set_data {
+        h.put(s.len() as u32 - 1, 14);
+    }
+    h.put(0, 1); // transient modes not used
+    let mut first = 0;
+    for &n in sets {
+        h.put(n as u32 - 1, 3);
+        h.put(0, 2); // 5-bit active band counts
+        for ch in first..first + n {
+            h.put(active[ch] as u32 - 1, 5);
+        }
+        first += n;
+    }
+    h.align(8);
+    let mut hb = h.into_bytes();
+    let crc = crc16(&hb[4..]);
+    hb.extend_from_slice(&crc.to_be_bytes());
+    assert_eq!(hb.len(), hsize);
+    for s in set_data {
+        hb.extend_from_slice(s);
+    }
+    hb
 }
