@@ -263,33 +263,36 @@ impl DcpWriter {
 
     /// Every header metadata set, in the order the reference toolkit writes them.
     fn metadata(&self) -> Vec<u8> {
-        let ids = &self.ids;
-        let frames = self.frames_total;
-        let (num, den) = self.options.frame_rate;
-        let rounded_rate = num.div_ceil(den) as u16;
         let now = mxf::timestamp();
-        let (tc_dd, sound_dd) = ("060e2b34040101010103020101000000", "060e2b34040101010103020202000000");
-        let sound_track_number = 0x1601_0101u32;
-
-        let ids_tc_track = [uuid(), uuid()];
-        let ids_tc_seq = [uuid(), uuid()];
-        let ids_tc = [uuid(), uuid()];
-        let ids_sound_track = [uuid(), uuid()];
-        let ids_sound_seq = [uuid(), uuid()];
-        let ids_clip = [uuid(), uuid()];
-        let id_batch = |items: &[[u8; 16]]| batch(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
-
+        let ids = TrackIds::new();
         let mut out = Vec::new();
+        out.extend(self.preface(&now));
+        out.extend(self.identification(&now));
+        out.extend(self.content_storage());
+        out.extend(self.material_package(&now, &ids));
+        out.extend(self.file_package(&now, &ids));
+        out.extend(self.descriptor());
+        out
+    }
 
+    /// Frames per second, rounded up, as the timecode track counts.
+    fn rounded_rate(&self) -> u16 {
+        let (num, den) = self.options.frame_rate;
+        num.div_ceil(den) as u16
+    }
+
+    fn preface(&self, now: &[u8]) -> Vec<u8> {
+        let ids = &self.ids;
+        let mut out = Vec::new();
         let mut preface = Set::new("060e2b34025301010d01010101012f00");
         preface
             .prop(0x3c0a, &ids.preface)
-            .prop(0x3b02, &now)
+            .prop(0x3b02, now)
             .u16(0x3b05, 0x0102)
             .u32(0x3b07, 1);
         preface
             .prop(0x3b08, &ids.file)
-            .prop(0x3b06, &id_batch(&[ids.identification]))
+            .prop(0x3b06, &batch_of_ids(&[ids.identification]))
             .prop(0x3b03, &ids.content);
         preface.prop(0x3b09, &self.operational_pattern());
         preface.prop(
@@ -301,7 +304,12 @@ impl DcpWriter {
         );
         preface.prop(0x3b0b, &batch(&[]));
         out.extend(preface.finish());
+        out
+    }
 
+    fn identification(&self, now: &[u8]) -> Vec<u8> {
+        let ids = &self.ids;
+        let mut out = Vec::new();
         let mut ident = Set::new("060e2b34025301010d01010101013000");
         ident
             .prop(0x3c0a, &ids.identification)
@@ -313,16 +321,22 @@ impl DcpWriter {
             .prop(0x3c04, &utf16(sw_core::version::NUMBER))
             .prop(0x3c05, &label("5375626f6f6661201f9f4e7a8c3d4b01"));
         ident
-            .prop(0x3c06, &now)
+            .prop(0x3c06, now)
             .prop(0x3c07, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
             .prop(0x3c08, &utf16("Windows"));
         out.extend(ident.finish());
+        out
+    }
 
+    /// The content storage and the essence container data sets.
+    fn content_storage(&self) -> Vec<u8> {
+        let ids = &self.ids;
+        let mut out = Vec::new();
         let mut content = Set::new("060e2b34025301010d01010101011800");
         content
             .prop(0x3c0a, &ids.content)
-            .prop(0x1901, &id_batch(&[ids.file, ids.material]))
-            .prop(0x1902, &id_batch(&[ids.container_data]));
+            .prop(0x1901, &batch_of_ids(&[ids.file, ids.material]))
+            .prop(0x1902, &batch_of_ids(&[ids.container_data]));
         out.extend(content.finish());
 
         let mut data = Set::new("060e2b34025301010d01010101012300");
@@ -331,65 +345,75 @@ impl DcpWriter {
             .u32(0x3f06, INDEX_SID)
             .u32(0x3f07, BODY_SID);
         out.extend(data.finish());
+        out
+    }
 
-        // the material package: what a player plays, pointing into the file package
+    /// The material package: what a player plays, pointing into the file package.
+    fn material_package(&self, now: &[u8], t: &TrackIds) -> Vec<u8> {
+        let ids = &self.ids;
+        let frames = self.frames_total;
+        let mut out = Vec::new();
         let mut material = Set::new("060e2b34025301010d01010101013600");
         material
             .prop(0x3c0a, &ids.material)
             .prop(0x4401, &ids.material_umid)
             .prop(0x4402, &utf16("Material Package"));
         material
-            .prop(0x4405, &now)
-            .prop(0x4404, &now)
-            .prop(0x4403, &id_batch(&[ids_tc_track[0], ids_sound_track[0]]));
+            .prop(0x4405, now)
+            .prop(0x4404, now)
+            .prop(0x4403, &batch_of_ids(&[t.tc_track[0], t.sound_track[0]]));
         out.extend(material.finish());
         out.extend(self.timecode_track(
-            &ids_tc_track[0],
-            &ids_tc_seq[0],
-            &ids_tc[0],
-            tc_dd,
+            &t.tc_track[0],
+            &t.tc_seq[0],
+            &t.tc[0],
+            TC_DATA_DEF,
             frames,
-            rounded_rate,
+            self.rounded_rate(),
         ));
         out.extend(self.sound_track(
-            &ids_sound_track[0],
-            &ids_sound_seq[0],
-            &ids_clip[0],
-            sound_dd,
+            &t.sound_track[0],
+            &t.sound_seq[0],
+            &t.clip[0],
+            SOUND_DATA_DEF,
             0,
             frames,
             Some(ids.file_umid.clone()),
         ));
+        out
+    }
 
-        // the file package: describes the essence in this file
+    /// The file package: describes the essence in this file.
+    fn file_package(&self, now: &[u8], t: &TrackIds) -> Vec<u8> {
+        let ids = &self.ids;
+        let frames = self.frames_total;
+        let mut out = Vec::new();
         let mut file = Set::new("060e2b34025301010d01010101013700");
         file.prop(0x3c0a, &ids.file)
             .prop(0x4401, &ids.file_umid)
             .prop(0x4402, &utf16("File Package: SMPTE 382M frame wrapping of wave audio"));
-        file.prop(0x4405, &now)
-            .prop(0x4404, &now)
-            .prop(0x4403, &id_batch(&[ids_tc_track[1], ids_sound_track[1]]))
+        file.prop(0x4405, now)
+            .prop(0x4404, now)
+            .prop(0x4403, &batch_of_ids(&[t.tc_track[1], t.sound_track[1]]))
             .prop(0x4701, &ids.descriptor);
         out.extend(file.finish());
         out.extend(self.timecode_track(
-            &ids_tc_track[1],
-            &ids_tc_seq[1],
-            &ids_tc[1],
-            tc_dd,
+            &t.tc_track[1],
+            &t.tc_seq[1],
+            &t.tc[1],
+            TC_DATA_DEF,
             frames,
-            rounded_rate,
+            self.rounded_rate(),
         ));
         out.extend(self.sound_track(
-            &ids_sound_track[1],
-            &ids_sound_seq[1],
-            &ids_clip[1],
-            sound_dd,
-            sound_track_number,
+            &t.sound_track[1],
+            &t.sound_seq[1],
+            &t.clip[1],
+            SOUND_DATA_DEF,
+            SOUND_TRACK_NUMBER,
             frames,
             None,
         ));
-
-        out.extend(self.descriptor());
         out
     }
 
@@ -547,6 +571,41 @@ impl BlockWriter for DcpWriter {
         self.out.write_all(&header)?;
         self.out.flush()?;
         Ok(footer + (pack.len() + index.len() + rip.len()) as u64)
+    }
+}
+
+/// Data definition labels of the timecode and sound tracks.
+const TC_DATA_DEF: &str = "060e2b34040101010103020101000000";
+const SOUND_DATA_DEF: &str = "060e2b34040101010103020202000000";
+/// Track number of the sound track in the file package.
+const SOUND_TRACK_NUMBER: u32 = 0x1601_0101;
+
+/// A batch of identifiers.
+fn batch_of_ids(items: &[[u8; 16]]) -> Vec<u8> {
+    batch(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>())
+}
+
+/// Identifiers of the tracks, their sequences and clips: one set for the material package and one for the file
+/// package.
+struct TrackIds {
+    tc_track: [[u8; 16]; 2],
+    tc_seq: [[u8; 16]; 2],
+    tc: [[u8; 16]; 2],
+    sound_track: [[u8; 16]; 2],
+    sound_seq: [[u8; 16]; 2],
+    clip: [[u8; 16]; 2],
+}
+
+impl TrackIds {
+    fn new() -> TrackIds {
+        TrackIds {
+            tc_track: [uuid(), uuid()],
+            tc_seq: [uuid(), uuid()],
+            tc: [uuid(), uuid()],
+            sound_track: [uuid(), uuid()],
+            sound_seq: [uuid(), uuid()],
+            clip: [uuid(), uuid()],
+        }
     }
 }
 
