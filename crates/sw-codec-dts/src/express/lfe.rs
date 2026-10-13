@@ -3,7 +3,7 @@
 //! decoder tells apart by the length of the chunk: 4-bit codes with a 16-bit start value (35 bytes), or 6-bit codes
 //! with a 24-bit start value and a finer step table (52 bytes).
 
-use crate::express::encoder::BitsLe;
+use crate::express::bits::BitsLe;
 use crate::express::tables::{LFE_DELTA_INDEX_16, LFE_DELTA_INDEX_24, LFE_IIR, LFE_STEP_SIZE_16, LFE_STEP_SIZE_24};
 
 pub const DECIM: usize = 64;

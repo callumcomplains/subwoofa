@@ -10,7 +10,7 @@
 //! This module holds the decoder's tone model (`render`), the search that picks tones for one subframe from
 //! the coefficients, and the bit syntax of the tonal chunks.
 
-use crate::express::encoder::{BitsLe, Vlc};
+use crate::express::bits::{BitsLe, Vlc};
 use crate::express::filterbank::HOP;
 use crate::express::tables::*;
 
