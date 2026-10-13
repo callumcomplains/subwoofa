@@ -4,6 +4,16 @@ use crate::audiofile::bytes::{be16, be32, be64, le16, le32, le64, size_check};
 use crate::audiofile::Facts;
 use crate::{Collector, Status, Window};
 
+/// What the chunk walk of a WAV file has seen so far.
+#[derive(Default)]
+struct WavState {
+    fmt_seen: bool,
+    data_seen: bool,
+    /// The real data size, from the `ds64` chunk of an RF64 file.
+    ds64_data: Option<u64>,
+    block_align: u32,
+}
+
 pub(crate) fn wav(w: &mut Window, c: &mut Collector) -> Facts {
     let len = w.len;
     let head = w.get(0, 12).to_vec();
@@ -26,129 +36,134 @@ pub(crate) fn wav(w: &mut Window, c: &mut Collector) -> Facts {
         lossless: true,
         ..Default::default()
     };
+    let mut state = WavState::default();
     let mut pos = 12u64;
-    let (mut fmt_seen, mut data_seen) = (false, false);
-    let mut ds64_data: Option<u64> = None;
-    let mut block_align = 0u32;
     while pos + 8 <= len {
         let h = w.get(pos, 8).to_vec();
         if h.len() < 8 {
             break;
         }
-        let id = [h[0], h[1], h[2], h[3]];
         let mut size = le32(&h[4..8]) as u64;
         let body = pos + 8;
-        match &id {
-            b"ds64" => {
-                let d = w.get(body, 28).to_vec();
-                if d.len() >= 24 {
-                    ds64_data = Some(le64(&d[8..16]));
-                    facts.frames = Some(le64(&d[16..24]));
-                }
-            }
-            b"fmt " => {
-                let d = w.get(body, (size as usize).min(40)).to_vec();
-                if d.len() >= 16 {
-                    fmt_seen = true;
-                    let tag = le16(&d[0..2]);
-                    facts.channels = le16(&d[2..4]) as u32;
-                    facts.rate = le32(&d[4..8]);
-                    let byte_rate = le32(&d[8..12]);
-                    block_align = le16(&d[12..14]) as u32;
-                    facts.bits = le16(&d[14..16]) as u32;
-                    let mut format = match tag {
-                        1 => "PCM".to_string(),
-                        3 => "IEEE float".to_string(),
-                        0xFFFE => "extensible".to_string(),
-                        other => format!("format tag {other:#x}"),
-                    };
-                    if tag == 0xFFFE && d.len() >= 40 {
-                        let mask = le32(&d[20..24]);
-                        let sub = le16(&d[24..26]);
-                        format = format!(
-                            "extensible, {}, channel mask {mask:#x}",
-                            if sub == 3 {
-                                "float"
-                            } else if sub == 1 {
-                                "PCM"
-                            } else {
-                                "other"
-                            }
-                        );
-                    }
-                    c.kv("Format", format);
-                    let consistent =
-                        block_align == facts.channels * facts.bits.div_ceil(8) && byte_rate == facts.rate * block_align;
-                    c.check(
-                        "Format header",
-                        if consistent { Status::Pass } else { Status::Fail },
-                        if consistent {
-                            format!(
-                                "{} channels, {} bits, {} Hz; block size and byte rate agree",
-                                facts.channels, facts.bits, facts.rate
-                            )
-                        } else {
-                            "block alignment or byte rate disagree with channels, bits and rate".to_string()
-                        },
-                    );
-                }
-            }
+        match &h[..4] {
+            b"ds64" => wav_ds64(w, body, &mut facts, &mut state),
+            b"fmt " => wav_format(w, c, body, size, &mut facts, &mut state),
             b"data" => {
-                data_seen = true;
                 if size == u32::MAX as u64 {
-                    if let Some(real) = ds64_data {
-                        size = real;
-                    }
+                    size = state.ds64_data.unwrap_or(size);
                 }
-                let end = body + size;
-                if end > len {
-                    c.check(
-                        "Audio data size",
-                        Status::Fail,
-                        format!(
-                            "the data chunk says {size} bytes but only {} remain (truncated)",
-                            len - body
-                        ),
-                    );
-                } else {
-                    c.check("Audio data size", Status::Pass, format!("{size} bytes of audio"));
-                }
-                if block_align > 0 {
-                    facts.frames = Some(size.min(len - body) / block_align as u64);
-                    if !size.is_multiple_of(block_align as u64) {
-                        c.check(
-                            "Whole frames",
-                            Status::Warn,
-                            "the audio data is not a whole number of frames",
-                        );
-                    }
-                }
+                wav_data(c, body, size, len, &mut facts, &mut state);
             }
-            b"bext" => {
-                let d = w.get(body, (size as usize).min(612)).to_vec();
-                if d.len() >= 346 {
-                    let reference = le32(&d[338..342]) as u64 | (le32(&d[342..346]) as u64) << 32;
-                    c.kv("Broadcast time reference", format!("{reference} samples"));
-                }
-            }
+            b"bext" => wav_broadcast_extension(w, c, body, size),
             _ => {}
         }
         pos = body + size + size % 2;
     }
+    let both = state.fmt_seen && state.data_seen;
     c.check(
         "Required chunks",
-        if fmt_seen && data_seen {
-            Status::Pass
-        } else {
-            Status::Fail
-        },
-        if fmt_seen && data_seen {
+        if both { Status::Pass } else { Status::Fail },
+        if both {
             "fmt and data are present".to_string()
         } else {
             "the fmt or data chunk is missing".to_string()
         },
     );
     facts
+}
+
+/// The RF64 size table: the real data size and frame count.
+fn wav_ds64(w: &mut Window, body: u64, facts: &mut Facts, state: &mut WavState) {
+    let d = w.get(body, 28).to_vec();
+    if d.len() >= 24 {
+        state.ds64_data = Some(le64(&d[8..16]));
+        facts.frames = Some(le64(&d[16..24]));
+    }
+}
+
+/// The `fmt ` chunk: sample format, channels, rate and whether its derived fields agree.
+fn wav_format(w: &mut Window, c: &mut Collector, body: u64, size: u64, facts: &mut Facts, state: &mut WavState) {
+    let d = w.get(body, (size as usize).min(40)).to_vec();
+    if d.len() < 16 {
+        return;
+    }
+    state.fmt_seen = true;
+    let tag = le16(&d[0..2]);
+    facts.channels = le16(&d[2..4]) as u32;
+    facts.rate = le32(&d[4..8]);
+    let byte_rate = le32(&d[8..12]);
+    state.block_align = le16(&d[12..14]) as u32;
+    facts.bits = le16(&d[14..16]) as u32;
+    let mut format = match tag {
+        1 => "PCM".to_string(),
+        3 => "IEEE float".to_string(),
+        0xFFFE => "extensible".to_string(),
+        other => format!("format tag {other:#x}"),
+    };
+    if tag == 0xFFFE && d.len() >= 40 {
+        let mask = le32(&d[20..24]);
+        let sub = le16(&d[24..26]);
+        format = format!(
+            "extensible, {}, channel mask {mask:#x}",
+            match sub {
+                3 => "float",
+                1 => "PCM",
+                _ => "other",
+            }
+        );
+    }
+    c.kv("Format", format);
+    let consistent =
+        state.block_align == facts.channels * facts.bits.div_ceil(8) && byte_rate == facts.rate * state.block_align;
+    c.check(
+        "Format header",
+        if consistent { Status::Pass } else { Status::Fail },
+        if consistent {
+            format!(
+                "{} channels, {} bits, {} Hz; block size and byte rate agree",
+                facts.channels, facts.bits, facts.rate
+            )
+        } else {
+            "block alignment or byte rate disagree with channels, bits and rate".to_string()
+        },
+    );
+}
+
+/// The `data` chunk: does the file hold as much audio as the chunk says, and in whole frames.
+fn wav_data(c: &mut Collector, body: u64, size: u64, len: u64, facts: &mut Facts, state: &mut WavState) {
+    state.data_seen = true;
+    if body + size > len {
+        c.check(
+            "Audio data size",
+            Status::Fail,
+            format!(
+                "the data chunk says {size} bytes but only {} remain (truncated)",
+                len - body
+            ),
+        );
+    } else {
+        c.check("Audio data size", Status::Pass, format!("{size} bytes of audio"));
+    }
+    let align = state.block_align as u64;
+    if align > 0 {
+        facts.frames = Some(size.min(len - body) / align);
+        if !size.is_multiple_of(align) {
+            c.check(
+                "Whole frames",
+                Status::Warn,
+                "the audio data is not a whole number of frames",
+            );
+        }
+    }
+}
+
+/// The broadcast extension: the time reference.
+fn wav_broadcast_extension(w: &mut Window, c: &mut Collector, body: u64, size: u64) {
+    let d = w.get(body, (size as usize).min(612)).to_vec();
+    if d.len() >= 346 {
+        let reference = le32(&d[338..342]) as u64 | (le32(&d[342..346]) as u64) << 32;
+        c.kv("Broadcast time reference", format!("{reference} samples"));
+    }
 }
 
 pub(crate) fn aiff(w: &mut Window, c: &mut Collector) -> Facts {
