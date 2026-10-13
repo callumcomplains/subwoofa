@@ -463,77 +463,18 @@ fn joc_complexity(f: &[u8]) -> Option<u32> {
         b.skip(16);
     }
     if b.flag() {
-        // mixing metadata
-        if acmod > 2 {
-            b.skip(2);
-        }
-        if acmod & 1 != 0 && acmod > 2 {
-            b.skip(6);
-        }
-        if acmod & 4 != 0 {
-            b.skip(6);
-        }
-        if lfeon && b.flag() {
-            b.skip(5);
-        }
-        if strmtyp == 0 {
-            if b.flag() {
-                b.skip(6);
-            }
-            if acmod == 0 && b.flag() {
-                b.skip(6);
-            }
-            if b.flag() {
-                b.skip(6);
-            }
-            match b.get(2) {
-                1 => b.skip(5),
-                2 => b.skip(12),
-                3 => {
-                    let n = b.get(5) as usize;
-                    b.skip(8 * (n + 2));
-                }
-                _ => {}
-            }
-            if acmod < 2 {
-                if b.flag() {
-                    b.skip(14);
-                }
-                if acmod == 0 && b.flag() {
-                    b.skip(14);
-                }
-            }
-            if b.flag() {
-                if numblkscod == 0 {
-                    b.skip(5);
-                } else {
-                    for _ in 0..[1, 2, 3, 6][numblkscod as usize] {
-                        if b.flag() {
-                            b.skip(5);
-                        }
-                    }
-                }
-            }
-        }
+        skip_mixing_metadata(
+            &mut b,
+            &Stream {
+                strmtyp,
+                acmod,
+                lfeon,
+                numblkscod,
+            },
+        );
     }
     if b.flag() {
-        // informational metadata
-        b.skip(3 + 1 + 1);
-        if acmod == 2 {
-            b.skip(4);
-        }
-        if acmod >= 6 {
-            b.skip(2);
-        }
-        if b.flag() {
-            b.skip(5 + 2 + 1);
-        }
-        if acmod == 0 && b.flag() {
-            b.skip(5 + 2 + 1);
-        }
-        if fscod < 3 {
-            b.skip(1);
-        }
+        skip_info_metadata(&mut b, acmod, fscod);
     }
     if strmtyp == 0 && numblkscod != 3 {
         b.skip(1);
@@ -553,6 +494,89 @@ fn joc_complexity(f: &[u8]) -> Option<u32> {
         }
     }
     None
+}
+
+/// The fixed part of an E-AC-3 header that the metadata that follows depends on.
+struct Stream {
+    strmtyp: u32,
+    acmod: u32,
+    lfeon: bool,
+    numblkscod: u32,
+}
+
+/// Skips the mixing metadata of a bit stream information block.
+fn skip_mixing_metadata(b: &mut Bits, s: &Stream) {
+    if s.acmod > 2 {
+        b.skip(2);
+    }
+    if s.acmod & 1 != 0 && s.acmod > 2 {
+        b.skip(6);
+    }
+    if s.acmod & 4 != 0 {
+        b.skip(6);
+    }
+    if s.lfeon && b.flag() {
+        b.skip(5);
+    }
+    if s.strmtyp == 0 {
+        if b.flag() {
+            b.skip(6);
+        }
+        if s.acmod == 0 && b.flag() {
+            b.skip(6);
+        }
+        if b.flag() {
+            b.skip(6);
+        }
+        match b.get(2) {
+            1 => b.skip(5),
+            2 => b.skip(12),
+            3 => {
+                let n = b.get(5) as usize;
+                b.skip(8 * (n + 2));
+            }
+            _ => {}
+        }
+        if s.acmod < 2 {
+            if b.flag() {
+                b.skip(14);
+            }
+            if s.acmod == 0 && b.flag() {
+                b.skip(14);
+            }
+        }
+        if b.flag() {
+            if s.numblkscod == 0 {
+                b.skip(5);
+            } else {
+                for _ in 0..[1, 2, 3, 6][s.numblkscod as usize] {
+                    if b.flag() {
+                        b.skip(5);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Skips the informational metadata of a bit stream information block.
+fn skip_info_metadata(b: &mut Bits, acmod: u32, fscod: u32) {
+    b.skip(3 + 1 + 1);
+    if acmod == 2 {
+        b.skip(4);
+    }
+    if acmod >= 6 {
+        b.skip(2);
+    }
+    if b.flag() {
+        b.skip(5 + 2 + 1);
+    }
+    if acmod == 0 && b.flag() {
+        b.skip(5 + 2 + 1);
+    }
+    if fscod < 3 {
+        b.skip(1);
+    }
 }
 
 fn dump_a(f: &[u8]) -> Vec<(String, String)> {
