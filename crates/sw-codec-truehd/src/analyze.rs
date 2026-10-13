@@ -150,9 +150,8 @@ pub fn analyze(data: &[u8]) -> Report {
     analyze_range(data, 0, usize::MAX)
 }
 
-/// Analyse only `count` restart intervals starting at the `first`-th major sync.
-pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
-    // locate the byte range
+/// Byte range of `count` restart intervals starting at the `first`-th major sync.
+fn interval_range(data: &[u8], first: usize, count: usize) -> (usize, usize) {
     let mut pos = 0usize;
     let mut syncs = 0usize;
     let mut start = None;
@@ -174,7 +173,13 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         }
         pos += words * 2;
     }
-    let data = &data[start.unwrap_or(0)..end];
+    (start.unwrap_or(0), end)
+}
+
+/// Analyse only `count` restart intervals starting at the `first`-th major sync.
+pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
+    let (from, to) = interval_range(data, first, count);
+    let data = &data[from..to];
     let mut r = Report {
         bytes: data.len() as u64,
         ..Default::default()
@@ -194,30 +199,8 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         }
         let au = &data[pos..pos + len];
         let mut off = 4;
-        let major = au.len() >= 8 && au[4..8] == [0xF8, 0x72, 0x6F, 0xBA];
-        if major {
-            let mut b = Bits::new(&au[4..32.min(au.len())]);
-            b.pos = 32;
-            r.rate_code = b.get(4);
-            r.au_samples = 40 << (r.rate_code & 7);
-            b.get(2);
-            b.get(2);
-            let m2 = b.get(2);
-            let m6 = b.get(2);
-            r.arrangement6 = b.get(5);
-            let m8 = b.get(2);
-            r.arrangement8 = b.get(13);
-            r.mods = (m2, m6, m8);
-            b.get(48);
-            b.get(1);
-            r.peak_bitrate_field = b.get(15);
-            let nsub = b.get(4) as usize;
-            b.get(4);
-            r.substream_info = b.get(8);
-            if states.len() != nsub {
-                states = vec![SubState::default(); nsub];
-                r.subs = vec![SubStats::default(); nsub];
-            }
+        if au.len() >= 8 && au[4..8] == [0xF8, 0x72, 0x6F, 0xBA] {
+            read_major_sync(au, &mut r, &mut states);
             off += 28;
             if r.major_syncs > 0 {
                 r.major_interval.push(r.access_units - last_major_au);
@@ -225,57 +208,84 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
             last_major_au = r.access_units;
             r.major_syncs += 1;
         }
-        let nsub = states.len();
-        if nsub == 0 {
-            pos += len;
-            r.access_units += 1;
-            continue;
-        }
-        // substream headers
-        let mut ends = Vec::new();
-        for _ in 0..nsub {
-            if off + 2 > au.len() {
-                r.errors
-                    .push(format!("substream directory runs past the access unit at byte {pos}"));
-                break;
-            }
-            let h = u16::from_be_bytes([au[off], au[off + 1]]);
-            off += 2;
-            if h >> 15 == 1 {
-                off += 2;
-            }
-            ends.push((h & 0x0FFF) as usize * 2);
-        }
-        if ends.len() != nsub {
-            pos += len;
-            r.access_units += 1;
-            continue;
-        }
-        r.header_bytes += off as u64;
-        let mut start = 0usize;
-        // a fourth substream with the spatial-presentation flag carries Dolby Atmos object data, not channel audio
-        let atmos = nsub == 4 && r.substream_info >> 7 == 1;
-        for si in 0..nsub {
-            let end = ends[si];
-            let from = (off + start).min(au.len());
-            let sub = &au[from..(off + end).min(au.len()).max(from)];
-            r.subs[si].bytes += sub.len() as u64;
-            if !(atmos && si == 3) {
-                analyze_substream(
-                    sub,
-                    &mut states[si],
-                    &mut r.subs[si],
-                    &mut r.blocksizes,
-                    &mut r.errors,
-                    si,
-                );
-            }
-            start = end;
-        }
         pos += len;
+        let nsub = states.len();
+        if nsub != 0 {
+            analyze_access_unit(au, pos - len, off, &mut r, &mut states);
+        }
         r.access_units += 1;
     }
     r
+}
+
+/// The major sync: rate, channel arrangements and the number of substreams (which resets the per-substream state).
+fn read_major_sync(au: &[u8], r: &mut Report, states: &mut Vec<SubState>) {
+    let mut b = Bits::new(&au[4..32.min(au.len())]);
+    b.pos = 32;
+    r.rate_code = b.get(4);
+    r.au_samples = 40 << (r.rate_code & 7);
+    b.get(2);
+    b.get(2);
+    let m2 = b.get(2);
+    let m6 = b.get(2);
+    r.arrangement6 = b.get(5);
+    let m8 = b.get(2);
+    r.arrangement8 = b.get(13);
+    r.mods = (m2, m6, m8);
+    b.get(48);
+    b.get(1);
+    r.peak_bitrate_field = b.get(15);
+    let nsub = b.get(4) as usize;
+    b.get(4);
+    r.substream_info = b.get(8);
+    if states.len() != nsub {
+        *states = vec![SubState::default(); nsub];
+        r.subs = vec![SubStats::default(); nsub];
+    }
+}
+
+/// The substream directory and then each substream of one access unit at byte `pos`, `off` being where the
+/// directory starts in it.
+fn analyze_access_unit(au: &[u8], pos: usize, mut off: usize, r: &mut Report, states: &mut [SubState]) {
+    let nsub = states.len();
+    let mut ends = Vec::new();
+    for _ in 0..nsub {
+        if off + 2 > au.len() {
+            r.errors
+                .push(format!("substream directory runs past the access unit at byte {pos}"));
+            break;
+        }
+        let h = u16::from_be_bytes([au[off], au[off + 1]]);
+        off += 2;
+        if h >> 15 == 1 {
+            off += 2;
+        }
+        ends.push((h & 0x0FFF) as usize * 2);
+    }
+    if ends.len() != nsub {
+        return;
+    }
+    r.header_bytes += off as u64;
+    let mut start = 0usize;
+    // a fourth substream with the spatial-presentation flag carries Dolby Atmos object data, not channel audio
+    let atmos = nsub == 4 && r.substream_info >> 7 == 1;
+    for si in 0..nsub {
+        let end = ends[si];
+        let from = (off + start).min(au.len());
+        let sub = &au[from..(off + end).min(au.len()).max(from)];
+        r.subs[si].bytes += sub.len() as u64;
+        if !(atmos && si == 3) {
+            analyze_substream(
+                sub,
+                &mut states[si],
+                &mut r.subs[si],
+                &mut r.blocksizes,
+                &mut r.errors,
+                si,
+            );
+        }
+        start = end;
+    }
 }
 
 fn analyze_substream(
