@@ -1,0 +1,169 @@
+//! A set of per-channel files read together as one multichannel source.
+
+use crate::channels::{resolve_sources, ChannelOrder, Slot};
+use crate::reader::PcmReader;
+use crate::Error;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use sw_core::{Channel, ChannelLayout};
+
+/// A set of per-channel files mapped onto a layout, read in lock step as planar `f32`.
+pub struct StemSet {
+    pub(crate) layout: &'static ChannelLayout,
+    pub(crate) readers: Vec<PcmReader>,
+    pub(crate) slots: Vec<Slot>,
+    pub sample_rate: u32,
+    pub bits: u16,
+    /// Length of the longest file; shorter files are zero-padded.
+    pub frames: u64,
+    pub time_reference: Option<u64>,
+    pub(crate) scratch: Vec<Vec<f32>>,
+    pub(crate) mix: Option<sw_core::downmix::Matrix>,
+}
+
+impl StemSet {
+    /// Open the files for `layout`. Mono files feed one channel. A stereo file in a pair's first
+    /// slot (L, C, Ls, ...) supplies its left channel there and its right to the next slot; a
+    /// stereo file in the second slot supplies its right channel.
+    pub fn open(layout: &'static ChannelLayout, inputs: &HashMap<Channel, PathBuf>) -> Result<StemSet, Error> {
+        Self::open_ordered(layout, inputs, ChannelOrder::Auto)
+    }
+
+    /// Like [`StemSet::open`] with an explicit multichannel-file channel order policy.
+    pub fn open_ordered(
+        layout: &'static ChannelLayout,
+        inputs: &HashMap<Channel, PathBuf>,
+        order: ChannelOrder,
+    ) -> Result<StemSet, Error> {
+        let (readers, slots, _) = resolve_sources(layout, inputs, order)?;
+        let (rate, bits) = (readers[0].info.sample_rate, readers[0].info.bits);
+        for r in &readers {
+            if r.info.sample_rate != rate {
+                return Err(Error::Mismatch(format!(
+                    "sample rate mismatch: {} Hz vs {} Hz ({})",
+                    rate, r.info.sample_rate, r.path
+                )));
+            }
+            if r.info.bits != bits || r.info.float != readers[0].info.float {
+                return Err(Error::Mismatch(format!(
+                    "bit depth mismatch between input files ({})",
+                    r.path
+                )));
+            }
+        }
+        let frames = readers.iter().map(|r| r.info.frames).max().unwrap_or(0);
+        let time_reference = readers.iter().find_map(|r| r.info.time_reference);
+        let nfiles = readers.len();
+        Ok(StemSet {
+            layout,
+            readers,
+            slots,
+            sample_rate: rate,
+            bits,
+            frames,
+            time_reference,
+            scratch: vec![Vec::new(); nfiles],
+            mix: None,
+        })
+    }
+
+    /// Mix the layout channels down through `matrix` (inputs in layout order) before they are returned, so
+    /// the set reads as the matrix's output channels.
+    pub fn set_downmix(&mut self, matrix: sw_core::downmix::Matrix) {
+        self.mix = Some(matrix);
+    }
+
+    pub fn layout(&self) -> &'static ChannelLayout {
+        self.layout
+    }
+
+    pub fn seek_frame(&mut self, frame: u64) -> Result<(), Error> {
+        for r in &mut self.readers {
+            r.seek_frame(frame)?;
+        }
+        Ok(())
+    }
+
+    /// Reads the next `total` frames in blocks of `block` and hands each to `use_block(planar, frames)`. The next
+    /// block is read on a second thread while the current one is used, so slow input and slow encoding overlap.
+    /// Stops at the first error from either side.
+    pub fn read_ahead<E: From<Error>>(
+        &mut self,
+        block: usize,
+        total: u64,
+        mut use_block: impl FnMut(&[Vec<f32>], usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let (send, receive) = std::sync::mpsc::sync_channel::<Result<(Vec<Vec<f32>>, usize), Error>>(2);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut left = total;
+                while left > 0 {
+                    let mut planar = Vec::new();
+                    let item = self.read_planar(&mut planar, block.min(left as usize));
+                    let (stop, got) = match &item {
+                        Ok(0) | Err(_) => (true, 0),
+                        Ok(n) => (false, *n as u64),
+                    };
+                    if send.send(item.map(|n| (planar, n))).is_err() || stop {
+                        return;
+                    }
+                    left -= got;
+                }
+            });
+            for item in receive {
+                let (planar, got) = item?;
+                if got > 0 {
+                    use_block(&planar, got)?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Read up to `max_frames` into `planar` (one Vec per layout channel, replaced).
+    /// Returns frames produced; shorter files are padded with zeros up to the longest.
+    pub fn read_planar(&mut self, planar: &mut Vec<Vec<f32>>, max_frames: usize) -> Result<usize, Error> {
+        let pos = self.readers[0].position();
+        let n = (max_frames as u64).min(self.frames.saturating_sub(pos)) as usize;
+        planar.resize(self.slots.len(), Vec::new());
+        for p in planar.iter_mut() {
+            p.clear();
+        }
+        if n == 0 {
+            return Ok(0);
+        }
+        let mut got = Vec::with_capacity(self.readers.len());
+        for (i, r) in self.readers.iter_mut().enumerate() {
+            self.scratch[i].clear();
+            got.push(r.read_f32(&mut self.scratch[i], n)?);
+        }
+        for (s, out) in self.slots.iter().zip(planar.iter_mut()) {
+            let nch = self.readers[s.file].info.channels as usize;
+            let have = got[s.file];
+            out.extend((0..have).map(|f| self.scratch[s.file][f * nch + s.ch]));
+            out.resize(n, 0.0);
+        }
+        // Readers of shorter files stop advancing; keep all positions aligned for the next call.
+        for (r, g) in self.readers.iter_mut().zip(&got) {
+            if *g < n {
+                r.pos = r.info.frames;
+            }
+        }
+        if let Some(m) = &self.mix {
+            let nin = planar.len();
+            let mut mixed: Vec<Vec<f32>> = vec![vec![0.0; n]; m.outputs.len()];
+            for (o, row) in m.cells.iter().enumerate() {
+                for (i, cell) in row.iter().enumerate().take(nin) {
+                    let g = cell.linear();
+                    if g != 0.0 {
+                        for (acc, x) in mixed[o].iter_mut().zip(&planar[i]) {
+                            *acc += g * x;
+                        }
+                    }
+                }
+            }
+            *planar = mixed;
+        }
+        Ok(n)
+    }
+}
