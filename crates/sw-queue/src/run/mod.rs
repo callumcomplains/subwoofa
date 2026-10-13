@@ -20,6 +20,7 @@ use std::time::Instant;
 use sw_backend_ffmpeg as ff;
 use sw_core::formats::{validate, Destination, StreamType};
 use sw_core::ChannelLayout;
+use sw_pcm::StemSet;
 
 pub fn execute(
     spec: &EncodeSpec,
@@ -99,16 +100,8 @@ fn execute_inner(
         &inputs,
         (start, span),
     );
-    // audio files only have a native writer
     let ffmpeg = ff::find_ffmpeg();
-    // with no FFmpeg, a format Subwoofa can encode itself simply uses its own encoder
-    let native = spec.engine == "native" || stream.is_audio_file() || (ffmpeg.is_none() && stream.is_native());
-    if native && !stream.is_native() {
-        return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
-    }
-    if ffmpeg.is_none() && !native {
-        return Err("FFmpeg was not found. Set it up under Settings > Engines (see docs/ENGINES.md).".into());
-    }
+    let native = use_native_engine(spec, stream, ffmpeg.is_some())?;
     let slots = if downmixed {
         Vec::new()
     } else {
@@ -143,22 +136,75 @@ fn execute_inner(
         span,
     };
     let mut progress = |p: f32| on_progress(p, false);
-    if stream.is_audio_file() {
-        encode_audio_file(&ctx, &mut stems, &mut progress, cancel, log)?;
-    } else if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
-        encode_truehd(&ctx, &mut stems, &mut progress, cancel, log)?;
-    } else if native && stream == StreamType::DtsExpress {
-        encode_express(&ctx, &mut stems, &mut progress, cancel)?;
-    } else if native && stream == StreamType::DtsHdMa {
-        encode_dts_ma(&ctx, &mut stems, &mut progress, cancel, log)?;
-    } else if native && is_dts_core_family(stream) {
-        encode_dts_core(&ctx, &mut stems, &mut progress, cancel)?;
-    } else if native {
-        encode_ac3(&ctx, &mut stems, &mut progress, cancel)?;
-    } else {
-        ff::run_progress(&job, span, cancel, &mut progress)?;
+    run_encoder(&ctx, native, &job, &mut stems, &mut progress, cancel, log)?;
+    let size = log_result(log, spec, stream, span, t0.elapsed().as_secs_f64());
+
+    if !verify || downmixed {
+        return Ok(Outcome {
+            message: format!("encoded {:.1} MB", size as f64 / 1e6),
+            verified: false,
+            ..Default::default()
+        });
     }
-    let enc_secs = t0.elapsed().as_secs_f64();
+    if ffmpeg.is_none() && !stream.is_audio_file() {
+        log.push_str("Verify: skipped (ffmpeg not available to decode the result)\n");
+        return Ok(Outcome {
+            message: format!(
+                "encoded {:.1} MB (not verified: no decoder available)",
+                size as f64 / 1e6
+            ),
+            verified: false,
+            ..Default::default()
+        });
+    }
+    on_progress(1.0, true);
+    verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
+}
+
+/// Whether Subwoofa's own encoder does the job (otherwise FFmpeg does).
+fn use_native_engine(spec: &EncodeSpec, stream: StreamType, have_ffmpeg: bool) -> Result<bool, Failure> {
+    // audio files only have a native writer; with no FFmpeg, a format Subwoofa can encode itself simply uses its own
+    let native = spec.engine == "native" || stream.is_audio_file() || (!have_ffmpeg && stream.is_native());
+    if native && !stream.is_native() {
+        return Err(format!("the native engine cannot encode {} yet", stream.display_name()).into());
+    }
+    if !have_ffmpeg && !native {
+        return Err("FFmpeg was not found. Set it up under Settings > Engines (see docs/ENGINES.md).".into());
+    }
+    Ok(native)
+}
+
+/// Runs the encoder for the stream type: Subwoofa's own, or FFmpeg through `job`.
+fn run_encoder(
+    ctx: &Run,
+    native: bool,
+    job: &ff::Job,
+    stems: &mut StemSet,
+    progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+    log: &mut String,
+) -> Result<(), Failure> {
+    let stream = ctx.stream;
+    if stream.is_audio_file() {
+        encode_audio_file(ctx, stems, progress, cancel, log)
+    } else if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
+        encode_truehd(ctx, stems, progress, cancel, log)
+    } else if native && stream == StreamType::DtsExpress {
+        encode_express(ctx, stems, progress, cancel)
+    } else if native && stream == StreamType::DtsHdMa {
+        encode_dts_ma(ctx, stems, progress, cancel, log)
+    } else if native && is_dts_core_family(stream) {
+        encode_dts_core(ctx, stems, progress, cancel)
+    } else if native {
+        encode_ac3(ctx, stems, progress, cancel)
+    } else {
+        ff::run_progress(job, ctx.span, cancel, progress)?;
+        Ok(())
+    }
+}
+
+/// Writes the size, speed and peak bit rate of the finished file into the log; returns the size in bytes.
+fn log_result(log: &mut String, spec: &EncodeSpec, stream: StreamType, span: f64, enc_secs: f64) -> u64 {
     let size = std::fs::metadata(&spec.output).map(|m| m.len()).unwrap_or(0);
     let avg_kbps = size as f64 * 8.0 / span / 1000.0;
     // audio files have no frames to chart, and opening one as a stream scans the whole file
@@ -176,28 +222,5 @@ fn execute_inner(
         avg_kbps
     ));
     log.push_str(&peak_note);
-
-    if !verify || downmixed {
-        return Ok(Outcome {
-            message: format!("encoded {:.1} MB", size as f64 / 1e6),
-            verified: false,
-            ..Default::default()
-        });
-    }
-    if ffmpeg.is_none() && !stream.is_audio_file() {
-        log.push_str(
-            "Verify: skipped (ffmpeg not available to decode the result)
-",
-        );
-        return Ok(Outcome {
-            message: format!(
-                "encoded {:.1} MB (not verified: no decoder available)",
-                size as f64 / 1e6
-            ),
-            verified: false,
-            ..Default::default()
-        });
-    }
-    on_progress(1.0, true);
-    verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
+    size
 }
