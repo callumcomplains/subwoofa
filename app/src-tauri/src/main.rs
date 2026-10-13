@@ -16,6 +16,10 @@ mod atmos;
 use sw_core::{autoimport, Channel, ChannelLayout, LAYOUTS};
 use tauri::{Emitter, Manager};
 
+// the system allocator on Windows takes a lock for every allocation, which stops the encoders scaling over cores
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Serialize)]
 struct StreamInfo {
     id: &'static str,
@@ -28,6 +32,22 @@ struct StreamInfo {
     native: bool,
     /// Whether the FFmpeg backend can make it.
     ffmpeg: bool,
+    /// What the lower speed settings cost in file size, for the formats they change (none for the rest).
+    speed_cost: Option<SpeedCost>,
+}
+
+#[derive(Serialize)]
+struct SpeedCost {
+    balanced: &'static str,
+    fast: &'static str,
+}
+
+fn speed_cost(stream: StreamType) -> Option<SpeedCost> {
+    use sw_core::Effort;
+    Some(SpeedCost {
+        balanced: sw_core::effort::size_cost(stream, Effort::Balanced)?,
+        fast: sw_core::effort::size_cost(stream, Effort::Fast)?,
+    })
 }
 
 #[derive(Serialize)]
@@ -64,6 +84,7 @@ fn catalog() -> Catalog {
                     available: ff::supports(*s) || s.is_native(),
                     native: s.is_native(),
                     ffmpeg: ff::supports(*s),
+                    speed_cost: speed_cost(*s),
                 })
                 .collect(),
         })
@@ -78,6 +99,7 @@ fn catalog() -> Catalog {
             available: ff::supports(*s) || s.is_native(),
             native: s.is_native(),
             ffmpeg: ff::supports(*s),
+            speed_cost: speed_cost(*s),
         })
         .collect();
     Catalog {

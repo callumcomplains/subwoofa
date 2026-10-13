@@ -406,6 +406,7 @@ try {
 <section id="settingsPage" class="settings" aria-label="Settings" hidden>
   <nav class="stabs" id="sTabs" aria-label="Settings sections">
     <button data-s="general" aria-pressed="true">General</button>
+    <button data-s="performance" aria-pressed="false">Performance</button>
     <button data-s="engines" aria-pressed="false">Engines</button>
     <button data-s="appearance" aria-pressed="false">Appearance</button>
     <button data-s="presets" aria-pressed="false">Presets</button>
@@ -419,8 +420,16 @@ try {
       <label class="srow"><input type="checkbox" id="optVerify" checked><span><b>Verify after encoding</b></span></label>
       <label class="srow"><input type="checkbox" id="optNative"><span><b>Prefer Subwoofa's own encoders</b></span></label>
       <label class="srow"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b></span></label>
-      <label class="f small"><span>Encodes at the same time</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
       <label class="f"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
+    </div>
+
+    <div class="spage" data-s="performance" hidden>
+      <h2 class="sh">Performance</h2>
+      <label class="f"><span>Processor cores per encode</span><select id="optThreads"></select></label>
+      <label class="f small"><span>Encodes at the same time</span><input id="optConc" type="number" min="1" max="8" step="1" value="2"></label>
+      <h3 class="sub">What the encode speed costs</h3>
+      <table id="speedTable" class="speedtable"></table>
+      <p class="note">Pick the speed next to the Encode button. Lossy formats and the one-speed lossless formats are not listed: they do not change.</p>
     </div>
 
     <div class="spage" data-s="engines" hidden>
@@ -493,8 +502,17 @@ try {
       <input id="outname" value="SUBWOOFA" spellcheck="false" aria-label="File name">
       <span id="ext" class="ext">.ac3</span>
     </div>
+    <div id="speedBox" class="speed">
+      <span class="cap">Speed</span>
+      <div class="seg" id="speedSeg" role="radiogroup" aria-label="Encode speed">
+        <button type="button" data-speed="fast" aria-pressed="false">Fast</button>
+        <button type="button" data-speed="balanced" aria-pressed="true">Balanced</button>
+        <button type="button" data-speed="best" aria-pressed="false">Best</button>
+      </div>
+    </div>
     <button id="go" class="go" disabled><svg><use href="#i-play"/></svg>Encode</button>
   </div>
+  <div id="speedNote" class="speed-note" hidden></div>
   <pre id="log" aria-live="polite">Ready.</pre>
 </footer>
 

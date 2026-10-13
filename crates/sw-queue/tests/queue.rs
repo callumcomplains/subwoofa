@@ -258,3 +258,31 @@ fn audio_files_are_verified_by_the_file_check() {
         assert!(out.verified, "{stream}: {}", out.message);
     }
 }
+
+#[test]
+fn speed_and_thread_settings_are_honoured() {
+    let dir = tmpdir("speed");
+    let inputs = stems(&dir, 3.0);
+    let run = |speed: &str, threads: u32| -> Result<u64, String> {
+        let mut sp = spec(&dir, &format!("speed_{speed}_{threads}.flac"), "flac", &inputs);
+        sp.dest = "files".into();
+        sp.speed = speed.into();
+        sp.threads = threads;
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        match sw_queue::run::execute(&sp, true, &cancel, &mut |_, _| {}) {
+            Ok(out) => {
+                assert!(out.verified, "{speed}/{threads}: {}", out.message);
+                Ok(std::fs::metadata(&sp.output).unwrap().len())
+            }
+            Err(sw_queue::run::Failure::Error(m)) => Err(m),
+            Err(_) => Err("canceled".into()),
+        }
+    };
+    // the same file whatever the thread count, and no setting makes a smaller file than Best
+    let best = run("best", 0).unwrap();
+    assert_eq!(best, run("best", 1).unwrap());
+    let balanced = run("balanced", 2).unwrap();
+    let fast = run("fast", 0).unwrap();
+    assert!(best <= balanced && best <= fast, "best {best}, balanced {balanced}, fast {fast}");
+    assert!(run("turbo", 0).unwrap_err().contains("unknown speed"));
+}

@@ -69,7 +69,6 @@ pub struct Dts96Encoder {
     buf: Vec<Vec<f64>>,
     dropped: usize,
     emitted: usize,
-    nprim: usize,
     n: usize,
     x96_bytes: usize,
     l48: usize,
@@ -78,7 +77,6 @@ pub struct Dts96Encoder {
     ext_delay: usize,
     ext_shift: isize,
     ext_adj: isize,
-    timing: [std::time::Duration; 4],
     hra: Option<crate::hra::HraStage>,
 }
 
@@ -124,7 +122,6 @@ impl Dts96Encoder {
             buf: vec![Vec::new(); nprim + usize::from(cfg.map.lfe.is_some())],
             dropped: 0,
             emitted: 0,
-            nprim,
             n,
             x96_bytes: cfg.x96_bytes,
             l48,
@@ -136,7 +133,6 @@ impl Dts96Encoder {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
-            timing: [std::time::Duration::ZERO; 4],
             hra: None,
         })
     }
@@ -155,11 +151,10 @@ impl Dts96Encoder {
         for (b, f) in self.buf.iter_mut().zip(frame) {
             b.extend_from_slice(f);
         }
-        let mut out = Vec::new();
-        while self.buf[0].len() + self.dropped >= (self.emitted + 1) * self.n + self.lookahead {
-            out.push(self.next_frame());
-        }
-        out
+        // every frame whose samples (and the look-ahead behind them) have arrived
+        let arrived = self.buf[0].len() + self.dropped;
+        let ready = (arrived.saturating_sub(self.lookahead) / self.n).saturating_sub(self.emitted);
+        self.next_frames(ready)
     }
 
     pub fn finish(&mut self) -> Vec<Vec<u8>> {
@@ -169,17 +164,7 @@ impl Dts96Encoder {
         for b in self.buf.iter_mut() {
             b.resize((want - self.dropped).max(b.len()), 0.0);
         }
-        let mut out = Vec::new();
-        while self.emitted < frames {
-            out.push(self.next_frame());
-        }
-        if std::env::var_os("SW_TIMING").is_some() {
-            eprintln!(
-                "dts96 timing: decimate {:?}, core {:?}, ext analysis {:?}, x96 coding {:?}",
-                self.timing[0], self.timing[1], self.timing[2], self.timing[3]
-            );
-        }
-        out
+        self.next_frames(frames.saturating_sub(self.emitted))
     }
 
     fn core_input(&self, ch: usize, frame: usize) -> Vec<f64> {
@@ -201,75 +186,88 @@ impl Dts96Encoder {
         out
     }
 
-    fn next_frame(&mut self) -> Vec<u8> {
-        let f = self.emitted;
+    /// Encodes the next `count` frames. The core codes them together; the extension filter banks follow in order
+    /// (each channel on its own thread), and the X96 and XBR coding of the frames runs on all cores.
+    fn next_frames(&mut self, count: usize) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        if count == 0 {
+            return Vec::new();
+        }
+        let first = self.emitted;
         let nch = self.buf.len();
-        let t0 = std::time::Instant::now();
-        let core_in: Vec<Vec<f64>> = {
+        let core_in: Vec<Vec<Vec<f64>>> = {
             let me: &Dts96Encoder = &*self;
-            use rayon::prelude::*;
-            (0..nch).into_par_iter().map(|c| me.core_input(c, f)).collect()
+            (first..first + count)
+                .into_par_iter()
+                .map(|f| (0..nch).map(|c| me.core_input(c, f)).collect())
+                .collect()
         };
-        self.timing[0] += t0.elapsed();
-        let t0 = std::time::Instant::now();
-        let mut frame = self.core.encode_frame(&core_in);
-        self.timing[1] += t0.elapsed();
-        let t0 = std::time::Instant::now();
-        // extension analysis of the programme, aligned with what the decoder's synthesis outputs (one
-        // thread per channel: the analysis banks are independent)
+        let refs: Vec<&[Vec<f64>]> = core_in.iter().map(|f| f.as_slice()).collect();
+        let coded = self.core.encode_batch(&refs);
+
+        // extension analysis of the programme, aligned with what the decoder's synthesis outputs: the banks of the
+        // channels are independent, and each follows its own channel through the frames
         let blocks = self.core.frame_samples() / 32;
-        let (f_off, n, delay, shift, adj, dropped) = (
-            f * self.n,
-            self.n,
-            self.ext_delay,
-            self.ext_shift,
-            self.ext_adj,
-            self.dropped,
-        );
-        let _ = n;
-        let mut resid: Vec<Vec<Vec<f64>>> = vec![Vec::new(); self.nprim];
-        let deq = &self.core.last_deq;
-        {
-            use rayon::prelude::*;
-            let bufs = &self.buf;
-            self.ext
-                .par_iter_mut()
-                .zip(resid.par_iter_mut())
-                .enumerate()
-                .for_each(|(ch, (ana, out))| {
-                    let src = &bufs[ch];
-                    let start = f_off as isize + delay as isize + 64 * shift + adj - dropped as isize;
-                    let input: Vec<f64> = (0..blocks * 64)
-                        .map(|i| {
-                            let idx = start + i as isize;
-                            if idx >= 0 && (idx as usize) < src.len() {
-                                src[idx as usize]
-                            } else {
-                                0.0
+        let (n, delay, shift, adj, dropped) = (self.n, self.ext_delay, self.ext_shift, self.ext_adj, self.dropped);
+        let bufs = &self.buf;
+        let per_channel: Vec<Vec<Vec<Vec<f64>>>> = self
+            .ext
+            .par_iter_mut()
+            .enumerate()
+            .map(|(ch, ana)| {
+                let src = &bufs[ch];
+                (0..count)
+                    .map(|k| {
+                        let start = ((first + k) * n) as isize + delay as isize + 64 * shift + adj - dropped as isize;
+                        let input: Vec<f64> = (0..blocks * 64)
+                            .map(|i| {
+                                let idx = start + i as isize;
+                                if idx >= 0 && (idx as usize) < src.len() {
+                                    src[idx as usize]
+                                } else {
+                                    0.0
+                                }
+                            })
+                            .collect();
+                        let mut bands = ana.analyse_blocks(&input);
+                        debug_assert_eq!(bands.len(), BANDS64);
+                        // lower half: what the core did not capture
+                        for band in 0..32 {
+                            for b in 0..blocks {
+                                bands[band][b] -= coded[k].1.deq[ch][band][b] as f64;
                             }
-                        })
-                        .collect();
-                    let mut bands = ana.analyse_blocks(&input);
-                    debug_assert_eq!(bands.len(), BANDS64);
-                    // lower half: what the core did not capture
-                    for band in 0..32 {
-                        for b in 0..blocks {
-                            bands[band][b] -= deq[ch][band][b] as f64;
                         }
-                    }
-                    *out = bands;
-                });
-        }
-        self.timing[2] += t0.elapsed();
-        let t0 = std::time::Instant::now();
-        let start = frame.len() - self.x96_bytes;
-        let block = self.x96.encode(&resid, self.x96_bytes);
-        self.timing[3] += t0.elapsed();
-        frame[start..].copy_from_slice(&block);
+                        bands
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut columns: Vec<_> = per_channel.into_iter().map(|c| c.into_iter()).collect();
+        let resid: Vec<Vec<Vec<Vec<f64>>>> = (0..count)
+            .map(|_| columns.iter_mut().map(|c| c.next().unwrap()).collect())
+            .collect();
+
+        let x96 = &self.x96;
+        let x96_bytes = self.x96_bytes;
+        let mut frames: Vec<Vec<u8>> = coded
+            .par_iter()
+            .zip(resid.par_iter())
+            .map(|((core, _), resid)| {
+                let mut frame = core.clone();
+                let start = frame.len() - x96_bytes;
+                frame[start..].copy_from_slice(&x96.encode(resid, x96_bytes));
+                frame
+            })
+            .collect();
         if let Some(h) = self.hra.as_mut() {
-            frame = h.wrap(frame, &self.core.last_residual);
+            let wrapped: Vec<(Vec<u8>, &[Vec<Vec<f64>>])> = frames
+                .drain(..)
+                .zip(&coded)
+                .map(|(frame, (_, left))| (frame, &left.residual[..]))
+                .collect();
+            frames = h.wrap_batch(wrapped);
         }
-        self.emitted += 1;
+        self.emitted += count;
         // drop samples no later frame needs
         let keep_from = (self.emitted * self.n).saturating_sub(HALF + 4 + 64);
         if keep_from > self.dropped + (1 << 16) {
@@ -279,6 +277,6 @@ impl Dts96Encoder {
             }
             self.dropped = keep_from;
         }
-        frame
+        frames
     }
 }

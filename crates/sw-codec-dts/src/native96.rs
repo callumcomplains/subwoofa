@@ -140,7 +140,7 @@ pub fn encode_to_file(
     let mut remaining = want;
     let (mut frames, mut bytes) = (0u64, 0u64);
     let slots: Vec<usize> = map.order.iter().copied().chain(map.lfe).collect();
-    let chunk = n * 4;
+    let chunk = n * 16;
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);

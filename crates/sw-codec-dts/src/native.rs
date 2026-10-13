@@ -342,11 +342,17 @@ pub fn encode_to_file(
         }
         coded += count as u64;
         let refs: Vec<&[Vec<f64>]> = chunk.iter().map(|f| f.as_slice()).collect();
-        for (mut data, left) in enc.encode_batch(&refs) {
-            enc.adopt(left);
-            if let Some(h) = hra.as_mut() {
-                data = h.wrap(data, &enc.last_residual);
-            }
+        let encoded = enc.encode_batch(&refs);
+        let finished: Vec<Vec<u8>> = match hra.as_mut() {
+            Some(h) => h.wrap_batch(
+                encoded
+                    .iter()
+                    .map(|(d, left)| (d.clone(), &left.residual[..]))
+                    .collect(),
+            ),
+            None => encoded.into_iter().map(|(d, _)| d).collect(),
+        };
+        for data in finished {
             if wav {
                 // DTS in PCM: either the stream packed into 14-bit words (a DTS CD) or its 16-bit words
                 // byte-swapped into little-endian samples

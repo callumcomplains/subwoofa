@@ -61,6 +61,8 @@ const toolPaths = { ffmpeg: "", mas: "" };
 let lastMode = "encode";
 const TIP_BASE = {};
 const TIP_EXTRA = {};
+let speed = "balanced";   // lossless search effort: fast, balanced or best
+let threads = 0;           // processor cores per encode; 0 = all
 
 function fill(sel, items, want) {
   sel.innerHTML = "";
@@ -517,6 +519,24 @@ function update() {
   if (!available && srcLayoutId) log("Mixing 22.2 down needs a format with a native Subwoofa encoder.");
   else if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
   syncChips();
+  syncSpeed();
+}
+
+/** The speed buttons and the note under them: what the chosen setting costs for the chosen format. */
+function syncSpeed() {
+  const cost = curStream()?.speed_cost;
+  for (const b of $("speedSeg").children) {
+    b.setAttribute("aria-pressed", String(b.dataset.speed === speed));
+    b.disabled = !cost;
+  }
+  const note = $("speedNote");
+  const shown = cost && speed !== "best";
+  note.hidden = !shown;
+  if (shown) {
+    note.textContent = `${speed === "fast" ? "Fast" : "Balanced"}: this file comes out ${cost[speed]} than Best would make it.`;
+    note.classList.toggle("costly", speed === "fast");
+  }
+  $("speedBox").title = cost ? "" : "This format has one speed.";
 }
 
 function jobSpec(inputsFor, name) {
@@ -530,6 +550,7 @@ function jobSpec(inputsFor, name) {
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
     bitstream: bitstreamSpec(),
+    speed, threads,
   };
 }
 
@@ -937,6 +958,8 @@ const INFO = [
   ["#optNative", "Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP, the DTS family), use it instead of FFmpeg. Formats FFmpeg can't make always use ours."],
   ["#optDownmix", "Native TrueHD only: adds a stereo substream so stereo-only players get a proper downmix. Costs roughly 5 to 8 % more file."],
   ["#optConc", "How many encodes run at once. More is faster on a big machine and louder on a small one."],
+  ["#optThreads", "How many processor cores one encode may use. All cores is fastest. One core is slow and gentle: the machine stays usable. Several encodes at once share the cores."],
+  ["@#speedBox .cap", "How hard lossless encoders search for a smaller file. Fast and Balanced finish sooner and can leave the file a little larger; Best tries everything. It changes nothing for lossy formats and nothing about whether the file is correct."],
   ["#optOrder", "Some multichannel files list their channels in an unexpected order. Auto uses film order for 7.1; the others follow the file's speaker mask, or the order of the layout."],
   ["@.engine:nth-of-type(1) .wordmark", "Reads and converts audio Subwoofa can't read itself, and makes the formats it doesn't encode natively. Leave this on automatic to search your PATH, or point it at ffmpeg.exe (or its folder) to use a particular build."],
   ["@.engine:nth-of-type(2) .wordmark", "The folder that holds DTSHDVerify.exe. Subwoofa uses DTS's own verifier as a second opinion in deep checks. Automatic looks in the default install folder."],
@@ -1146,6 +1169,8 @@ async function init() {
   $("optConc").value = conc;
   invoke("queue_set_concurrency", { n: conc });
   $("optConc").onchange = () => { const n = Math.max(1, Math.min(8, Number($("optConc").value) || 1)); $("optConc").value = n; store.set("conc", n); invoke("queue_set_concurrency", { n }); };
+  speed = ["fast", "balanced", "best"].includes(store.get("speed")) ? store.get("speed") : "balanced";
+  threads = Number(store.get("threads")) || 0;
   autoVerify = store.get("verify") !== "0";
   $("optVerify").checked = autoVerify;
   preferNative = store.get("native") === "1";
@@ -1566,9 +1591,30 @@ function showSettingsTab(name) {
   if (name === "engines") refreshEngines();
 }
 
+/** Core choices for the Performance page, and the speed table. */
+function initPerformance() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const choices = [[0, `All cores (${cores})`]];
+  if (cores >= 4) choices.push([Math.floor(cores / 2), `Half of them (${Math.floor(cores / 2)})`]);
+  for (const n of [1, 2, 4, 8]) if (n < cores && n !== Math.floor(cores / 2)) choices.push([n, n === 1 ? "One core" : `${n} cores`]);
+  fill($("optThreads"), choices, threads);
+  $("optThreads").onchange = () => { threads = Number($("optThreads").value); store.set("threads", String(threads)); };
+  const rows = cat.all_streams.filter((s) => s.speed_cost);
+  $("speedTable").innerHTML = "<tr><th>Format</th><th>Balanced</th><th>Fast</th></tr>" +
+    rows.map((s) => `<tr><td>${s.name}</td><td>${s.speed_cost.balanced}</td><td>${s.speed_cost.fast}</td></tr>`).join("");
+}
+
 function initSettings() {
   for (const b of $("sTabs").querySelectorAll("button[data-s]")) b.onclick = () => showSettingsTab(b.dataset.s);
   $("sBack").onclick = () => setMode(lastMode);
+  initPerformance();
+  $("speedSeg").onclick = (e) => {
+    const b = e.target.closest("button[data-speed]");
+    if (!b || b.disabled) return;
+    speed = b.dataset.speed;
+    store.set("speed", speed);
+    syncSpeed();
+  };
   $("openSettings").onclick = () => setMode(document.body.classList.contains("tools-mode") && !$("settingsPage").hidden ? lastMode : "settings");
   $("ffBrowse").onclick = async () => {
     const f = await dialog.open({ multiple: false, filters: [{ name: "ffmpeg", extensions: ["exe"] }, { name: "All files", extensions: ["*"] }] });

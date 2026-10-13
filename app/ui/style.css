@@ -280,6 +280,19 @@ tr.err td input, tr.err td.meta.fs { border-color: var(--bad); color: var(--bad)
 .dest-path { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
 #outdir { flex: 2 1 0; } #outname { flex: 1 1 0; }
 .ext { font: 12px var(--mono); color: var(--dim); }
+.speed { display: flex; align-items: center; gap: 8px; }
+.seg { display: flex; }
+.seg button { height: 26px; padding: 0 11px; border-radius: 0; margin-left: -1px; background: var(--screen); color: var(--dim); font: 600 11px var(--label); letter-spacing: .12em; text-transform: uppercase; }
+.seg button:first-child { border-radius: var(--r) 0 0 var(--r); margin-left: 0; }
+.seg button:last-child { border-radius: 0 var(--r) var(--r) 0; }
+.seg button[aria-pressed=true] { color: var(--lamp-ink); background: var(--lamp); border-color: var(--lamp); position: relative; }
+.seg button:disabled { opacity: .45; }
+.speed-note { margin-top: 4px; font: 11px var(--mono); color: var(--dim); }
+.speed-note.costly { color: var(--bad); }
+.speedtable { max-width: 520px; }
+.speedtable th, .speedtable td { padding: 5px 10px 5px 0; border-bottom: 1px solid var(--rule); text-align: left; font: 11px var(--mono); }
+.speedtable th { font: 600 11px var(--label); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.note { margin: 0; color: var(--dim); font-size: 11px; max-width: 520px; }
 pre#log { margin: 4px 0 0; max-height: 52px; min-height: 16px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 11px/1.4 var(--mono); color: var(--dim); }
 pre#log.ok { color: var(--ok); } pre#log.bad { color: var(--bad); }
 

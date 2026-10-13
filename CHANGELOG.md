@@ -9,6 +9,11 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - Verify understands all of them.
 - DTS Express encodes about 3x faster (profile search runs on all cores), uses the 6-bit LFE coding from 256 kbps.
 - `CONTRIBUTING.md` added.
+- **Much faster encoding.** Every encoder now spreads its work over all cores: AC-3 and E-AC-3 (2.2 s to 0.65 s for two minutes of 5.1), the DTS family (core 12.6 s to 2.4 s, High Resolution 20 s to 4.7 s, Master Audio 19 s to 5.6 s), TrueHD (12.4 s to 1.7 s) and the audio-file formats (FLAC, Apple Lossless, MPEG-4 ALS, WavPack, TTA, Monkey's Audio, WAV). The files are byte for byte what the slower version made. Reading input overlaps with encoding, and a post-encode scan that cost more than the encode of a WAV file is gone.
+- **Speed setting for lossless formats** (`--speed fast|balanced|best`; a control next to the Encode button): Balanced is the default and makes files up to 1% larger than Best for TrueHD, DTS-HD Master Audio, FLAC, Apple Lossless and MPEG-4 ALS, several times quicker; Fast trades a few per cent more. The app says what each costs for the chosen format. Best is what earlier versions made.
+- **Cores setting** (`--threads N`; Settings, Performance): limit an encode to a number of cores, or use all of them. The output is the same either way.
+- Faster release build (link-time optimisation), a faster memory allocator, and the DTS filter bank, Master Audio predictor search and ALS/FLAC analysis rewritten to give the same results in a fraction of the time.
+- `docs/SPEED.md` rewritten with the new numbers, the cost of each speed setting and a note on one core against all of them.
 
 ## b0.1.0 — first public beta
 

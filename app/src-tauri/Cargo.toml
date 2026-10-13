@@ -19,6 +19,7 @@ sw-queue = { path = "../../crates/sw-queue" }
 sw-tools = { path = "../../crates/sw-tools" }
 sw-verify = { path = "../../crates/sw-verify" }
 sw-backend-dee = { path = "../../crates/sw-backend-dee" }
+mimalloc = { version = "0.1", default-features = false }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
