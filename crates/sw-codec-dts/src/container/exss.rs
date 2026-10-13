@@ -135,213 +135,113 @@ pub fn exss_frame(p: &ExssParams, xll: &[u8]) -> Vec<u8> {
 /// Build one extension substream frame carrying an XBR extension and/or an XLL frame (the core, if any,
 /// lives in the core substream).
 pub fn exss_frame_ext(p: &ExssParams, xbr: Option<&[u8]>, xll: Option<&[u8]>) -> Vec<u8> {
-    exss_build(p, xbr, xll, None, None)
+    build(
+        p,
+        &Payloads {
+            xbr,
+            xll,
+            ..Default::default()
+        },
+    )
 }
 
 /// Build one extension substream frame carrying an XXCH extension (the core is in the core substream).
 pub fn exss_frame_xxch(p: &ExssParams, xxch: &[u8]) -> Vec<u8> {
-    exss_build(p, None, None, None, Some(xxch))
+    build(
+        p,
+        &Payloads {
+            xxch: Some(xxch),
+            ..Default::default()
+        },
+    )
 }
 
 /// Extension substream frame with XBR (refining the core channels) and XXCH (the extra channels).
 pub fn exss_frame_xbr_xxch(p: &ExssParams, xbr: &[u8], xxch: &[u8]) -> Vec<u8> {
-    exss_build(p, Some(xbr), None, None, Some(xxch))
+    build(
+        p,
+        &Payloads {
+            xbr: Some(xbr),
+            xxch: Some(xxch),
+            ..Default::default()
+        },
+    )
 }
 
 /// Build one extension substream frame around an LBR (DTS Express) payload.
 pub fn exss_frame_lbr(p: &ExssParams, lbr: &[u8]) -> Vec<u8> {
-    exss_build(p, None, None, Some(lbr), None)
+    build(
+        p,
+        &Payloads {
+            lbr: Some(lbr),
+            ..Default::default()
+        },
+    )
 }
 
-/// Extension substream frame with XXCH (the extra channels) and X96 (the 96 kHz band of every channel); the
-/// core stays in the core substream.
 /// Extension substream frame with X96 alone (the core, with or without XCH, is in the core substream).
 pub fn exss_frame_x96(p: &ExssParams, x96: &[u8]) -> Vec<u8> {
-    exss_build_x(p, None, None, None, None, Some(x96))
+    build(
+        p,
+        &Payloads {
+            x96: Some(x96),
+            ..Default::default()
+        },
+    )
 }
 
+/// Extension substream frame with XXCH (the extra channels) and X96 (the 96 kHz band of every channel); the core
+/// stays in the core substream.
 pub fn exss_frame_xxch_x96(p: &ExssParams, xxch: &[u8], x96: &[u8]) -> Vec<u8> {
-    exss_build_x(p, None, None, None, Some(xxch), Some(x96))
+    build(
+        p,
+        &Payloads {
+            xxch: Some(xxch),
+            x96: Some(x96),
+            ..Default::default()
+        },
+    )
 }
 
-fn exss_build(
-    p: &ExssParams,
-    xbr: Option<&[u8]>,
-    xll: Option<&[u8]>,
-    lbr: Option<&[u8]>,
-    xxch: Option<&[u8]>,
-) -> Vec<u8> {
-    exss_build_x(p, xbr, xll, lbr, xxch, None)
+/// The coded data an extension substream frame carries, in the order it is stored after the header.
+#[derive(Default)]
+struct Payloads<'a> {
+    xbr: Option<&'a [u8]>,
+    xxch: Option<&'a [u8]>,
+    x96: Option<&'a [u8]>,
+    xll: Option<&'a [u8]>,
+    lbr: Option<&'a [u8]>,
 }
 
-fn exss_build_x(
-    p: &ExssParams,
-    xbr: Option<&[u8]>,
-    xll: Option<&[u8]>,
-    lbr: Option<&[u8]>,
-    xxch: Option<&[u8]>,
-    x96: Option<&[u8]>,
-) -> Vec<u8> {
-    let nb4f = 16u32;
-    let payload = xbr.map_or(0, |x| x.len())
-        + xll.map_or(0, |x| x.len())
-        + lbr.map_or(0, |x| x.len())
-        + xxch.map_or(0, |x| x.len())
-        + x96.map_or(0, |x| x.len());
-    // ---- asset descriptor (its own byte size)
-    let mut a = BitWriter::new();
-    a.put(0, 9); // size placeholder
-    a.put(0, 3); // asset index
-    a.put(0, 1); // no asset type
-    a.put(0, 1); // no language
-    a.put(0, 1); // no info text
-    a.put(p.bit_res - 1, 5);
-    a.put(fs_index(p.sample_rate), 4);
-    a.put(p.channels as u32 - 1, 8);
-    // a mono secondary stream is not tied to a speaker: its mixing matrix says where it goes
-    let mono_secondary = lbr.is_some() && p.secondary && p.channels == 1 && p.extras.mix.is_some();
-    if mono_secondary || p.extras.repr_type.is_some() {
-        a.put(0, 1); // representation type instead of a speaker mapping
-        a.put(p.extras.repr_type.unwrap_or(0), 3);
-    } else {
-        a.put(1, 1); // channels are speaker feeds
-        if p.channels > 2 {
-            a.put(u32::from(p.extras.emb_stereo), 1); // embedded stereo downmix
-        }
-        if p.channels > 6 {
-            a.put(u32::from(xxch.is_some() || p.xch_in_core || p.extras.emb_5_1), 1);
-            // embedded 5.1 downmix (in the XXCH extension, in the 5.1 core of an XCH stream, or in the XLL hierarchy)
-        }
-        let mask_bits: u32 = if p.extras.wide_remap {
-            16
-        } else if p.spk_mask <= 0xF {
-            4
-        } else if p.spk_mask <= 0xFF {
-            8
-        } else if p.spk_mask <= 0xFFF {
-            12
-        } else {
-            16
-        };
-        a.put(1, 1); // speaker mask enabled
-        a.put(mask_bits / 4 - 1, 2);
-        a.put(p.spk_mask, mask_bits);
-        if p.extras.wide_remap {
-            let (masks, rows) = wide_remap_sets();
-            a.put(masks.len() as u32, 3);
-            for m in &masks {
-                a.put(*m, mask_bits);
-            }
-            for set in &rows {
-                a.put(p.channels as u32 - 1, 5); // decoded channels the sets refer to
-                for (mask, codes) in set {
-                    a.put(*mask, p.channels as u32);
-                    for c in codes {
-                        a.put(*c, 5);
-                    }
-                }
-            }
-        } else {
-            a.put(0, 3); // no remapping sets
-        }
+impl Payloads<'_> {
+    fn in_stored_order(&self) -> impl Iterator<Item = &[u8]> {
+        [self.xbr, self.xxch, self.x96, self.xll, self.lbr]
+            .into_iter()
+            .flatten()
     }
-    a.put(0, 1); // no dynamic range coefficient
-    if p.dialnorm > 0 {
-        a.put(1, 1);
-        a.put(p.dialnorm, 5);
-    } else {
-        a.put(0, 1);
-    }
-    let secondary = lbr.is_some() && p.secondary;
-    if secondary {
-        match (&p.extras.mix, mono_secondary) {
-            (Some(m), true) => {
-                a.put(1, 1); // mixing metadata present
-                a.put(1, 1); // mixed externally
-                a.put(30, 6); // gain of the secondary audio itself
-                a.put(2, 2); // DRC prior to mixing: limited
-                a.put(7, 3);
-                a.put(0, 1); // one scaling code for all outputs
-                a.put(m.scale as u32, 6); // attenuation of the primary audio
-                a.put(m.speakers as u32, 6); // speakers fed by the mono signal
-                for g in &m.gains {
-                    a.put(*g as u32, 6);
-                }
-            }
-            _ => a.put(0, 1), // no mixing matrix: the channels go to their own speakers
-        }
-    }
-    let write_xll = |a: &mut BitWriter, x: &[u8]| {
-        a.put(x.len() as u32 - 1, nb4f);
-        a.put(1, 1); // XLL sync word present
-        a.put(0, 4); // peak bit rate smoothing buffer
-        a.put(0, 5); // 1-bit initial decoding delay field
-        a.put(0, 1);
-        a.put(0, nb4f); // sync word offset
-    };
-    if let Some(l) = lbr {
-        a.put(2, 2); // coding mode: low bit rate
-        a.put(l.len() as u32 - 1, 14);
-        a.put(1, 1); // LBR sync word present in every frame
-        a.put(0, 2); // sync distance 0 frames
-    } else if p.with_core || xbr.is_some() || xxch.is_some() || x96.is_some() {
-        a.put(0, 2); // coding mode: core plus extensions
-        let mask = (if p.with_core { 0x001 } else { 0 })
-            | (if p.x96_in_core { 0x004 } else { 0 })
-            | (if p.xch_in_core { 0x008 } else { 0 })
-            | (if xbr.is_some() { 0x020 } else { 0 })
-            | (if xxch.is_some() { 0x040 } else { 0 })
-            | (if x96.is_some() { 0x080 } else { 0 })
-            | (if xll.is_some() { 0x200 } else { 0 });
-        a.put(mask, 12); // core in the core substream, XBR, XLL
-        if let Some(b) = xbr {
-            a.put(b.len() as u32 - 1, 14);
-        }
-        if let Some(x) = xxch {
-            a.put(x.len() as u32 - 1, 14);
-        }
-        if let Some(x) = x96 {
-            a.put(x.len() as u32 - 1, 12);
-        }
-        if let Some(x) = xll {
-            write_xll(&mut a, x);
-        }
-    } else {
-        a.put(1, 2); // lossless only
-        write_xll(&mut a, xll.expect("an XLL frame"));
-    }
-    if xll.is_some() {
-        a.put(0, 3); // stream id
-    }
-    if secondary {
-        if !mono_secondary {
-            // channels mapped one to one to speakers carry the attenuation of the primary audio here
-            a.put(1, 1); // one-to-one mixing
-            a.put(0, 1); // one scaling code for all channels
-            a.put(p.extras.mix.as_ref().map_or(49, |m| m.scale as u32), 6);
-        }
-        a.put(1, 1); // decoded by the secondary decoder
-        a.put(0, 1); // no revision 2 DRC
-    } else {
-        a.put(0, 1); // decode in primary decoder
-        if xll.is_some() {
-            a.put(0, 1); // no revision 2 DRC
-        }
-    }
-    a.align(8);
-    let mut ab = a.into_bytes();
-    let alen = ab.len();
-    assert!(alen <= 512);
-    // patch the 9-bit size field (value alen - 1)
-    let v = (alen - 1) as u32;
-    ab[0] = (v >> 1) as u8;
-    ab[1] = (ab[1] & 0x7F) | (((v & 1) as u8) << 7);
 
-    // ---- header
+    fn total_len(&self) -> usize {
+        self.in_stored_order().map(|x| x.len()).sum()
+    }
+}
+
+/// Bits of an encoded length field: the length minus one.
+fn len_field(data: &[u8]) -> u32 {
+    data.len() as u32 - 1
+}
+
+/// Number of bits of the header's size fields.
+const SIZE_BITS: u32 = 16;
+
+fn build(p: &ExssParams, payloads: &Payloads) -> Vec<u8> {
+    let payload = payloads.total_len();
+    let asset = asset_descriptor(p, payloads);
+    let secondary = payloads.lbr.is_some() && p.secondary;
     // secondary audio: presentation mask of 3 bits plus two asset masks, then the mixing configuration (10 bits)
     let sel_bits = if secondary { 3 + 16 + 1 + 10 } else { 1 + 8 + 1 };
-    let bits_before_desc = 32 + 8 + 2 + 1 + 8 + nb4f as usize + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + nb4f as usize;
-    let bits_total = bits_before_desc + alen * 8 + if p.with_core { 6 } else { 1 };
+    let size = SIZE_BITS as usize;
+    let bits_before_desc = 32 + 8 + 2 + 1 + 8 + size + 1 + 2 + 3 + 1 + 3 + 3 + sel_bits + size;
+    let bits_total = bits_before_desc + asset.len() * 8 + if p.with_core { 6 } else { 1 };
     let natural = bits_total.div_ceil(8) + 2;
     // the original pads its headers with zero bytes to a multiple of four
     let hsize = natural.div_ceil(4) * 4;
@@ -354,7 +254,7 @@ fn exss_build_x(
     h.put(if secondary { 2 } else { 0 }, 2); // extension substream index (secondary audio lives in 2)
     h.put(0, 1); // short header sizes
     h.put(hsize as u32 - 1, 8);
-    h.put(frame_size as u32 - 1, nb4f);
+    h.put(frame_size as u32 - 1, SIZE_BITS);
     h.put(1, 1); // static fields present
     h.put(ref_clock_code(p.sample_rate), 2);
     h.put(p.frame_duration_code, 3);
@@ -376,8 +276,8 @@ fn exss_build_x(
         h.put(1, 8); // active asset mask
         h.put(0, 1); // no mixing metadata
     }
-    h.put(payload as u32 - 1, nb4f); // asset size
-    for b in &ab {
+    h.put(payload as u32 - 1, SIZE_BITS); // asset size
+    for b in &asset {
         h.put(*b as u32, 8);
     }
     if p.with_core {
@@ -389,28 +289,190 @@ fn exss_build_x(
         h.put(0, 1); // no backward compatible core
     }
     h.align(8);
-    let mut hb = h.into_bytes();
-    assert_eq!(hb.len() + 2, natural);
-    hb.resize(hsize - 2, 0); // the original pads its headers up to a fixed size
-    let crc = crc16(&hb[5..]);
-    hb.extend_from_slice(&crc.to_be_bytes());
-    if let Some(x) = xbr {
-        hb.extend_from_slice(x);
+    let mut frame = h.into_bytes();
+    assert_eq!(frame.len() + 2, natural);
+    frame.resize(hsize - 2, 0); // the original pads its headers up to a fixed size
+    let crc = crc16(&frame[5..]);
+    frame.extend_from_slice(&crc.to_be_bytes());
+    for data in payloads.in_stored_order() {
+        frame.extend_from_slice(data);
     }
-    if let Some(x) = xxch {
-        hb.extend_from_slice(x);
+    frame.resize(frame.len() + pad, 0);
+    frame
+}
+
+/// The asset descriptor: what the asset is (sample format, speakers, dialogue level, mixing) and how its coded data
+/// is laid out. It starts with a 9-bit size field and ends on a byte boundary.
+fn asset_descriptor(p: &ExssParams, payloads: &Payloads) -> Vec<u8> {
+    let mut a = BitWriter::new();
+    a.put(0, 9); // size placeholder
+    a.put(0, 3); // asset index
+    a.put(0, 1); // no asset type
+    a.put(0, 1); // no language
+    a.put(0, 1); // no info text
+    a.put(p.bit_res - 1, 5);
+    a.put(fs_index(p.sample_rate), 4);
+    a.put(p.channels as u32 - 1, 8);
+    // a mono secondary stream is not tied to a speaker: its mixing matrix says where it goes
+    let mono_secondary = payloads.lbr.is_some() && p.secondary && p.channels == 1 && p.extras.mix.is_some();
+    if mono_secondary || p.extras.repr_type.is_some() {
+        a.put(0, 1); // representation type instead of a speaker mapping
+        a.put(p.extras.repr_type.unwrap_or(0), 3);
+    } else {
+        write_speakers(&mut a, p, payloads.xxch.is_some());
     }
-    if let Some(x) = x96 {
-        hb.extend_from_slice(x);
+    a.put(0, 1); // no dynamic range coefficient
+    if p.dialnorm > 0 {
+        a.put(1, 1);
+        a.put(p.dialnorm, 5);
+    } else {
+        a.put(0, 1);
     }
-    if let Some(x) = xll {
-        hb.extend_from_slice(x);
+    let secondary = payloads.lbr.is_some() && p.secondary;
+    if secondary {
+        write_mixing_matrix(&mut a, p, mono_secondary);
     }
-    if let Some(x) = lbr {
-        hb.extend_from_slice(x);
+    write_coding_mode(&mut a, p, payloads);
+    if payloads.xll.is_some() {
+        a.put(0, 3); // stream id
     }
-    hb.resize(hb.len() + pad, 0);
-    hb
+    if secondary {
+        if !mono_secondary {
+            // channels mapped one to one to speakers carry the attenuation of the primary audio here
+            a.put(1, 1); // one-to-one mixing
+            a.put(0, 1); // one scaling code for all channels
+            a.put(p.extras.mix.as_ref().map_or(49, |m| m.scale as u32), 6);
+        }
+        a.put(1, 1); // decoded by the secondary decoder
+        a.put(0, 1); // no revision 2 DRC
+    } else {
+        a.put(0, 1); // decode in primary decoder
+        if payloads.xll.is_some() {
+            a.put(0, 1); // no revision 2 DRC
+        }
+    }
+    a.align(8);
+    let mut bytes = a.into_bytes();
+    assert!(bytes.len() <= 512);
+    // patch the 9-bit size field (value length - 1)
+    let v = (bytes.len() - 1) as u32;
+    bytes[0] = (v >> 1) as u8;
+    bytes[1] = (bytes[1] & 0x7F) | (((v & 1) as u8) << 7);
+    bytes
+}
+
+/// The channels as speaker feeds: the speaker mask, the embedded downmix flags and the remapping sets.
+fn write_speakers(a: &mut BitWriter, p: &ExssParams, has_xxch: bool) {
+    a.put(1, 1); // channels are speaker feeds
+    if p.channels > 2 {
+        a.put(u32::from(p.extras.emb_stereo), 1); // embedded stereo downmix
+    }
+    if p.channels > 6 {
+        // embedded 5.1 downmix (in the XXCH extension, in the 5.1 core of an XCH stream, or in the XLL hierarchy)
+        a.put(u32::from(has_xxch || p.xch_in_core || p.extras.emb_5_1), 1);
+    }
+    let mask_bits: u32 = if p.extras.wide_remap {
+        16
+    } else if p.spk_mask <= 0xF {
+        4
+    } else if p.spk_mask <= 0xFF {
+        8
+    } else if p.spk_mask <= 0xFFF {
+        12
+    } else {
+        16
+    };
+    a.put(1, 1); // speaker mask enabled
+    a.put(mask_bits / 4 - 1, 2);
+    a.put(p.spk_mask, mask_bits);
+    if !p.extras.wide_remap {
+        a.put(0, 3); // no remapping sets
+        return;
+    }
+    let (masks, rows) = wide_remap_sets();
+    a.put(masks.len() as u32, 3);
+    for m in &masks {
+        a.put(*m, mask_bits);
+    }
+    for set in &rows {
+        a.put(p.channels as u32 - 1, 5); // decoded channels the sets refer to
+        for (mask, codes) in set {
+            a.put(*mask, p.channels as u32);
+            for c in codes {
+                a.put(*c, 5);
+            }
+        }
+    }
+}
+
+/// Mixing metadata of a secondary stream: where a mono signal goes, or none for channels that keep their speakers.
+fn write_mixing_matrix(a: &mut BitWriter, p: &ExssParams, mono_secondary: bool) {
+    match (&p.extras.mix, mono_secondary) {
+        (Some(m), true) => {
+            a.put(1, 1); // mixing metadata present
+            a.put(1, 1); // mixed externally
+            a.put(30, 6); // gain of the secondary audio itself
+            a.put(2, 2); // DRC prior to mixing: limited
+            a.put(7, 3);
+            a.put(0, 1); // one scaling code for all outputs
+            a.put(m.scale as u32, 6); // attenuation of the primary audio
+            a.put(m.speakers as u32, 6); // speakers fed by the mono signal
+            for g in &m.gains {
+                a.put(*g as u32, 6);
+            }
+        }
+        _ => a.put(0, 1), // no mixing matrix: the channels go to their own speakers
+    }
+}
+
+/// How the asset's data is coded (low bit rate, core plus extensions, or lossless only) and the size of each part.
+fn write_coding_mode(a: &mut BitWriter, p: &ExssParams, payloads: &Payloads) {
+    let Payloads {
+        xbr,
+        xxch,
+        x96,
+        xll,
+        lbr,
+    } = *payloads;
+    let write_xll = |a: &mut BitWriter, x: &[u8]| {
+        a.put(len_field(x), SIZE_BITS);
+        a.put(1, 1); // XLL sync word present
+        a.put(0, 4); // peak bit rate smoothing buffer
+        a.put(0, 5); // 1-bit initial decoding delay field
+        a.put(0, 1);
+        a.put(0, SIZE_BITS); // sync word offset
+    };
+    if let Some(l) = lbr {
+        a.put(2, 2); // coding mode: low bit rate
+        a.put(len_field(l), 14);
+        a.put(1, 1); // LBR sync word present in every frame
+        a.put(0, 2); // sync distance 0 frames
+    } else if p.with_core || xbr.is_some() || xxch.is_some() || x96.is_some() {
+        a.put(0, 2); // coding mode: core plus extensions
+        let mask = (if p.with_core { 0x001 } else { 0 })
+            | (if p.x96_in_core { 0x004 } else { 0 })
+            | (if p.xch_in_core { 0x008 } else { 0 })
+            | (if xbr.is_some() { 0x020 } else { 0 })
+            | (if xxch.is_some() { 0x040 } else { 0 })
+            | (if x96.is_some() { 0x080 } else { 0 })
+            | (if xll.is_some() { 0x200 } else { 0 });
+        a.put(mask, 12); // core in the core substream, XBR, XLL
+        if let Some(b) = xbr {
+            a.put(len_field(b), 14);
+        }
+        if let Some(x) = xxch {
+            a.put(len_field(x), 14);
+        }
+        if let Some(x) = x96 {
+            a.put(len_field(x), 12);
+        }
+        if let Some(x) = xll {
+            write_xll(a, x);
+        }
+    } else {
+        a.put(1, 2); // lossless only
+        write_xll(a, xll.expect("an XLL frame"));
+    }
 }
 
 /// Container for `.dtshd` files: header chunks, then the raw stream.
