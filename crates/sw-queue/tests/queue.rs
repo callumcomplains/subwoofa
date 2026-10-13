@@ -74,6 +74,7 @@ fn spec(dir: &Path, name: &str, stream: &str, inputs: &HashMap<String, String>) 
         bitstream: Default::default(),
         speed: String::new(),
         threads: 0,
+        write_log: true,
     }
 }
 

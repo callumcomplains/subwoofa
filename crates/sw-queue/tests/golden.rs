@@ -341,6 +341,7 @@ fn run(case: &Case, dir: &Path) -> String {
         bitstream: Default::default(),
         speed: case.speed.into(),
         threads: 0,
+        write_log: true,
     };
     let cancel = std::sync::atomic::AtomicBool::new(false);
     if let Err(e) = execute(&spec, false, &cancel, &mut |_, _| {}) {

@@ -58,6 +58,9 @@ pub struct EncodeSpec {
     /// How many threads the encode may use; 0 means every core.
     #[serde(default)]
     pub threads: u32,
+    /// Leave a log of the run next to the output (the app does; the command line does not).
+    #[serde(default = "yes")]
+    pub write_log: bool,
 }
 
 /// The dialnorm setting (the dialogue level, 1 to 31 for -1 to -31 dBFS) as the attenuation a DTS decoder applies,
@@ -86,9 +89,16 @@ impl EncodeSpec {
     }
 }
 
+/// What a finished job reports.
+#[derive(Default)]
 pub struct Outcome {
     pub message: String,
     pub verified: bool,
+    /// Size of the output file.
+    pub bytes: u64,
+    /// Seconds of audio that were encoded, and how long the whole job took.
+    pub span_secs: f64,
+    pub elapsed_secs: f64,
 }
 
 pub enum Failure {
@@ -132,8 +142,15 @@ pub fn execute(
 ) -> Result<Outcome, Failure> {
     let t0 = Instant::now();
     let mut log = String::new();
+    let mut span_secs = 0.0;
     let result = crate::threads::with_threads(spec.threads, || {
-        execute_inner(spec, verify, cancel, on_progress, &mut log, t0)
+        execute_inner(spec, verify, cancel, on_progress, &mut log, t0, &mut span_secs)
+    })
+    .map(|outcome| Outcome {
+        bytes: std::fs::metadata(&spec.output).map_or(0, |m| m.len()),
+        span_secs,
+        elapsed_secs: t0.elapsed().as_secs_f64(),
+        ..outcome
     });
     // Always leave a log next to the output, whatever happened.
     let status = match &result {
@@ -145,7 +162,9 @@ pub fn execute(
         "\n{status}\nTotal time: {:.1} s\n",
         t0.elapsed().as_secs_f64()
     ));
-    let _ = std::fs::write(spec.log_path(), log);
+    if spec.write_log {
+        let _ = std::fs::write(spec.log_path(), log);
+    }
     result
 }
 
@@ -156,6 +175,7 @@ fn execute_inner(
     on_progress: &mut dyn FnMut(f32, bool),
     log: &mut String,
     t0: Instant,
+    span_secs: &mut f64,
 ) -> Result<Outcome, Failure> {
     let dest = Destination::from_id(&spec.dest).ok_or("unknown destination")?;
     let stream = StreamType::from_id(&spec.stream).ok_or("unknown stream type")?;
@@ -202,6 +222,7 @@ fn execute_inner(
         .unwrap_or(total_src - start)
         .min(total_src - start)
         .max(0.0);
+    *span_secs = span;
     if span <= 0.0 {
         return Err("nothing to encode: the start time is at or past the end of the input".into());
     }
@@ -520,6 +541,7 @@ fn execute_inner(
         return Ok(Outcome {
             message: format!("encoded {:.1} MB", size as f64 / 1e6),
             verified: false,
+            ..Default::default()
         });
     }
     if stream.is_audio_file() {
@@ -562,6 +584,7 @@ fn execute_inner(
         return Ok(Outcome {
             message: msg,
             verified: true,
+            ..Default::default()
         });
     }
     if ffmpeg.is_none() {
@@ -572,6 +595,7 @@ fn execute_inner(
                 size as f64 / 1e6
             ),
             verified: false,
+            ..Default::default()
         });
     }
     on_progress(1.0, true);
@@ -582,6 +606,7 @@ fn execute_inner(
             Ok(Outcome {
                 message: msg,
                 verified: true,
+                ..Default::default()
             })
         }
         Err(e) => Err(Failure::from(e)),
