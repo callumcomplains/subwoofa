@@ -21,6 +21,12 @@ needless_range_loop = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 field_reassign_with_default = "allow"
+# a newer clippy than the one this was written with suggests it; fixed-size slices are no clearer here
+chunks_exact_to_as_chunks = "allow"
+
+[workspace.lints.rust]
+# so that a lint name only a newer toolchain knows does not warn on an older one
+unknown_lints = "allow"
 
 # Audio DSP in an unoptimised build is unusably slow; keep debug info but optimise.
 [profile.dev]
