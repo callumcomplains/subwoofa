@@ -1,7 +1,7 @@
 //! DTS-HD HRA 7.1: a 5.1 core plus an XXCH extension for the rear pair. A reference decoder must return every
 //! channel, including the rears and the sides whose core copy carries the embedded downmix.
 use std::process::Command;
-use sw_codec_dts::native::{encode_to_file, Request};
+use sw_codec_dts::dca::native::{encode_to_file, Request};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {

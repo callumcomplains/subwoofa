@@ -704,7 +704,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
             if engine == "native" {
                 if stream == StreamType::DtsExpress {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::lbr_native::LbrRequest {
+                    let req = sw_codec_dts::express::native::LbrRequest {
                         layout,
                         bitrate_kbps: bitrate.unwrap_or(128),
                         start_secs: start.unwrap_or(0.0),
@@ -714,7 +714,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                         bitstream: bitstream.clone(),
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::lbr_native::encode_to_file(
+                    let stats = sw_codec_dts::express::native::encode_to_file(
                         &mut stems,
                         &req,
                         &mut |p| progress.tick(p),
@@ -769,7 +769,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                 }
                 if stream == StreamType::DtsHdMa {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::ma_native::MaRequest {
+                    let req = sw_codec_dts::lossless::native::MaRequest {
                         layout,
                         core_bitrate_kbps: match bitrate {
                             Some(0) => None,
@@ -786,7 +786,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                         effort,
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::ma_native::encode_to_file(
+                    let stats = sw_codec_dts::lossless::native::encode_to_file(
                         &mut stems,
                         &req,
                         &mut |p| progress.tick(p),
@@ -817,7 +817,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                     StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624
                 ) {
                     let mut stems = sw_pcm::StemSet::open_ordered(layout, &map, order).map_err(|e| e.to_string())?;
-                    let req = sw_codec_dts::native::Request {
+                    let req = sw_codec_dts::dca::native::Request {
                         layout,
                         bitrate_kbps: if stream == StreamType::DtsHdHra {
                             1509
@@ -847,7 +847,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                         ),
                     };
                     let t0 = std::time::Instant::now();
-                    let stats = sw_codec_dts::native::encode_to_file(
+                    let stats = sw_codec_dts::dca::native::encode_to_file(
                         &mut stems,
                         &req,
                         &mut |p| progress.tick(p),

@@ -1,7 +1,7 @@
 //! DTS-HD High Resolution: the XBR extension must improve on the core when decoded.
 use std::process::Command;
-use sw_codec_dts::exss::{dtshd_header, DtsHdHeader, ExssParams};
-use sw_codec_dts::hra::HraStage;
+use sw_codec_dts::container::exss::{dtshd_header, DtsHdHeader, ExssParams};
+use sw_codec_dts::hra::stage::HraStage;
 use sw_codec_dts::{Config, Encoder};
 
 fn have_ffmpeg() -> bool {
@@ -129,12 +129,12 @@ fn xbr_improves_on_the_core() {
 
 #[test]
 fn hra_at_96_khz_is_core_x96_and_xbr() {
-    use sw_codec_dts::dts96::{Dts96Config, Dts96Encoder};
+    use sw_codec_dts::dca::dts96::{Dts96Config, Dts96Encoder};
     if !have_ffmpeg() {
         return;
     }
     let layout = sw_core::ChannelLayout::find("2.0").unwrap();
-    let map = sw_codec_dts::native::map_layout(layout).unwrap();
+    let map = sw_codec_dts::dca::native::map_layout(layout).unwrap();
     let bitrate = 1_509_000u32;
     let frame_bytes = (bitrate as usize * 512 / 48_000 / 8) & !3;
     let mut enc = Dts96Encoder::new(Dts96Config {

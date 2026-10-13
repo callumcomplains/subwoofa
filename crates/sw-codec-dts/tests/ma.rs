@@ -1,7 +1,7 @@
 //! Lossless (XLL-only) round trip through FFmpeg's decoder.
 use std::process::Command;
-use sw_codec_dts::exss::{dtshd_header, DtsHdHeader};
-use sw_codec_dts::ma::{map_layout, MaConfig, MaEncoder};
+use sw_codec_dts::container::exss::{dtshd_header, DtsHdHeader};
+use sw_codec_dts::lossless::ma::{map_layout, MaConfig, MaEncoder};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {

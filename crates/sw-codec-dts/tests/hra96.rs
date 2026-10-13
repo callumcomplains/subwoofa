@@ -3,7 +3,7 @@
 //! stream's XCH extension must still be a valid 96 to 1020 byte block at the end of those frames) and return the
 //! tone of every channel.
 use std::process::Command;
-use sw_codec_dts::native::{encode_to_file, Request};
+use sw_codec_dts::dca::native::{encode_to_file, Request};
 use sw_core::ChannelLayout;
 
 fn have_ffmpeg() -> bool {

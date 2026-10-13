@@ -1,7 +1,7 @@
 //! DTS 96/24: the extension must carry what is above the core's 24 kHz.
 use std::process::Command;
-use sw_codec_dts::dts96::{Dts96Config, Dts96Encoder};
-use sw_codec_dts::native::LayoutMap;
+use sw_codec_dts::dca::dts96::{Dts96Config, Dts96Encoder};
+use sw_codec_dts::dca::native::LayoutMap;
 
 fn have_ffmpeg() -> bool {
     Command::new("ffmpeg")

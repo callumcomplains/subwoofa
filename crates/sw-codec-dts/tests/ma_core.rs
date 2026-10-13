@@ -1,7 +1,7 @@
 //! Core plus lossless extension: the decoder must reproduce the source exactly.
 use std::process::Command;
-use sw_codec_dts::ma::{map_layout, map_layout_with};
-use sw_codec_dts::ma_core::{MaCoreConfig, MaCoreEncoder};
+use sw_codec_dts::lossless::ma::{map_layout, map_layout_with};
+use sw_codec_dts::lossless::ma_core::{MaCoreConfig, MaCoreEncoder};
 use sw_core::{ChannelLayout, Downmix};
 
 fn have_ffmpeg() -> bool {

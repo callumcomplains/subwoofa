@@ -247,7 +247,7 @@ fn execute_inner(
             log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
         }
     }
-    for line in sw_codec_dts::mixmeta::describe(
+    for line in sw_codec_dts::container::mixmeta::describe(
         &spec.bitstream,
         span,
         stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary,
@@ -396,7 +396,7 @@ fn execute_inner(
             ));
         }
     } else if native && stream == StreamType::DtsExpress {
-        let req = sw_codec_dts::lbr_native::LbrRequest {
+        let req = sw_codec_dts::express::native::LbrRequest {
             layout,
             bitrate_kbps: spec.bitrate.unwrap_or(128),
             start_secs: start,
@@ -405,12 +405,11 @@ fn execute_inner(
             secondary: dest == Destination::BluRaySecondary,
             bitstream: spec.bitstream.clone(),
         };
-        sw_codec_dts::lbr_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
-            |e| match e {
-                sw_codec_dts::lbr_native::LbrError::Canceled => Failure::Canceled,
+        sw_codec_dts::express::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel)
+            .map_err(|e| match e {
+                sw_codec_dts::express::native::LbrError::Canceled => Failure::Canceled,
                 other => Failure::Error(other.to_string()),
-            },
-        )?;
+            })?;
     } else if native && stream == StreamType::DtsHdMa {
         if spec.sample_rate > 96_000 && layout.channels.len() > 6 && spec.bitrate != Some(0) {
             log.push_str(
@@ -418,7 +417,7 @@ fn execute_inner(
 ",
             );
         }
-        let req = sw_codec_dts::ma_native::MaRequest {
+        let req = sw_codec_dts::lossless::native::MaRequest {
             layout,
             core_bitrate_kbps: match spec.bitrate {
                 Some(0) => None,
@@ -434,19 +433,18 @@ fn execute_inner(
             bitstream: spec.bitstream.clone(),
             effort,
         };
-        sw_codec_dts::ma_native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
-            |e| match e {
-                sw_codec_dts::ma_native::MaError::Canceled => Failure::Canceled,
+        sw_codec_dts::lossless::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel)
+            .map_err(|e| match e {
+                sw_codec_dts::lossless::native::MaError::Canceled => Failure::Canceled,
                 other => Failure::Error(other.to_string()),
-            },
-        )?;
+            })?;
     } else if native
         && matches!(
             stream,
             StreamType::DtsDigitalSurround | StreamType::DtsEs | StreamType::DtsHdHra | StreamType::Dts9624
         )
     {
-        let req = sw_codec_dts::native::Request {
+        let req = sw_codec_dts::dca::native::Request {
             layout,
             bitrate_kbps: if stream == StreamType::DtsHdHra {
                 1509
@@ -474,9 +472,9 @@ fn execute_inner(
                 spec.rear_minus_3db,
             ),
         };
-        sw_codec_dts::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
+        sw_codec_dts::dca::native::encode_to_file(&mut stems, &req, &mut |p| on_progress(p, false), cancel).map_err(
             |e| match e {
-                sw_codec_dts::native::NativeError::Canceled => Failure::Canceled,
+                sw_codec_dts::dca::native::NativeError::Canceled => Failure::Canceled,
                 other => Failure::Error(other.to_string()),
             },
         )?;

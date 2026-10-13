@@ -165,7 +165,7 @@ fn band_mapping_matches_synthesis() {
     if !have_ffmpeg() {
         return;
     }
-    use sw_codec_dts::qmf::Synthesis;
+    use sw_codec_dts::dca::qmf::Synthesis;
     for band in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 30, 31] {
         let mut enc = Encoder::new(Config {
             sample_rate: 48_000,

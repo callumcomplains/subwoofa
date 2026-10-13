@@ -1,7 +1,7 @@
 //! DTS Express: FFmpeg must decode what the encoder writes, and the audio must resemble the input.
 use std::process::Command;
-use sw_codec_dts::exss::{dtshd_header, exss_frame_lbr, DtsHdHeader, ExssParams};
-use sw_codec_dts::lbr::{LbrConfig, LbrEncoder};
+use sw_codec_dts::container::exss::{dtshd_header, exss_frame_lbr, DtsHdHeader, ExssParams};
+use sw_codec_dts::express::encoder::{LbrConfig, LbrEncoder};
 
 fn have_ffmpeg() -> bool {
     Command::new("ffmpeg")
