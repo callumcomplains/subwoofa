@@ -34,5 +34,6 @@ opt-level = 2
 
 # Encoders spend their time in tight loops across crate boundaries; whole-program optimisation makes them faster.
 [profile.release]
+strip = "symbols"
 lto = "fat"
 codegen-units = 1

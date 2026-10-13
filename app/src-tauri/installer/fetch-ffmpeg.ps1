@@ -11,15 +11,22 @@ $ProgressPreference = "SilentlyContinue"   # the progress bar makes Invoke-WebRe
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $base = "https://www.gyan.dev/ffmpeg/builds"
+# a small download as text: the server labels some of them as plain binary, which PowerShell hands back as bytes
+function Get-Text([string]$Url) {
+    $content = (Invoke-WebRequest $Url -UseBasicParsing).Content
+    if ($content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($content) }
+    return [string]$content
+}
+
 $work = Join-Path ([IO.Path]::GetTempPath()) ("subwoofa-ffmpeg-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 
 try {
     New-Item -ItemType Directory -Force -Path $work | Out-Null
-    $version = (Invoke-WebRequest "$base/release-version" -UseBasicParsing).Content.Trim()
+    $version = (Get-Text "$base/release-version").Trim()
     if ($version -notmatch '^\d+(\.\d+)+$') { throw "Unexpected version text from the server: '$version'" }
     $zipUrl = "$base/packages/ffmpeg-$version-essentials_build.zip"
     Write-Host "Downloading FFmpeg $version (about 115 MB)..."
-    $expected = ((Invoke-WebRequest "$zipUrl.sha256" -UseBasicParsing).Content.Trim() -split '\s+')[0].ToLower()
+    $expected = ((Get-Text "$zipUrl.sha256").Trim() -split '\s+')[0].ToLower()
     $zip = Join-Path $work "ffmpeg.zip"
     Invoke-WebRequest $zipUrl -OutFile $zip -UseBasicParsing
 
@@ -31,8 +38,8 @@ try {
     Expand-Archive -Path $zip -DestinationPath (Join-Path $work "x") -Force
     $exe = Get-ChildItem (Join-Path $work "x") -Recurse -Filter ffmpeg.exe | Select-Object -First 1
     if (-not $exe) { throw "ffmpeg.exe was not in the download." }
-    $out = (& $exe.FullName -version 2>&1 | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "ffmpeg version") { throw "The downloaded ffmpeg.exe does not run." }
+    $out = & $exe.FullName -version 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $out -notmatch "ffmpeg version") { throw "The downloaded ffmpeg.exe does not run." }
 
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Copy-Item $exe.FullName (Join-Path $Dir "ffmpeg.exe") -Force
