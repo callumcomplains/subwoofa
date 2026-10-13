@@ -4,7 +4,7 @@ use crate::bits::BitWriter;
 use crate::lossless::xll::residual::{
     choose_code_b, isolated_positions, put_rice, put_values, recode, signed_to_raw, stored_param, zigzag, Code,
 };
-use crate::lossless::xll::{crc16, fs_index, SetPlan, XllEncoder, SYNC_XLL};
+use crate::lossless::xll::{crc16, fs_index, BandPlan, ChannelPlan, SetCfg, SetPlan, XllEncoder, SYNC_XLL};
 
 impl XllEncoder {
     /// The entropy-coded segments of one channel set.
@@ -26,89 +26,10 @@ impl XllEncoder {
                 choice_b.push(choose_code_b(&ub, posbits, nabits).0);
                 part_a_len.push(a_len);
             }
-            let reuse = false; // a reused parameter set would keep segment 0's part A length in some decoders
-            if seg > 0 {
-                w.put(u32::from(reuse), 1);
-            }
-            if !reuse {
-                w.put(0, 1); // distinct parameters per channel
-                for c in &choice_b {
-                    // flags are written from choice B (rice vs linear applies to both parts)
-                    let rice = matches!(c, Code::Rice(_) | Code::Hybrid { .. });
-                    w.put(u32::from(rice), 1);
-                    if rice {
-                        match c {
-                            Code::Hybrid { l, .. } => {
-                                w.put(1, 1); // hybrid Rice coding
-                                w.put(l - 1, nabits);
-                            }
-                            _ => w.put(0, 1),
-                        }
-                    }
-                }
-                for (i, _) in plans.iter().enumerate() {
-                    let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
-                    if seg == 0 {
-                        // part A shares the Rice/linear flag with part B
-                        let code = recode(&plans[i].residual[..part_a_len[i]], rice);
-                        w.put(stored_param(code, nabits, rice), nabits);
-                    }
-                    w.put(stored_param(choice_b[i], nabits, rice), nabits);
-                }
-            }
-            // residual data
-            for (i, p) in plans.iter().enumerate() {
-                let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
-                let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
-                let a_len = part_a_len[i];
-                let code_a = if seg == 0 {
-                    recode(&slice[..a_len], rice)
-                } else {
-                    Code::Rice(0)
-                };
-                if seg == 0 {
-                    put_values(&mut w, &slice[..a_len], code_a);
-                }
-                if let Code::Hybrid { k, l, c } = choice_b[i] {
-                    // isolated samples: how many, where, then every sample in order (isolated ones as l-bit values)
-                    let b: Vec<u32> = slice[a_len..].iter().map(|v| zigzag(*v)).collect();
-                    let iso = isolated_positions(&b, c as usize);
-                    w.put(iso.len() as u32, posbits);
-                    for &pos in &iso {
-                        w.put(pos as u32, posbits);
-                    }
-                    let mut next = 0usize;
-                    for (j, v) in b.iter().enumerate() {
-                        if next < iso.len() && iso[next] == j {
-                            w.put(*v, l);
-                            next += 1;
-                        } else {
-                            put_rice(&mut w, *v, k);
-                        }
-                    }
-                } else {
-                    put_values(&mut w, &slice[a_len..], choice_b[i]);
-                }
-            }
+            write_segment_params(&mut w, plans, &choice_b, &part_a_len, seg, nabits);
+            write_segment_data(&mut w, plans, &choice_b, &part_a_len, seg, seg_len, posbits);
             if band == 1 && seg == 0 {
-                // decimator history: the band-0 samples in front of this frame, as signed values of a common width
-                let peak = set
-                    .history
-                    .iter()
-                    .flatten()
-                    .map(|v| v.unsigned_abs())
-                    .max()
-                    .unwrap_or(0);
-                let nbits = (33 - peak.leading_zeros()).max(1);
-                w.put(nbits - 1, 5);
-                for h in &set.history {
-                    for v in h {
-                        w.put(
-                            (*v as u32) & if nbits >= 32 { u32::MAX } else { (1u32 << nbits) - 1 },
-                            nbits,
-                        );
-                    }
-                }
+                write_decimator_history(&mut w, set);
             }
             w.align(8);
             segs.push(w.into_bytes());
@@ -130,79 +51,14 @@ impl XllEncoder {
         h.put(0, 2); // no interpolation
         h.put(0, 2); // not a replacement set
         h.put(u32::from(index == 0), 1); // primary channel set
-        match (&set.dmix, &set.matrix) {
-            (None, Some((kind, rows))) => {
-                h.put(1, 1); // downmix coefficients present
-                h.put(1, 1); // embedded in the channel set header
-                h.put(u32::from(*kind), 3);
-                h.put(1, 1); // part of a hierarchy
-                for row in rows {
-                    for c in row {
-                        h.put(*c as u32, 9);
-                    }
-                }
-            }
-            (Some(d), _) => {
-                h.put(1, 1); // downmix coefficients present
-                h.put(1, 1); // and already applied by the encoder
-                h.put(1, 1); // part of a hierarchy
-                for row in &d.rows {
-                    h.put(row.scale_code as u32, 9);
-                    for c in &row.coeff_codes {
-                        h.put(*c as u32, 9);
-                    }
-                }
-            }
-            (None, None) => {
-                h.put(0, 1); // no downmix coefficients
-                h.put(1, 1); // part of a hierarchy
-            }
-        }
+        write_downmix(&mut h, set);
         h.put(1, 1); // channel mask enabled
         h.put(set.ch_mask, self.mask_bits());
         if cfg.sample_rate > 96_000 {
             h.put(0, 1); // no extra frequency bands beyond two
         }
         for (bi, sp) in set_plan.bands.iter().enumerate() {
-            h.put(u32::from(sp.decor), 1);
-            let order_bits = if nch <= 1 {
-                0
-            } else {
-                32 - (nch as u32 - 1).leading_zeros()
-            };
-            if sp.decor {
-                for o in &sp.orig_order {
-                    h.put(*o as u32, order_bits);
-                }
-                for c in &sp.coeffs {
-                    if *c != 0 {
-                        h.put(1, 1);
-                        h.put(signed_to_raw(*c, 7), 7);
-                    } else {
-                        h.put(0, 1);
-                    }
-                }
-            }
-            for p in &sp.plans {
-                h.put(p.adapt_order as u32, 4);
-            }
-            for p in &sp.plans {
-                if p.adapt_order == 0 {
-                    h.put(p.fixed_order as u32, 2);
-                }
-            }
-            for p in &sp.plans {
-                for i in &p.rc_idx {
-                    h.put(signed_to_raw(*i, 8), 8);
-                }
-            }
-            if bi > 0 {
-                if set.dmix.is_some() {
-                    h.put(0, 1); // downmix not applied in the extension band
-                }
-                h.put(0, 1); // no MSB/LSB split in the extension band
-                h.put(0, 1); // no scalable resolution in the extension band
-            }
+            write_band_header(&mut h, sp, nch, bi, set.dmix.is_some());
         }
         // reserved: none; byte align; CRC
         h.align(8);
@@ -284,5 +140,191 @@ impl XllEncoder {
         }
         out.resize(frame_len, 0);
         out
+    }
+}
+
+/// The coding parameters of a segment: whether they repeat the last segment's (never), the code of each channel and
+/// the parameter of each part.
+fn write_segment_params(
+    w: &mut BitWriter,
+    plans: &[ChannelPlan],
+    choice_b: &[Code],
+    part_a_len: &[usize],
+    seg: usize,
+    nabits: u32,
+) {
+    let reuse = false; // a reused parameter set would keep segment 0's part A length in some decoders
+    if seg > 0 {
+        w.put(u32::from(reuse), 1);
+    }
+    if !reuse {
+        w.put(0, 1); // distinct parameters per channel
+        for c in choice_b {
+            // flags are written from choice B (rice vs linear applies to both parts)
+            let rice = matches!(c, Code::Rice(_) | Code::Hybrid { .. });
+            w.put(u32::from(rice), 1);
+            if rice {
+                match c {
+                    Code::Hybrid { l, .. } => {
+                        w.put(1, 1); // hybrid Rice coding
+                        w.put(l - 1, nabits);
+                    }
+                    _ => w.put(0, 1),
+                }
+            }
+        }
+        for (i, _) in plans.iter().enumerate() {
+            let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
+            if seg == 0 {
+                // part A shares the Rice/linear flag with part B
+                let code = recode(&plans[i].residual[..part_a_len[i]], rice);
+                w.put(stored_param(code, nabits, rice), nabits);
+            }
+            w.put(stored_param(choice_b[i], nabits, rice), nabits);
+        }
+    }
+}
+
+/// The residuals of a segment, channel by channel: part A (the samples before the adaptive predictor has history) in
+/// segment 0, then part B in the chosen code.
+fn write_segment_data(
+    w: &mut BitWriter,
+    plans: &[ChannelPlan],
+    choice_b: &[Code],
+    part_a_len: &[usize],
+    seg: usize,
+    seg_len: usize,
+    posbits: u32,
+) {
+    for (i, p) in plans.iter().enumerate() {
+        let rice = matches!(choice_b[i], Code::Rice(_) | Code::Hybrid { .. });
+        let slice = &p.residual[seg * seg_len..(seg + 1) * seg_len];
+        let a_len = part_a_len[i];
+        let code_a = if seg == 0 {
+            recode(&slice[..a_len], rice)
+        } else {
+            Code::Rice(0)
+        };
+        if seg == 0 {
+            put_values(w, &slice[..a_len], code_a);
+        }
+        if let Code::Hybrid { k, l, c } = choice_b[i] {
+            // isolated samples: how many, where, then every sample in order (isolated ones as l-bit values)
+            let b: Vec<u32> = slice[a_len..].iter().map(|v| zigzag(*v)).collect();
+            let iso = isolated_positions(&b, c as usize);
+            w.put(iso.len() as u32, posbits);
+            for &pos in &iso {
+                w.put(pos as u32, posbits);
+            }
+            let mut next = 0usize;
+            for (j, v) in b.iter().enumerate() {
+                if next < iso.len() && iso[next] == j {
+                    w.put(*v, l);
+                    next += 1;
+                } else {
+                    put_rice(w, *v, k);
+                }
+            }
+        } else {
+            put_values(w, &slice[a_len..], choice_b[i]);
+        }
+    }
+}
+
+/// The decimator history of the extension band: the band-0 samples in front of this frame, as signed values of a
+/// common width.
+fn write_decimator_history(w: &mut BitWriter, set: &SetPlan) {
+    // decimator history: the band-0 samples in front of this frame, as signed values of a common width
+    let peak = set
+        .history
+        .iter()
+        .flatten()
+        .map(|v| v.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    let nbits = (33 - peak.leading_zeros()).max(1);
+    w.put(nbits - 1, 5);
+    for h in &set.history {
+        for v in h {
+            w.put(
+                (*v as u32) & if nbits >= 32 { u32::MAX } else { (1u32 << nbits) - 1 },
+                nbits,
+            );
+        }
+    }
+}
+
+/// The downmix coefficients of a channel set: embedded in the header, applied by the encoder, or none.
+fn write_downmix(h: &mut BitWriter, set: &SetCfg) {
+    match (&set.dmix, &set.matrix) {
+        (None, Some((kind, rows))) => {
+            h.put(1, 1); // downmix coefficients present
+            h.put(1, 1); // embedded in the channel set header
+            h.put(u32::from(*kind), 3);
+            h.put(1, 1); // part of a hierarchy
+            for row in rows {
+                for c in row {
+                    h.put(*c as u32, 9);
+                }
+            }
+        }
+        (Some(d), _) => {
+            h.put(1, 1); // downmix coefficients present
+            h.put(1, 1); // and already applied by the encoder
+            h.put(1, 1); // part of a hierarchy
+            for row in &d.rows {
+                h.put(row.scale_code as u32, 9);
+                for c in &row.coeff_codes {
+                    h.put(*c as u32, 9);
+                }
+            }
+        }
+        (None, None) => {
+            h.put(0, 1); // no downmix coefficients
+            h.put(1, 1); // part of a hierarchy
+        }
+    }
+}
+
+/// One frequency band of a channel set header: decorrelation, predictor orders and reflection coefficients.
+fn write_band_header(h: &mut BitWriter, sp: &BandPlan, nch: usize, bi: usize, has_dmix: bool) {
+    h.put(u32::from(sp.decor), 1);
+    let order_bits = if nch <= 1 {
+        0
+    } else {
+        32 - (nch as u32 - 1).leading_zeros()
+    };
+    if sp.decor {
+        for o in &sp.orig_order {
+            h.put(*o as u32, order_bits);
+        }
+        for c in &sp.coeffs {
+            if *c != 0 {
+                h.put(1, 1);
+                h.put(signed_to_raw(*c, 7), 7);
+            } else {
+                h.put(0, 1);
+            }
+        }
+    }
+    for p in &sp.plans {
+        h.put(p.adapt_order as u32, 4);
+    }
+    for p in &sp.plans {
+        if p.adapt_order == 0 {
+            h.put(p.fixed_order as u32, 2);
+        }
+    }
+    for p in &sp.plans {
+        for i in &p.rc_idx {
+            h.put(signed_to_raw(*i, 8), 8);
+        }
+    }
+    if bi > 0 {
+        if has_dmix {
+            h.put(0, 1); // downmix not applied in the extension band
+        }
+        h.put(0, 1); // no MSB/LSB split in the extension band
+        h.put(0, 1); // no scalable resolution in the extension band
     }
 }
