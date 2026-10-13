@@ -20,7 +20,7 @@ pub struct Status {
 pub struct Done {
     pub output: String,
     pub seconds: f64,
-    pub verify: Option<crate::VerifyOut>,
+    pub verify: Option<crate::streamtools::VerifyOut>,
 }
 
 #[derive(Default)]
@@ -184,7 +184,7 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
                     .ok()
                     .map(|r| {
                         let text = r.to_text();
-                        crate::VerifyOut { report: r, text }
+                        crate::streamtools::VerifyOut { report: r, text }
                     });
                 s.progress = 1.0;
                 s.done = Some(Done {
