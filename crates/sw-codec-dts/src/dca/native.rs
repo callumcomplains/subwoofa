@@ -129,6 +129,36 @@ pub fn core_bitrate(req: &Request) -> u32 {
 /// Frames encoded together; they are spread over the cores.
 const BATCH: usize = 32;
 
+/// The drivers for the cases that have their own: 96 kHz High Resolution, 96/24 and 7.1 High Resolution.
+fn other_driver(
+    stems: &mut StemSet,
+    req: &Request,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Option<Result<Stats, NativeError>> {
+    let high_rate = req.hra_kbps.is_some() && stems.sample_rate > 48_000;
+    if high_rate {
+        if let Some(m) = crate::hra::hra96::hra96_map(req.layout) {
+            return Some(crate::hra::hra96::encode_to_file(stems, req, m, on_progress, cancel));
+        }
+    }
+    if req.x96 || high_rate {
+        return Some(crate::dca::native96::encode_to_file(stems, req, on_progress, cancel));
+    }
+    if req.hra_kbps.is_some() {
+        if let Some(m) = crate::dca::native_xxch::xxch_map(req.layout) {
+            return Some(crate::dca::native_xxch::encode_to_file(
+                stems,
+                req,
+                m,
+                on_progress,
+                cancel,
+            ));
+        }
+    }
+    None
+}
+
 /// Encodes the stems as a DTS core stream (with an XBR extension for High Resolution), into a raw `.dts` file, a
 /// `.dtshd` file or a WAV file. The 96 kHz, XXCH and 96 kHz High Resolution variants have their own drivers.
 pub fn encode_to_file(
@@ -137,18 +167,8 @@ pub fn encode_to_file(
     on_progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
 ) -> Result<Stats, NativeError> {
-    if req.hra_kbps.is_some() && stems.sample_rate > 48_000 {
-        if let Some(m) = crate::hra::hra96::hra96_map(req.layout) {
-            return crate::hra::hra96::encode_to_file(stems, req, m, on_progress, cancel);
-        }
-    }
-    if req.x96 || (req.hra_kbps.is_some() && stems.sample_rate > 48_000) {
-        return crate::dca::native96::encode_to_file(stems, req, on_progress, cancel);
-    }
-    if req.hra_kbps.is_some() {
-        if let Some(m) = crate::dca::native_xxch::xxch_map(req.layout) {
-            return crate::dca::native_xxch::encode_to_file(stems, req, m, on_progress, cancel);
-        }
+    if let Some(done) = other_driver(stems, req, on_progress, cancel) {
+        return done;
     }
     let mut plan = Plan::new(req, stems.sample_rate)?;
     let mut enc = Encoder::new(plan.config(req))?;
@@ -182,28 +202,7 @@ pub fn encode_to_file(
         (delay.min(want as usize), 0)
     };
     let core_payload = (plan.bitrate * 512 / 48_000 / 8) & !3;
-    let mut output = if container {
-        let mut info = crate::container::dtshd::DtsHdInfo::new(
-            plan.rate,
-            n as u16,
-            want,
-            crate::lossless::ma::map_layout(req.layout).exss_mask as u16,
-            crate::container::dtshd::Kind::CoreAndExtension,
-        );
-        let secs = want as f64 / plan.rate as f64;
-        crate::container::mixmeta::apply_container_options(&mut info, &req.bitstream, secs);
-        info.core_kbps = plan.bitrate / 1000;
-        info.core_payload = core_payload;
-        info.codec_delay = (delay + lead) as u16;
-        Output::Container(
-            crate::container::dtshd::DtsHdSink::create(req.output, info)?,
-            core_payload,
-        )
-    } else if plan.wav {
-        Output::Wav(WavOut::create(req.output, plan.rate)?, plan.cd14)
-    } else {
-        Output::Raw(std::io::BufWriter::new(std::fs::File::create(req.output)?))
-    };
+    let mut output = Output::open(req, &plan, container, n, want, delay + lead, core_payload)?;
     let mut feeder = Feeder::new(&mut plan, req, n, want - skip as u64, lead);
     feeder.skip(stems, skip as u64)?;
     // one extra frame flushes the filter bank delay
@@ -469,6 +468,40 @@ enum Output {
 }
 
 impl Output {
+    /// Opens the file: a `.dtshd` container (stating the codec delay), a WAV file or the raw stream.
+    fn open(
+        req: &Request,
+        plan: &Plan,
+        container: bool,
+        frame_samples: usize,
+        want: u64,
+        codec_delay: usize,
+        core_payload: u32,
+    ) -> Result<Output, NativeError> {
+        Ok(if container {
+            let mut info = crate::container::dtshd::DtsHdInfo::new(
+                plan.rate,
+                frame_samples as u16,
+                want,
+                crate::lossless::ma::map_layout(req.layout).exss_mask as u16,
+                crate::container::dtshd::Kind::CoreAndExtension,
+            );
+            let secs = want as f64 / plan.rate as f64;
+            crate::container::mixmeta::apply_container_options(&mut info, &req.bitstream, secs);
+            info.core_kbps = plan.bitrate / 1000;
+            info.core_payload = core_payload;
+            info.codec_delay = codec_delay as u16;
+            Output::Container(
+                crate::container::dtshd::DtsHdSink::create(req.output, info)?,
+                core_payload,
+            )
+        } else if plan.wav {
+            Output::Wav(WavOut::create(req.output, plan.rate)?, plan.cd14)
+        } else {
+            Output::Raw(std::io::BufWriter::new(std::fs::File::create(req.output)?))
+        })
+    }
+
     /// Writes one frame and returns how many bytes it took.
     fn write_frame(&mut self, data: &[u8]) -> std::io::Result<u64> {
         match self {
