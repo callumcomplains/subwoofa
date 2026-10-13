@@ -184,36 +184,13 @@ fn execute_inner(
     if !spec.unlocked {
         validate(dest, stream, layout, spec.sample_rate).map_err(|e| format!("invalid combination: {e:?}"))?;
     }
-    let inputs: HashMap<Channel, PathBuf> = spec
-        .inputs
-        .iter()
-        .filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v))))
-        .collect();
-
-    // Read the real format of the inputs natively (rate, bit depth, length, timecode).
-    let order = sw_pcm::ChannelOrder::parse(&spec.channel_order).ok_or("channel order must be auto, mask or file")?;
-    let src_layout: &'static ChannelLayout = match &spec.source_layout {
-        Some(id) if !id.is_empty() => ChannelLayout::find(id).ok_or("unknown source layout")?,
-        _ => layout,
-    };
-    if src_layout.id != layout.id && spec.engine != "native" {
-        return Err("mixing a richer input layout down needs the native engine".into());
-    }
-    let mut stems = sw_pcm::StemSet::open_ordered(src_layout, &inputs, order).map_err(|e| e.to_string())?;
-    let downmixed = src_layout.id != layout.id;
-    if downmixed {
-        if spec.engine != "native" {
-            return Err("mixing a richer input layout down needs the native engine".into());
-        }
-        stems.set_downmix(sw_core::downmix::Matrix::pan(src_layout.channels, layout.channels));
-    }
-    if !spec.unlocked && stems.sample_rate != spec.sample_rate {
-        return Err(format!(
-            "input files are {} Hz but the encode is set to {} Hz",
-            stems.sample_rate, spec.sample_rate
-        )
-        .into());
-    }
+    let Sources {
+        mut stems,
+        inputs,
+        order,
+        src_layout,
+        downmixed,
+    } = open_sources(spec, layout)?;
     let effort = sw_core::Effort::from_id(&spec.speed)
         .ok_or_else(|| format!("unknown speed '{}' (use fast, balanced or best)", spec.speed))?;
     let start = spec.start.unwrap_or(0.0);
@@ -228,55 +205,14 @@ fn execute_inner(
         return Err("nothing to encode: the start time is at or past the end of the input".into());
     }
 
-    log.push_str("Subwoofa encode log\n");
-    log.push_str(&format!("Output:       {}\n", spec.output));
-    log.push_str(&format!(
-        "Format:       {} / {} / {}\n",
-        dest.display_name(),
-        stream.display_name(),
-        layout.name
-    ));
-    log.push_str(&format!(
-        "Sample rate:  {} Hz   Source bit depth: {}-bit   Bit rate: {}\n",
-        spec.sample_rate,
-        stems.bits,
-        spec.bitrate
-            .map(|b| format!("{b} kbps"))
-            .unwrap_or_else(|| "variable".into())
-    ));
-    log.push_str(&format!(
-        "Dialnorm:     {}\n",
-        spec.dialnorm
-            .map(|d| format!("-{d} dBFS"))
-            .unwrap_or_else(|| "n/a".into())
-    ));
-    log.push_str(&format!(
-        "Span:         start {}  length {}  (source {})\n",
-        fmt_secs(start),
-        fmt_secs(span),
-        fmt_secs(total_src)
-    ));
-    if let Some(t) = stems.time_reference {
-        log.push_str(&format!(
-            "Broadcast time reference: {} samples ({})\n",
-            t,
-            fmt_secs(t as f64 / stems.sample_rate as f64)
-        ));
-    }
-    log.push_str(&format!("Unlocked:     {}\n", spec.unlocked));
-    for ch in src_layout.channels {
-        if let Some(p) = inputs.get(ch) {
-            log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
-        }
-    }
-    for line in sw_codec_dts::container::mixmeta::describe(
-        &spec.bitstream,
-        span,
-        stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary,
-    ) {
-        log.push_str(&line);
-        log.push('\n');
-    }
+    log_header(
+        log,
+        spec,
+        (dest, stream, layout, src_layout),
+        &stems,
+        &inputs,
+        (start, span),
+    );
     // audio files only have a native writer
     let ffmpeg = ff::find_ffmpeg();
     // with no FFmpeg, a format Subwoofa can encode itself simply uses its own encoder
@@ -691,6 +627,119 @@ fn verify_output(
         verified: true,
         ..Default::default()
     })
+}
+
+/// The input files, opened as one multichannel source.
+struct Sources {
+    stems: StemSet,
+    inputs: HashMap<Channel, PathBuf>,
+    order: sw_pcm::ChannelOrder,
+    /// The layout of the files, which is richer than the output layout when they are mixed down.
+    src_layout: &'static ChannelLayout,
+    downmixed: bool,
+}
+
+/// Opens the inputs natively (rate, bit depth, length, timecode) and sets up a mixdown when the files hold a richer
+/// layout than the output.
+fn open_sources(spec: &EncodeSpec, layout: &'static ChannelLayout) -> Result<Sources, Failure> {
+    let inputs: HashMap<Channel, PathBuf> = spec
+        .inputs
+        .iter()
+        .filter_map(|(k, v)| Channel::from_id(k).map(|c| (c, PathBuf::from(v))))
+        .collect();
+
+    // Read the real format of the inputs natively (rate, bit depth, length, timecode).
+    let order = sw_pcm::ChannelOrder::parse(&spec.channel_order).ok_or("channel order must be auto, mask or file")?;
+    let src_layout: &'static ChannelLayout = match &spec.source_layout {
+        Some(id) if !id.is_empty() => ChannelLayout::find(id).ok_or("unknown source layout")?,
+        _ => layout,
+    };
+    if src_layout.id != layout.id && spec.engine != "native" {
+        return Err("mixing a richer input layout down needs the native engine".into());
+    }
+    let mut stems = sw_pcm::StemSet::open_ordered(src_layout, &inputs, order).map_err(|e| e.to_string())?;
+    let downmixed = src_layout.id != layout.id;
+    if downmixed {
+        if spec.engine != "native" {
+            return Err("mixing a richer input layout down needs the native engine".into());
+        }
+        stems.set_downmix(sw_core::downmix::Matrix::pan(src_layout.channels, layout.channels));
+    }
+    if !spec.unlocked && stems.sample_rate != spec.sample_rate {
+        return Err(format!(
+            "input files are {} Hz but the encode is set to {} Hz",
+            stems.sample_rate, spec.sample_rate
+        )
+        .into());
+    }
+    Ok(Sources {
+        stems,
+        inputs,
+        order,
+        src_layout,
+        downmixed,
+    })
+}
+
+/// The first part of the log: what is encoded, from what, and where.
+fn log_header(
+    log: &mut String,
+    spec: &EncodeSpec,
+    (dest, stream, layout, src_layout): (Destination, StreamType, &ChannelLayout, &ChannelLayout),
+    stems: &StemSet,
+    inputs: &HashMap<Channel, PathBuf>,
+    (start, span): (f64, f64),
+) {
+    let total_src = stems.frames as f64 / stems.sample_rate as f64;
+    log.push_str("Subwoofa encode log\n");
+    log.push_str(&format!("Output:       {}\n", spec.output));
+    log.push_str(&format!(
+        "Format:       {} / {} / {}\n",
+        dest.display_name(),
+        stream.display_name(),
+        layout.name
+    ));
+    log.push_str(&format!(
+        "Sample rate:  {} Hz   Source bit depth: {}-bit   Bit rate: {}\n",
+        spec.sample_rate,
+        stems.bits,
+        spec.bitrate
+            .map(|b| format!("{b} kbps"))
+            .unwrap_or_else(|| "variable".into())
+    ));
+    log.push_str(&format!(
+        "Dialnorm:     {}\n",
+        spec.dialnorm
+            .map(|d| format!("-{d} dBFS"))
+            .unwrap_or_else(|| "n/a".into())
+    ));
+    log.push_str(&format!(
+        "Span:         start {}  length {}  (source {})\n",
+        fmt_secs(start),
+        fmt_secs(span),
+        fmt_secs(total_src)
+    ));
+    if let Some(t) = stems.time_reference {
+        log.push_str(&format!(
+            "Broadcast time reference: {} samples ({})\n",
+            t,
+            fmt_secs(t as f64 / stems.sample_rate as f64)
+        ));
+    }
+    log.push_str(&format!("Unlocked:     {}\n", spec.unlocked));
+    for ch in src_layout.channels {
+        if let Some(p) = inputs.get(ch) {
+            log.push_str(&format!("  {:<4} {}\n", ch.short(), p.display()));
+        }
+    }
+    for line in sw_codec_dts::container::mixmeta::describe(
+        &spec.bitstream,
+        span,
+        stream == StreamType::DtsExpress && dest == Destination::BluRaySecondary,
+    ) {
+        log.push_str(&line);
+        log.push('\n');
+    }
 }
 
 /// Peak bit rate of a finished stream (the figure disc authoring checks), or nothing if the file is not a
