@@ -7,11 +7,10 @@
 use crate::container::exss::{exss_frame, ExssParams};
 use crate::dca::dts96::{CORE_ADVANCE, DECIMATION_PHASE};
 use crate::dca::encoder::{Config as CoreConfig, Encoder as CoreEncoder};
-use crate::dca::native::map_channels as core_map_channels;
+use crate::dca::native::{map_channels as core_map_channels, LayoutMap};
 use crate::dca::qmf64::{Analysis64, BANDS as BANDS64};
 use crate::dca::x96::X96Encoder;
-use crate::lossless::ma::map_layout_with;
-use crate::lossless::ma::Hier;
+use crate::lossless::ma::{map_layout_with, Hier, MaMap};
 use crate::lossless::xll::{XllConfig, XllEncoder};
 use sw_core::{ChannelLayout, Downmix};
 
@@ -136,6 +135,133 @@ struct X96State {
     delay: usize,
 }
 
+impl X96State {
+    /// Sets the core up to reserve room for the X96 extension and keep its residual.
+    fn new(core: &mut CoreEncoder, nprim: usize) -> X96State {
+        let bytes = (core.frame_bytes() / 8).max(96) & !3;
+        core.keep_residual = true;
+        core.x96_reserve = bytes;
+        let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
+        let delay = ext[0].delay();
+        X96State {
+            ext,
+            enc: X96Encoder::new(16),
+            bytes,
+            delay,
+        }
+    }
+}
+
+/// How many times the source rate is above the core's: 1 up to 48 kHz, 2 at 88.2 / 96, 4 at 176.4 / 192.
+fn rate_ratio(rate: u32) -> Result<usize, crate::Error> {
+    match rate {
+        44_100 | 48_000 => Ok(1),
+        88_200 | 96_000 => Ok(2),
+        176_400 | 192_000 => Ok(4),
+        r => Err(crate::Error::Unsupported(format!(
+            "{r} Hz is not supported by DTS-HD MA yet"
+        ))),
+    }
+}
+
+fn core_encoder(
+    cfg: &MaCoreConfig,
+    cmap: &LayoutMap,
+    nprim: usize,
+    xch: bool,
+    ratio: usize,
+) -> Result<CoreEncoder, crate::Error> {
+    let mut core = CoreEncoder::new(CoreConfig {
+        sample_rate: cfg.sample_rate / ratio as u32,
+        amode: cmap.amode,
+        channels: nprim,
+        lfe: cmap.lfe.is_some(),
+        bitrate: cfg.core_bitrate,
+        dialnorm: cfg.dialnorm,
+        pcm_bits: cfg.bit_res,
+        // the commercial encoder flags the core of a 6.x or Ls/Rs + Lsr/Rsr stream as ES (its surrounds carry more)
+        es: cfg.layout.id.starts_with("6.") || cfg.layout.id == "7.1-ls-rs-lsr-rsr",
+        xch,
+        perfect: false,
+        blocks: 16,
+    })?;
+    core.set_aux_downmix(crate::lossless::ma::core_aux(
+        &cfg.downmix,
+        cfg.layout,
+        cmap.amode,
+        cmap.lfe.is_some(),
+        xch,
+    ));
+    Ok(core)
+}
+
+/// The extension substream's description of the stream.
+fn exss_params(cfg: &MaCoreConfig, xmap: &MaMap, x96: bool, xch: bool) -> ExssParams {
+    ExssParams {
+        sample_rate: cfg.sample_rate,
+        channels: xmap.order.len(),
+        bit_res: cfg.bit_res,
+        spk_mask: xmap.exss_mask,
+        with_core: true,
+        dialnorm: (-cfg.dialnorm) as u32,
+        frame_duration_code: 0,
+        x96_in_core: x96,
+        xch_in_core: xch,
+        secondary: false,
+        extras: crate::container::exss::ExssExtras {
+            min_header: 32,
+            emb_5_1: xmap.hier.as_ref().is_some_and(|h| h.extras),
+            emb_stereo: xmap.hier.as_ref().is_some_and(|h| h.stereo),
+            wide_remap: cfg.wide_remap,
+            repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+            ..Default::default()
+        },
+    }
+}
+
+/// Where the core's samples line up with the source's: the advance and decimation phase of the resampler, and how
+/// far ahead of a frame the source must have been read.
+struct Timing {
+    /// Core-rate samples of advance.
+    l48: usize,
+    /// Whole samples (at the source rate) of decimation phase.
+    phase: usize,
+    /// The fraction of a sample of phase, which lives in the filter taps.
+    frac: f64,
+    half: usize,
+    lookahead: usize,
+}
+
+impl Timing {
+    fn new(core: &CoreEncoder, ratio: usize, x96: Option<&X96State>) -> Timing {
+        let mut frac = 0.0;
+        let (l48, phase) = if ratio == 1 {
+            (core.delay(), 0)
+        } else {
+            // at 192 kHz the core is fed from band 0 of the split, which has no half-sample offset
+            let phase = if ratio == 4 { 0.0 } else { DECIMATION_PHASE };
+            frac = phase - phase.floor();
+            (CORE_ADVANCE, phase.floor() as usize)
+        };
+        let half = half_len(ratio);
+        let mut lookahead = if ratio == 1 {
+            l48
+        } else {
+            ratio * (l48 + 1) + phase + half + 2
+        };
+        if let Some(x) = x96 {
+            lookahead = lookahead.max(x.delay + 64 * 16 + 64);
+        }
+        Timing {
+            l48,
+            phase,
+            frac,
+            half,
+            lookahead,
+        }
+    }
+}
+
 impl MaCoreEncoder {
     pub fn new(cfg: MaCoreConfig) -> Result<MaCoreEncoder, crate::Error> {
         let xmap = map_layout_with(cfg.layout, &cfg.downmix);
@@ -161,55 +287,13 @@ impl MaCoreEncoder {
                 })
                 .flatten()
                 .filter(|&x| x >= base);
-        let ratio = match cfg.sample_rate {
-            44_100 | 48_000 => 1,
-            88_200 | 96_000 => 2,
-            176_400 | 192_000 => 4,
-            r => {
-                return Err(crate::Error::Unsupported(format!(
-                    "{r} Hz is not supported by DTS-HD MA yet"
-                )))
-            }
-        };
-        let mut core = CoreEncoder::new(CoreConfig {
-            sample_rate: cfg.sample_rate / ratio as u32,
-            amode: cmap.amode,
-            channels: nprim,
-            lfe: cmap.lfe.is_some(),
-            bitrate: cfg.core_bitrate,
-            dialnorm: cfg.dialnorm,
-            pcm_bits: cfg.bit_res,
-            // the commercial encoder flags the core of a 6.x or Ls/Rs + Lsr/Rsr stream as ES (its surrounds carry more)
-            es: cfg.layout.id.starts_with("6.") || cfg.layout.id == "7.1-ls-rs-lsr-rsr",
-            xch: xch_x.is_some(),
-            perfect: false,
-            blocks: 16,
-        })?;
-        core.set_aux_downmix(crate::lossless::ma::core_aux(
-            &cfg.downmix,
-            cfg.layout,
-            cmap.amode,
-            cmap.lfe.is_some(),
-            xch_x.is_some(),
-        ));
-        let x96 = if cfg.x96 && ratio == 2 {
-            let bytes = (core.frame_bytes() / 8).max(96) & !3;
-            core.keep_residual = true;
-            core.x96_reserve = bytes;
-            let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
-            let delay = ext[0].delay();
-            Some(X96State {
-                ext,
-                enc: X96Encoder::new(16),
-                bytes,
-                delay,
-            })
-        } else {
-            None
-        };
+        let ratio = rate_ratio(cfg.sample_rate)?;
+        let mut core = core_encoder(&cfg, &cmap, nprim, xch_x.is_some(), ratio)?;
+        let x96 = (cfg.x96 && ratio == 2).then(|| X96State::new(&mut core, nprim));
         core.enable_exact_decode(ratio >= 2);
         let n = core.frame_samples() * ratio;
         let nch = xmap.order.len();
+        // for each lossless channel, the core channel (LFE after the primaries) it also feeds
         let xll_to_core: Vec<Option<usize>> = (0..nch)
             .map(|x| {
                 if x >= base {
@@ -231,45 +315,9 @@ impl MaCoreEncoder {
             sets: xmap.xll_sets(true),
             effort: cfg.effort,
         };
-        let exss = ExssParams {
-            sample_rate: cfg.sample_rate,
-            channels: nch,
-            bit_res: cfg.bit_res,
-            spk_mask: xmap.exss_mask,
-            with_core: true,
-            dialnorm: (-cfg.dialnorm) as u32,
-            frame_duration_code: 0,
-            x96_in_core: x96.is_some(),
-            xch_in_core: xch_x.is_some(),
-            secondary: false,
-            extras: crate::container::exss::ExssExtras {
-                min_header: 32,
-                emb_5_1: xmap.hier.as_ref().is_some_and(|h| h.extras),
-                emb_stereo: xmap.hier.as_ref().is_some_and(|h| h.stereo),
-                wide_remap: cfg.wide_remap,
-                repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
-                ..Default::default()
-            },
-        };
+        let exss = exss_params(&cfg, &xmap, x96.is_some(), xch_x.is_some());
         let core_pad = (4 - core.frame_bytes() % 4) % 4;
-        let mut frac = 0.0;
-        let (l48, phase) = if ratio == 1 {
-            (core.delay(), 0)
-        } else {
-            // at 192 kHz the core is fed from band 0 of the split, which has no half-sample offset
-            let phase = if ratio == 4 { 0.0 } else { DECIMATION_PHASE };
-            frac = phase - phase.floor();
-            (CORE_ADVANCE, phase.floor() as usize)
-        };
-        let half = half_len(ratio);
-        let mut lookahead = if ratio == 1 {
-            l48
-        } else {
-            ratio * (l48 + 1) + phase + half + 2
-        };
-        if let Some(x) = &x96 {
-            lookahead = lookahead.max(x.delay + 64 * 16 + 64);
-        }
+        let timing = Timing::new(&core, ratio, x96.as_ref());
         Ok(MaCoreEncoder {
             core,
             exss,
@@ -286,23 +334,23 @@ impl MaCoreEncoder {
             xll_to_core,
             hier: xmap.hier.clone(),
             n,
-            lookahead,
+            lookahead: timing.lookahead,
             ratio,
-            half,
+            half: timing.half,
             from_band0: ratio == 4,
             taps_b0: if ratio == 4 {
-                decimator_taps(frac, 2)
+                decimator_taps(timing.frac, 2)
             } else {
                 Vec::new()
             },
             cgain: 1.0,
             taps: if ratio >= 2 {
-                decimator_taps(frac, ratio)
+                decimator_taps(timing.frac, ratio)
             } else {
                 Vec::new()
             },
-            l48,
-            phase,
+            l48: timing.l48,
+            phase: timing.phase,
             emitted: 0,
             pending: None,
             dropped: 0,
