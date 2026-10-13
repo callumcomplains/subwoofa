@@ -28,6 +28,33 @@ impl Encoder {
         self.pack_xxch(&plan, p, total_bytes)
     }
 
+    /// `encode_xxch` for consecutive frames, each of its own `totals[i]` bytes. The bytes are the same as frame by
+    /// frame; the filter banks run in order and the searches run on all cores.
+    pub fn encode_xxch_batch(&mut self, frames: &[&[Vec<f64>]], totals: &[usize], p: &XxchParams) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        let nch = self.cfg.channels;
+        assert_eq!(frames.len(), totals.len());
+        assert!(!self.keep_residual, "XXCH encoders do not keep residuals");
+        self.x96_reserve = 0;
+        let subs = self.analyse(frames);
+        let fixed = Self::xxch_set_header_fixed_bits(p, nch).div_ceil(8) * 8 + 16;
+        let header_bits = 88 + fixed + BANDS * nch + 8;
+        let hint = self.last_offset;
+        let me = &*self;
+        let planned: Vec<(f64, Vec<u8>)> = subs
+            .par_iter()
+            .zip(totals.par_iter())
+            .map(|(sub, &total)| {
+                let (offset, plan) = me.plan_for_sized(sub, hint, false, total, header_bits);
+                (offset, me.pack_xxch(&plan, p, total))
+            })
+            .collect();
+        if let Some((offset, _)) = planned.last() {
+            self.last_offset = *offset;
+        }
+        planned.into_iter().map(|(_, bytes)| bytes).collect()
+    }
+
     pub(crate) fn xxch_set_header_fixed_bits(p: &XxchParams, nch: usize) -> usize {
         let nb = p.mask_bits as usize;
         let mut bits = 7 + 3 + (nb - 6) + 1;

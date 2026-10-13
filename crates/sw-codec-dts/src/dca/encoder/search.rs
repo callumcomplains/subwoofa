@@ -34,12 +34,14 @@ pub(crate) struct BandCache {
     /// `noise[ch][band][k]`: the noise power of quantiser `k` (1 to 25) on this band.
     pub(crate) noise: Vec<Vec<[f64; 26]>>,
     pub(crate) codes: Vec<std::sync::OnceLock<BandCode>>,
+    /// Bits of the frame's fixed parts, which every plan of the frame starts from.
+    pub(crate) header_bits: usize,
 }
 
 pub(crate) const QUANTISERS: usize = 27;
 
 impl BandCache {
-    fn new(power: &[[f64; BANDS]], peak: &[[f64; BANDS]]) -> BandCache {
+    fn new(power: &[[f64; BANDS]], peak: &[[f64; BANDS]], header_bits: usize) -> BandCache {
         let mask = power
             .iter()
             .map(|p| {
@@ -73,6 +75,7 @@ impl BandCache {
             })
             .collect();
         BandCache {
+            header_bits,
             mask,
             noise,
             codes: (0..power.len() * BANDS * QUANTISERS)
@@ -91,8 +94,21 @@ impl Encoder {
     /// the offset `hint`: quality offsets vary slowly from frame to frame. `spread` lets the search use many
     /// threads for this one frame.
     pub(crate) fn plan_for(&self, sub: &[Vec<Vec<f64>>], hint: f64, spread: bool) -> (f64, Plan) {
+        self.plan_for_sized(sub, hint, spread, self.frame_bytes, self.header_bits())
+    }
+
+    /// `plan_for` for a frame of `frame_bytes` whose fixed parts take `header_bits`, which lets frames of different
+    /// sizes (the XXCH extension's) be searched together.
+    pub(crate) fn plan_for_sized(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        hint: f64,
+        spread: bool,
+        frame_bytes: usize,
+        header_bits: usize,
+    ) -> (f64, Plan) {
         let blocks = self.cfg.blocks;
-        let mut budget = (self.frame_bytes - self.x96_reserve) * 8;
+        let mut budget = (frame_bytes - self.x96_reserve) * 8;
         if let Some(aux) = &self.aux {
             // the audio ends in front of the auxiliary data, with its 6-bit size field
             budget = self.aux_sync(aux) * 8 - 8;
@@ -117,7 +133,7 @@ impl Encoder {
                 p
             })
             .collect();
-        let cache = BandCache::new(&power, &peak);
+        let cache = BandCache::new(&power, &peak, header_bits);
         let (offset, mut best) = self.search_offset(sub, &power, &peak, budget, &cache, hint, spread);
         self.fill_indexes(&mut best, sub, &cache, &peak);
         (offset, best)
@@ -333,7 +349,7 @@ impl Encoder {
         let scale_idx = self.scale_indexes(sub, &abits, peak, cache);
         let mut sel = vec![[0u8; 10]; nch];
         let mut bhuff = vec![6u8; nch];
-        let mut bits = self.header_bits();
+        let mut bits = cache.header_bits;
         let nssc = blocks / 8;
         let mut xch_bits = 0usize;
         for ch in 0..nch {

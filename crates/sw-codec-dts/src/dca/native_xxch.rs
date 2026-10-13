@@ -236,33 +236,61 @@ impl Xxch {
         (k * self.bits_num) / (self.bits_den * 8)
     }
 
-    /// Frame `f`: the core, then XBR for the core channels and XXCH for the extra pair in the extension substream.
-    fn frame(&mut self, core_pcm: &[Vec<f64>], ext_pcm: &[Vec<f64>], f: u64) -> Vec<u8> {
-        let mut data = self.core.encode_frame(core_pcm);
-        let pad = (4 - data.len() % 4) % 4;
-        data.resize(data.len() + pad, 0);
-        let total = (self.bytes_upto(f + 1) - self.bytes_upto(f)) as usize;
+    /// Frames `first..first + n`: the core, then XBR for the core channels and XXCH for the extra pair in the
+    /// extension substream. The bytes are the same as frame by frame; the searches run on all cores.
+    fn frames(&mut self, core_pcm: &[Vec<Vec<f64>>], ext_pcm: &[Vec<Vec<f64>>], first: u64) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        let core_refs: Vec<&[Vec<f64>]> = core_pcm.iter().map(|f| f.as_slice()).collect();
+        let coded = self.core.encode_batch(&core_refs);
+        let mut datas: Vec<Vec<u8>> = Vec::with_capacity(coded.len());
+        let mut residuals = Vec::with_capacity(coded.len());
+        let mut split = Vec::with_capacity(coded.len());
+        for (i, (mut data, left)) in coded.into_iter().enumerate() {
+            let pad = (4 - data.len() % 4) % 4;
+            data.resize(data.len() + pad, 0);
+            let f = first + i as u64;
+            let total = (self.bytes_upto(f + 1) - self.bytes_upto(f)) as usize;
+            split.push(self.split_rate(total, data.len()));
+            datas.push(data);
+            residuals.push(left.residual);
+        }
+        let ext_refs: Vec<&[Vec<f64>]> = ext_pcm.iter().map(|f| f.as_slice()).collect();
+        let xxch_sizes: Vec<usize> = split.iter().map(|&(_, xxch)| xxch.min(16_000)).collect();
+        let xxch_data = self.ext.encode_xxch_batch(&ext_refs, &xxch_sizes, &self.params);
+        let xbr_data: Vec<Option<Vec<u8>>> = split
+            .par_iter()
+            .zip(residuals.par_iter())
+            .map(|(&(xbr_bytes, _), residual)| {
+                (xbr_bytes > 0).then(|| {
+                    let mut b = self.xbr.encode(residual, xbr_bytes);
+                    b.resize(xbr_bytes, 0);
+                    b
+                })
+            })
+            .collect();
+        for ((data, x), b) in datas.iter_mut().zip(&xxch_data).zip(&xbr_data) {
+            match b {
+                Some(b) => data.extend_from_slice(&exss_frame_xbr_xxch(&self.exss, b, x)),
+                None => data.extend_from_slice(&exss_frame_xxch(&self.exss, x)),
+            }
+        }
+        datas
+    }
+
+    /// How a frame's bytes beyond the core divide into XBR for the core channels and XXCH for the extra pair.
+    fn split_rate(&self, total: usize, core_bytes: usize) -> (usize, usize) {
         // the rate beyond what the extra pair needs at the core's per-channel rate goes to XBR for the core
         // channels and XXCH in the ratio of their channel counts (a commercial 5376 kbps stream splits it that way)
-        let rest = total.saturating_sub(data.len());
+        let rest = total.saturating_sub(core_bytes);
         // the original encoder's split, measured at every legal rate with real rear content: the pair's mean size
         // grows linearly with the stream's rate (to the multiple of four); below 2304 kbps nothing is left for XBR
         // and the pair takes it all
         let want_xxch = ((0.2702 * self.total_kbps as f64 + 58.5) / 4.0).round() as usize * 4;
-        let (xbr_bytes, xxch_bytes) = if rest > self.overhead_both + want_xxch + 64 {
+        if rest > self.overhead_both + want_xxch + 64 {
             (rest - self.overhead_both - want_xxch, want_xxch)
         } else {
             (0, rest.saturating_sub(self.overhead).clamp(64, 16_000))
-        };
-        let x = self.ext.encode_xxch(ext_pcm, xxch_bytes.min(16_000), &self.params);
-        if xbr_bytes > 0 {
-            let mut b = self.xbr.encode(&self.core.last_residual, xbr_bytes);
-            b.resize(xbr_bytes, 0);
-            data.extend_from_slice(&exss_frame_xbr_xxch(&self.exss, &b, &x));
-        } else {
-            data.extend_from_slice(&exss_frame_xxch(&self.exss, &x));
         }
-        data
     }
 
     /// The silent frame StreamTools' Add silence inserts: fresh encoders fed zeros until the filter bank has settled.
@@ -273,7 +301,10 @@ impl Xxch {
         let ext_zeros = vec![vec![0.0; n]; 2];
         let mut last = Vec::new();
         for f in 0..4 {
-            last = fresh.frame(&core_zeros, &ext_zeros, f);
+            last = fresh
+                .frames(&[core_zeros.clone()], &[ext_zeros.clone()], f)
+                .pop()
+                .expect("one frame");
         }
         Ok(last)
     }
@@ -315,6 +346,9 @@ fn shape_frame(
         }
     }
 }
+
+/// Frames encoded together; they are spread over the cores.
+const BATCH: usize = 16;
 
 pub fn encode_to_file(
     stems: &mut StemSet,
@@ -371,24 +405,34 @@ pub fn encode_to_file(
     let mut lead_left = lead;
     let (mut frames, mut bytes) = (0u64, 0u64);
     let total_frames = (remaining + lead as u64).div_ceil(n as u64) + 1;
-    let mut core_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 5 + usize::from(map.lfe.is_some())];
-    let mut ext_pcm: Vec<Vec<f64>> = vec![vec![0.0; n]; 2];
-    for f in 0..total_frames {
+    let mut next_frame = 0u64;
+    while next_frame < total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);
         }
-        let zeros = lead_left.min(n);
-        lead_left -= zeros;
-        let got = (remaining as usize).min(n - zeros);
-        if got > 0 {
-            stems.read_planar(&mut planar, got)?;
+        let count = BATCH.min((total_frames - next_frame) as usize);
+        let mut core_batch = Vec::with_capacity(count);
+        let mut ext_batch = Vec::with_capacity(count);
+        for _ in 0..count {
+            let zeros = lead_left.min(n);
+            lead_left -= zeros;
+            let got = (remaining as usize).min(n - zeros);
+            if got > 0 {
+                stems.read_planar(&mut planar, got)?;
+            }
+            let mut core_pcm = vec![vec![0.0; n]; 5 + usize::from(map.lfe.is_some())];
+            let mut ext_pcm = vec![vec![0.0; n]; 2];
+            shape_frame(&map, &mix, &planar, got, zeros, &mut core_pcm, &mut ext_pcm);
+            remaining -= got as u64;
+            core_batch.push(core_pcm);
+            ext_batch.push(ext_pcm);
         }
-        shape_frame(&map, &mix, &planar, got, zeros, &mut core_pcm, &mut ext_pcm);
-        remaining -= got as u64;
-        let data = xxch.frame(&core_pcm, &ext_pcm, f);
-        out.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
-        frames += 1;
-        bytes += data.len() as u64;
+        for data in xxch.frames(&core_batch, &ext_batch, next_frame) {
+            out.write_frame(&data, data.len().saturating_sub(core_payload as usize))?;
+            frames += 1;
+            bytes += data.len() as u64;
+        }
+        next_frame += count as u64;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
     let blackout = if container {
