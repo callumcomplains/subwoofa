@@ -298,7 +298,6 @@ impl XbrEncoder {
             }
         }
         w.put(0xFFFF, 16);
-        w.put(0xFFFF, 16);
         w.into_bytes()
     }
 }
