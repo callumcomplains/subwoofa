@@ -14,6 +14,7 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - **Cores setting** (`--threads N`; Settings, Performance): limit an encode to a number of cores, or use all of them. The output is the same either way.
 - Faster release build (link-time optimisation), a faster memory allocator, and the DTS filter bank, Master Audio predictor search and ALS/FLAC analysis rewritten to give the same results in a fraction of the time.
 - `docs/SPEED.md` rewritten with the new numbers, the cost of each speed setting and a note on one core against all of them.
+- **Code reorganised for reading** (no change to any output file: a checksum test covers every format, and the files before and after were compared byte for byte). Large files are split along the stages of each format, long functions are cut into named steps, `clippy` runs clean in CI, and `docs/ARCHITECTURE.md` maps the new layout. The command line's `encode` now goes through the same job runner as the app, so both give the same result for the same settings.
 
 ## b0.1.0 — first public beta
 

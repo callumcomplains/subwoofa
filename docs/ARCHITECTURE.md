@@ -20,7 +20,7 @@ for and which specification it follows; this page is the map between them.
    .ac3 .thd .dtshd .flac .wv ...  --->  sw-verify: read it back, check it
 ```
 
-A **job spec** (`sw_queue::JobSpec`) is plain data: the destination, stream type, layout, input files, bit rate,
+A **job spec** (`sw_queue::run::EncodeSpec`) is plain data: the destination, stream type, layout, input files, bit rate,
 rate, and every option. The app builds one from its controls, the command line from its flags, and a preset file is
 one saved to disk. `sw-queue::run::execute` turns it into an encode and a log.
 
@@ -28,19 +28,19 @@ one saved to disk. `sw-queue::run::execute` turns it into an encode and a log.
 
 | Crate | What it does |
 |---|---|
-| `sw-core` | The vocabulary: channel layouts and IDs (`layout`, `channel`), the capability matrix of destinations, stream types, rates and limits (`formats`), the Bitstream-tab settings (`bitstream`), downmix matrices (`downmix`), finding sibling channel files (`autoimport`), the version (`version`). |
-| `sw-pcm` | Reading input audio (WAV / RF64 / AIFF) into `f32` stems and mapping files to speaker slots. |
-| `sw-codec-ac3` | Dolby Digital and Digital Plus: transform (`mdct`, `blocksw`), bit allocation and the frame writer (`lib`), tables. |
-| `sw-codec-truehd` | TrueHD and MLP lossless encoder, plus an analyser that walks a stream the way a decoder would. |
-| `sw-codec-dts` | The DTS family. Core: `encoder`, `qmf`, `native`. Extensions: `x96` / `dts96` (96/24), `xbr` / `hra*` (High Resolution), `xll*` / `ma*` (Master Audio), `lbr*` (Express). Containers: `exss`, `dtshd`. Metadata: `mixmeta`. |
+| `sw-core` | The vocabulary: channel layouts and IDs (`layout`, `channel`), the capability matrix of destinations, stream types, rates and limits (`formats`), the Bitstream-tab settings (`bitstream`), downmix matrices (`downmix`), how hard a lossless encoder searches (`effort`), finding sibling channel files (`autoimport`), the version (`version`). |
+| `sw-pcm` | Reading input audio: `reader` (WAV / RF64 / AIFF, streaming), `channels` (which file channel feeds which speaker) and `stems` (a set of per-channel files read together). |
+| `sw-codec-ac3` | Dolby Digital and Digital Plus, in the order a frame is made: `analysis` (transform, block switching), `coupling` and `coupling_plan`, `exponents`, `bitalloc`, `mantissas`, `frame_plan` and `plan` (what to code), `syntax` (the bits), `layout` (channel mapping), `native` (the file driver). |
+| `sw-codec-truehd` | TrueHD and MLP lossless encoder: `layout`, `downmix` (the stereo and 5.1 presentations), `filter` and `predict` (the FIR and IIR predictors), `coding` (Huffman and Rice), `substream`, `sync` (major sync and access units), `native` (the file driver), and `analyze`, which walks a stream the way a decoder would. |
+| `sw-codec-dts` | The DTS family. `dca/` is the core (frame `encoder/`, filter banks, `native*` file drivers for the plain, 96/24 and 7.1 cases, `wav_out` for DTS in a WAV); `hra/` High Resolution (`xbr`, `stage`, `hra96`); `lossless/` Master Audio (`ma/` channel sets and embedded downmixes, `xll/` the lossless coder, `ma_core`, `native`); `express/` DTS Express; `container/` the extension substream (`exss`), the `.dtshd` file (`dtshd`) and the Bitstream-tab metadata (`mixmeta`). |
 | `sw-codec-pcm` | Audio files: `wav`, `aiff`, `caf`, `flac`, `ogg`, `alac`, `tta`, `wavpack/`, `monkeys/`, `als/`, `dsd/`, `dcp/`. Each writer implements one small trait, `BlockWriter`: it is handed blocks of samples and writes its file. |
 | `sw-backend-ffmpeg` | Running FFmpeg when a format has no native encoder or an input needs converting; downmix rendering. |
-| `sw-backend-dee` | Driving a Dolby Encoding Engine you supply, for Atmos. |
-| `sw-verify` | Reading files back: structure checks for each stream type, a deep mode with a full decode, and the DTS verifier as a second opinion if it is installed. |
-| `sw-tools` | StreamTools: info, bit-rate chart, trim, split, append, replace, re-stripe, silence. |
-| `sw-queue` | The job queue and `run::execute`. |
-| `sw-cli` | The `subwoofa` command. |
-| `app/` | The window: `app/ui` is plain HTML, CSS and JavaScript; `app/src-tauri` is the Rust side that exposes the crates to it. |
+| `sw-backend-dee` | Driving a Dolby Encoding Engine you supply, for Atmos: `find`, `input` (what kind of master), `job` (the options), `profile` (the XML job file), `alias` (paths with spaces), `run`, `info`. |
+| `sw-verify` | Reading files back: one module per stream type (`ac3`, `thd`, `dts/`, `audiofile/` with a module per file format), a deep mode with a full decode (`deep/`), and the DTS verifier as a second opinion if it is installed. |
+| `sw-tools` | StreamTools: `dts_index` and `truehd_index` read a stream into frames; `cut`, `join`, `container` (the `.dtshd` wrapper), `timecode` (re-stripe), `silence`, `check`. |
+| `sw-queue` | The job queue (`lib`) and `run::execute`, which opens the inputs, picks the encoder, runs it and writes the log; `threads` applies the thread limit of a job. |
+| `sw-cli` | The `subwoofa` command: `args` (every option), one module per command (`encode`, `verify`, `tools`, `atmos`, `downmix`, `listing`), and a `main` that dispatches. `encode` builds the same job spec as the app and hands it to `sw-queue`. |
+| `app/` | The window. `app/ui` is plain HTML, CSS and JavaScript, one script per part of the page (`core`, `layout`, `job`, `bitstream`, `themes`, `tabs`, `presets`, `start`, `streamtools`, `verify`, `settings`, `atmos`; `main` starts it). `app/src-tauri` is the Rust side that exposes the crates to it: `catalog`, `sources`, `jobs`, `downmix`, `streamtools`, `toolpaths` and `atmos`. |
 
 ## Adding a format
 
@@ -49,7 +49,7 @@ one saved to disk. `sw-queue::run::execute` turns it into an encode and a log.
 2. **Write the encoder** in the matching codec crate. For an audio file, add a module to `sw-codec-pcm` with a writer
    that implements `BlockWriter`, a `Container` variant, and the line in `encode_to_file` that creates it.
 3. **Connect it**: `sw-queue/src/run.rs` maps the stream type to the encoder; the app needs a plate in
-   `app/ui/logos/<id>.svg` and, if it has settings, a case in `syncPcmFormat` in `app/ui/app.js`.
+   `app/ui/logos/<id>.svg` and, if it has settings, a case in `syncPcmFormat` in `app/ui/layout.js`.
 4. **Check it**: a round-trip test that decodes the output with an independent decoder (usually FFmpeg), a case in
    `sw-verify`, a row in `docs/FORMATS.md`, a line in `CHANGELOG.md`.
 
