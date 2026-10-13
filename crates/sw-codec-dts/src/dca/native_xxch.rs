@@ -256,7 +256,12 @@ impl Xxch {
         }
         let ext_refs: Vec<&[Vec<f64>]> = ext_pcm.iter().map(|f| f.as_slice()).collect();
         let xxch_sizes: Vec<usize> = split.iter().map(|&(_, xxch)| xxch.min(16_000)).collect();
-        let xxch_data = self.ext.encode_xxch_batch(&ext_refs, &xxch_sizes, &self.params);
+        let xxch_data: Vec<Vec<u8>> = self
+            .ext
+            .encode_xxch_batch(&ext_refs, &xxch_sizes, &self.params)
+            .into_iter()
+            .map(|(bytes, _)| bytes)
+            .collect();
         let xbr_data: Vec<Option<Vec<u8>>> = split
             .par_iter()
             .zip(residuals.par_iter())

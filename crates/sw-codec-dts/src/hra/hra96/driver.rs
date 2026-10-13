@@ -277,7 +277,7 @@ pub fn encode_to_file(
     if lead > 0 {
         out.write(enc.push(&vec![vec![0.0f64; lead]; plan.buffers]))?;
     }
-    let chunk = n * 4;
+    let chunk = n * 16;
     while remaining > 0 {
         if cancel.load(Ordering::Relaxed) {
             return Err(NativeError::Canceled);

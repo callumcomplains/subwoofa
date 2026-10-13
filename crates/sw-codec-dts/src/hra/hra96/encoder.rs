@@ -187,11 +187,9 @@ impl Hra96Encoder {
         for (b, f) in self.buf.iter_mut().zip(frame) {
             b.extend_from_slice(f);
         }
-        let mut out = Vec::new();
-        while self.buf[0].len() + self.dropped >= (self.emitted + 1) * self.n + self.lookahead {
-            out.push(self.next_frame());
-        }
-        out
+        let available = self.buf[0].len() + self.dropped;
+        let ready = available.saturating_sub(self.lookahead) / self.n;
+        self.next_frames(ready.saturating_sub(self.emitted))
     }
 
     pub fn finish(&mut self) -> Vec<Vec<u8>> {
@@ -201,11 +199,7 @@ impl Hra96Encoder {
         for b in self.buf.iter_mut() {
             b.resize((want - self.dropped).max(b.len()), 0.0);
         }
-        let mut out = Vec::new();
-        while self.emitted < frames {
-            out.push(self.next_frame());
-        }
-        out
+        self.next_frames(frames - self.emitted)
     }
 
     fn decimated(&self, ch: usize, frame: usize) -> Vec<f64> {
@@ -259,73 +253,102 @@ impl Hra96Encoder {
         bands
     }
 
-    fn next_frame(&mut self) -> Vec<u8> {
-        let f = self.emitted;
-        let dec: Vec<Vec<f64>> = {
+    /// The next `count` frames, encoded together: the searches run on all cores, the filter banks in order.
+    fn next_frames(&mut self, count: usize) -> Vec<Vec<u8>> {
+        use rayon::prelude::*;
+        if count == 0 {
+            return Vec::new();
+        }
+        let first = self.emitted;
+        let channels = self.buf.len();
+        // the decimated input of every channel of every frame
+        let dec: Vec<Vec<Vec<f64>>> = {
             let me: &Hra96Encoder = &*self;
-            use rayon::prelude::*;
-            (0..me.buf.len()).into_par_iter().map(|c| me.decimated(c, f)).collect()
+            (0..count * channels)
+                .into_par_iter()
+                .map(|k| me.decimated(k % channels, first + k / channels))
+                .collect::<Vec<_>>()
+                .chunks(channels)
+                .map(|c| c.to_vec())
+                .collect()
         };
-        let core_in: Vec<Vec<f64>> = self.core_inputs.iter().map(|&i| dec[i].clone()).collect();
-        let mut data = self.core.encode_frame(&core_in);
-        data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
-        // sizes: the rest of the frame after the core and the extension substream header
-        let upto = |k: u64| (k * self.bits_num) / (self.bits_den * 8);
-        let total = (upto(f as u64 + 1) - upto(f as u64)) as usize;
-        let rest = total.saturating_sub(data.len() + self.overhead);
-        let (xxch_bytes, x96_bytes) = if self.kind == Hra96Kind::Rear {
-            // the rear pair gets a fixed 512 bytes; X96 takes the rest up to its limit and XXCH what is beyond it
-            let x96 = ((rest.saturating_sub(XXCH_FIXED_BYTES)) & !3).clamp(64, MAX_X96_BYTES);
-            ((rest.saturating_sub(x96) & !3).clamp(64, 16_000), x96)
-        } else {
-            (0, (rest & !3).clamp(64, MAX_X96_BYTES))
-        };
-        let xxch = match self.rear.as_mut() {
-            Some(r) => r.encode_xxch(&dec[self.extra_start..], xxch_bytes, &self.params),
+        // the 48 kHz core
+        let core_in: Vec<Vec<Vec<f64>>> = dec
+            .iter()
+            .map(|d| self.core_inputs.iter().map(|&i| d[i].clone()).collect())
+            .collect();
+        let core_refs: Vec<&[Vec<f64>]> = core_in.iter().map(|f| f.as_slice()).collect();
+        let coded = self.core.encode_batch(&core_refs);
+        let mut datas = Vec::with_capacity(count);
+        let mut core_deqs = Vec::with_capacity(count);
+        let mut sizes = Vec::with_capacity(count);
+        for (i, (mut data, left)) in coded.into_iter().enumerate() {
+            data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
+            sizes.push(self.split_rest(first + i, data.len()));
+            datas.push(data);
+            core_deqs.push(left.deq);
+        }
+        // the rear pair's XXCH extension
+        let rear = match self.rear.as_mut() {
+            Some(r) => {
+                let ext_refs: Vec<&[Vec<f64>]> = dec.iter().map(|d| &d[self.extra_start..]).collect();
+                let xxch_sizes: Vec<usize> = sizes.iter().map(|&(xxch, _)| xxch).collect();
+                r.encode_xxch_batch(&ext_refs, &xxch_sizes, &self.params)
+            }
             None => Vec::new(),
         };
         // X96: the five core channels, then the extra channels that have a set of their own
-        let (f_off, dropped, delay) = (f * self.n, self.dropped, self.ana_delay);
-        let bufs = &self.buf;
-        let core_deq = &self.core.last_deq;
-        let extra_start = self.extra_start;
-        let rear_deq = self.rear.as_ref().map(|r| &r.last_deq);
-        let kind = self.kind;
-        let (r_core, r_extra): (Vec<Vec<Vec<f64>>>, Vec<Vec<Vec<f64>>>) = {
-            use rayon::prelude::*;
-            let a: Vec<_> = self
-                .core_ana
-                .par_iter_mut()
-                .enumerate()
-                .map(|(ch, ana)| Self::analyse(ana, &bufs[ch], f_off, dropped, delay, &core_deq[ch]))
-                .collect();
-            let b: Vec<_> = self
-                .extra_ana
-                .par_iter_mut()
-                .enumerate()
-                .map(|(j, ana)| {
-                    // the XCH channel's reconstruction is the core encoder's sixth plan; the rears' is the rear encoder's
-                    let deq = if kind == Hra96Kind::Discrete {
-                        &core_deq[5]
-                    } else {
-                        &rear_deq.unwrap()[j]
-                    };
-                    Self::analyse(ana, &bufs[extra_start + j], f_off, dropped, delay, deq)
-                })
-                .collect();
-            (a, b)
-        };
-        let x96 = if r_extra.is_empty() {
-            self.x96.encode_exss(&[&r_core], x96_bytes)
-        } else {
-            self.x96.encode_exss(&[&r_core, &r_extra], x96_bytes)
-        };
-        if self.kind == Hra96Kind::Rear {
-            data.extend_from_slice(&exss_frame_xxch_x96(&self.exss, &xxch, &x96));
-        } else {
-            data.extend_from_slice(&exss_frame_x96(&self.exss, &x96));
+        let (dropped, delay, extra_start, kind) = (self.dropped, self.ana_delay, self.extra_start, self.kind);
+        let (n, bufs) = (self.n, &self.buf);
+        let core_bands: Vec<Vec<Vec<Vec<f64>>>> = self
+            .core_ana
+            .par_iter_mut()
+            .enumerate()
+            .map(|(ch, ana)| {
+                (0..count)
+                    .map(|i| Self::analyse(ana, &bufs[ch], (first + i) * n, dropped, delay, &core_deqs[i][ch]))
+                    .collect()
+            })
+            .collect();
+        let extra_bands: Vec<Vec<Vec<Vec<f64>>>> = self
+            .extra_ana
+            .par_iter_mut()
+            .enumerate()
+            .map(|(j, ana)| {
+                (0..count)
+                    .map(|i| {
+                        // the XCH channel's reconstruction is the core encoder's sixth plan; the rears' is the rear
+                        // encoder's
+                        let deq = if kind == Hra96Kind::Discrete {
+                            &core_deqs[i][5]
+                        } else {
+                            &rear[i].1.deq[j]
+                        };
+                        Self::analyse(ana, &bufs[extra_start + j], (first + i) * n, dropped, delay, deq)
+                    })
+                    .collect()
+            })
+            .collect();
+        let x96_frames: Vec<Vec<u8>> = (0..count)
+            .into_par_iter()
+            .map(|i| {
+                let r_core: Vec<Vec<Vec<f64>>> = core_bands.iter().map(|c| c[i].clone()).collect();
+                let r_extra: Vec<Vec<Vec<f64>>> = extra_bands.iter().map(|c| c[i].clone()).collect();
+                if r_extra.is_empty() {
+                    self.x96.encode_exss(&[&r_core], sizes[i].1)
+                } else {
+                    self.x96.encode_exss(&[&r_core, &r_extra], sizes[i].1)
+                }
+            })
+            .collect();
+        for (i, data) in datas.iter_mut().enumerate() {
+            if self.kind == Hra96Kind::Rear {
+                data.extend_from_slice(&exss_frame_xxch_x96(&self.exss, &rear[i].0, &x96_frames[i]));
+            } else {
+                data.extend_from_slice(&exss_frame_x96(&self.exss, &x96_frames[i]));
+            }
         }
-        self.emitted += 1;
+        self.emitted += count;
         // drop samples no later frame needs
         let keep_from = (self.emitted * self.n).saturating_sub(HALF + 4 + 64);
         if keep_from > self.dropped + (1 << 16) {
@@ -335,6 +358,20 @@ impl Hra96Encoder {
             }
             self.dropped = keep_from;
         }
-        data
+        datas
+    }
+
+    /// How the bytes of frame `f` beyond the core and the extension header divide: `(xxch, x96)`.
+    fn split_rest(&self, f: usize, core_bytes: usize) -> (usize, usize) {
+        let upto = |k: u64| (k * self.bits_num) / (self.bits_den * 8);
+        let total = (upto(f as u64 + 1) - upto(f as u64)) as usize;
+        let rest = total.saturating_sub(core_bytes + self.overhead);
+        if self.kind == Hra96Kind::Rear {
+            // the rear pair gets a fixed 512 bytes; X96 takes the rest up to its limit and XXCH what is beyond it
+            let x96 = ((rest.saturating_sub(XXCH_FIXED_BYTES)) & !3).clamp(64, MAX_X96_BYTES);
+            ((rest.saturating_sub(x96) & !3).clamp(64, 16_000), x96)
+        } else {
+            (0, (rest & !3).clamp(64, MAX_X96_BYTES))
+        }
     }
 }
