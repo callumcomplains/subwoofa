@@ -33,6 +33,17 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 - [x] ALS extras, tried: block switching is in (16-bit split field, up to 16 blocks per frame; 0.1% to 0.3% smaller on film and music, about twice the encode time). Predictor orders up to 512 gained 0.02%, so the limit stays at 64. Long-term prediction and the BGMC coder were left out: on this material the gains measured so far were below 0.5%, and BGMC needs the format's arithmetic-coder tables.
 - [x] GUI leftovers: checked against the old encoder's list: presets, folder batch, automatic verify and the peak bit rate in the job log all exist, and a source file's BWF time reference is carried into WAV output. Not there: a field to type a BWF start time by hand.
 
+## Roadmap: making it more useful (ranked)
+
+1. [ ] **Loudness built in.** `sw-loudness` (BS.1770-4: integrated, short-term, momentary, loudness range, true peak), `subwoofa loudness`, `--auto-dialnorm`, a Measure button beside Dialnorm in the app, and a pre-encode warning when a downmix will clip or the true peak is over.
+2. [ ] **A real QC report.** `subwoofa verify --report out.html`: checks, loudness, per-channel levels, bit rate chart, per-channel spectrograms; decode-and-compare against the source (null test, SNR) so lossless is proven and lossy gets an objective score.
+3. [ ] **Preview before committing.** Encode a short excerpt, decode it and play it with an A/B switch against the source.
+4. [ ] **Pipeline and automation.** Watch-folder mode, JSON job files for the CLI, DAW stem-naming conventions in auto-import, a headless encode server.
+5. [ ] **More inputs.** A video file or an existing DTS / AC-3 / TrueHD stream as input (with a warning for lossy to lossy), frame-rate conversion (23.976, 24, 25 fps, with and without pitch change), an audio delay control.
+6. [ ] **Metadata edits without re-encoding.** Dialnorm, DRC profile and DTS header fields changed in a finished stream (StreamTools).
+7. [ ] **Better downmix design.** Presets from ITU-R BS.775 and the Lo/Ro, Lt/Rt conventions, loudness-matched stereo, a picture of what each speaker feeds.
+8. [ ] **Reach.** macOS and Linux builds, winget / scoop packages, a "first disc in ten minutes" tutorial.
+
 ## Blocked on outside files or tools
 
 - [ ] TrueHD Atmos: run on one real Dolby-authored master (built, never run on one).
