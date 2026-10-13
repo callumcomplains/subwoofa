@@ -33,16 +33,16 @@ fn write_wav(path: &Path, seed: u32) {
     f.write_all(&data).unwrap();
 }
 
-fn encode(
+fn spec_for(
     dir: &Path,
     inputs: &HashMap<String, String>,
     stream: &str,
     dest: &str,
     bitrate: Option<u32>,
     ext: &str,
-) -> PathBuf {
+) -> EncodeSpec {
     let output = dir.join(format!("out_{stream}.{ext}"));
-    let spec = EncodeSpec {
+    EncodeSpec {
         dest: dest.into(),
         stream: stream.into(),
         layout: "2.0".into(),
@@ -66,10 +66,21 @@ fn encode(
         speed: "fast".into(),
         threads: 0,
         write_log: false,
-    };
+    }
+}
+
+fn encode(
+    dir: &Path,
+    inputs: &HashMap<String, String>,
+    stream: &str,
+    dest: &str,
+    bitrate: Option<u32>,
+    ext: &str,
+) -> PathBuf {
+    let spec = spec_for(dir, inputs, stream, dest, bitrate, ext);
     let cancel = std::sync::atomic::AtomicBool::new(false);
     execute(&spec, false, &cancel, &mut |_, _| {}).unwrap_or_else(|_| panic!("{stream} failed"));
-    output
+    PathBuf::from(spec.output)
 }
 
 #[test]
@@ -116,4 +127,48 @@ fn lossless_comes_back_identical_and_lossy_gets_a_figure() {
     // an AC-3 encode at 192 kbps keeps these tones well above the noise
     assert!(c.channels.iter().all(|m| m.snr_db.unwrap() > 15.0), "{c:?}");
     assert!(ac3.checks.iter().any(|k| k.name == "Closeness to the source (lossy)"));
+}
+
+/// The samples of a stereo 16-bit WAV written by the preview.
+fn read_stereo_wav(path: &Path) -> Vec<(i16, i16)> {
+    let bytes = std::fs::read(path).unwrap();
+    bytes[44..]
+        .chunks_exact(4)
+        .map(|f| (i16::from_le_bytes([f[0], f[1]]), i16::from_le_bytes([f[2], f[3]])))
+        .collect()
+}
+
+#[test]
+fn a_preview_lines_the_encode_up_with_the_source() {
+    let Some(ffmpeg) = sw_backend_ffmpeg::find_ffmpeg() else {
+        eprintln!("FFmpeg not found: skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("sw_preview_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut inputs = HashMap::new();
+    for (i, ch) in ["L", "R"].iter().enumerate() {
+        let path = dir.join(format!("{ch}.wav"));
+        write_wav(&path, i as u32 + 1);
+        inputs.insert(ch.to_string(), path.to_string_lossy().into_owned());
+    }
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let make = |stream: &str, dest: &str, bitrate: Option<u32>, ext: &str| {
+        let spec = spec_for(&dir, &inputs, stream, dest, bitrate, ext);
+        sw_queue::preview::build(&spec, &ffmpeg, 3.0, &dir.join(stream), &cancel, &mut |_| {})
+            .unwrap_or_else(|_| panic!("{stream} preview failed"))
+    };
+
+    // lossless: the encode is the source, so the difference is silence
+    let flac = make("flac", "files", None, "flac");
+    assert!(flac.snr_db.is_none(), "{:?}", flac.snr_db);
+    assert!(read_stereo_wav(&flac.difference).iter().all(|&(l, r)| l == 0 && r == 0));
+    assert_eq!(read_stereo_wav(&flac.source), read_stereo_wav(&flac.encoded));
+    assert!((flac.seconds - 3.0).abs() < 0.1, "{}", flac.seconds);
+
+    // lossy: close to the source but not the same, and lined up (a shifted copy would be far worse than 15 dB)
+    let ac3 = make("ac3", "generic", Some(192), "ac3");
+    let snr = ac3.snr_db.expect("a lossy encode differs");
+    assert!(snr > 15.0 && snr < 90.0, "{snr}");
+    assert!(ac3.kbps > 150.0 && ac3.kbps < 230.0, "{}", ac3.kbps);
 }

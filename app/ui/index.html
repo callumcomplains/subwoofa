@@ -18,6 +18,7 @@ try {
   <defs>
     <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
     <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.8 4.2c0-.5.4-.9.9-.9h3.2l1.4 1.5h5.9c.5 0 .9.4.9.9v6c0 .5-.4.9-.9.9H2.7c-.5 0-.9-.4-.9-.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 16 16"><path d="M4.5 3h2.6v10H4.5zM8.9 3h2.6v10H8.9z" fill="currentColor"/></symbol>
     <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></symbol>
     <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </defs>
@@ -498,6 +499,25 @@ try {
 </section>
 
 <footer class="out">
+  <div id="previewPanel" class="preview" hidden>
+    <div class="pv-head">
+      <span class="cap" id="pvTitle">Preview</span>
+      <small id="pvInfo" class="readout"></small>
+      <button type="button" id="pvClose" class="plain mini" aria-label="Close the preview">Close</button>
+    </div>
+    <div id="pvProgress" class="bar-track" hidden><span id="pvBar" class="bar-fill"></span></div>
+    <div id="pvPlayer" class="pv-row" hidden>
+      <button type="button" id="pvPlay" class="icon-btn" aria-label="Play"><svg><use href="#i-play"/></svg></button>
+      <input id="pvSeek" type="range" min="0" max="1000" value="0" aria-label="Position">
+      <small id="pvTime" class="readout">0:00 / 0:00</small>
+      <div class="seg" id="pvSeg" role="radiogroup" aria-label="What you hear">
+        <button type="button" data-which="source" aria-pressed="false">Source</button>
+        <button type="button" data-which="encoded" aria-pressed="true">Encoded</button>
+        <button type="button" data-which="difference" aria-pressed="false">Difference</button>
+      </div>
+      <label class="chk tight"><input type="checkbox" id="pvLoop" checked><span>Loop</span></label>
+    </div>
+  </div>
   <div class="out-row">
     <div class="dest-path">
       <button id="browse" class="icon-btn" aria-label="Choose output folder"><svg><use href="#i-folder"/></svg></button>
@@ -513,6 +533,7 @@ try {
         <button type="button" data-speed="best" aria-pressed="false">Best</button>
       </div>
     </div>
+    <button id="previewBtn" class="plain" disabled>Preview</button>
     <button id="go" class="go" disabled><svg><use href="#i-play"/></svg>Encode</button>
   </div>
   <div id="speedNote" class="speed-note" hidden></div>
@@ -524,6 +545,7 @@ try {
 <script src="layout.js"></script>
 <script src="downmix.js"></script>
 <script src="job.js"></script>
+<script src="preview.js"></script>
 <script src="bitstream.js"></script>
 <script src="themes.js"></script>
 <script src="tabs.js"></script>

@@ -52,6 +52,7 @@ async function init() {
   $("srcLayout").onchange = () => { srcLayoutId = $("srcLayout").value; inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };
   $("go").onclick = encode;
+  initPreview();
   $("qClear").onclick = () => invoke("queue_clear");
   const conc = Number(store.get("conc")) || 2;
   $("optConc").value = conc;

@@ -212,6 +212,84 @@ fn match_channels(source: &[Vec<f32>], decoded: &[Vec<f32>], lag: i64, from: usi
         .collect()
 }
 
+/// The shift of the decode against the source, and where in the source it was measured: found on the loudest second of
+/// the loudest source channel, against every decoded channel (the best match counts).
+fn find_lag(source_head: &[Vec<f32>], head: &[Vec<f32>], rate: f64) -> Result<(i64, usize), String> {
+    if source_head[0].len() < WINDOW + 1 {
+        return Err("the source is too short to line up (it needs about two seconds)".into());
+    }
+    let energy = |c: &[f32], from: usize| {
+        c[from..from + rate as usize]
+            .iter()
+            .map(|v| (*v as f64).powi(2))
+            .sum::<f64>()
+    };
+    let limit = source_head[0].len().saturating_sub(WINDOW);
+    let (mut best_window, mut best_channel, mut best_energy) = (0usize, 0usize, 0.0);
+    for (ch, c) in source_head.iter().enumerate() {
+        let mut from = 0;
+        while from + (rate as usize) <= c.len() && from <= limit {
+            let e = energy(c, from);
+            if e > best_energy {
+                (best_window, best_channel, best_energy) = (from, ch, e);
+            }
+            from += (rate / 4.0) as usize;
+        }
+    }
+    if best_energy == 0.0 {
+        return Err("the start of the source is silent, so the decode cannot be lined up with it".into());
+    }
+    let (mut lag, mut strength) = (0i64, 0.0);
+    for d in head {
+        let (l, r) = best_lag(&source_head[best_channel], d, best_window);
+        if r > strength {
+            (lag, strength) = (l, r);
+        }
+    }
+    if strength < MIN_CORRELATION {
+        return Err("the decode does not line up with the source (is it the same programme?)".into());
+    }
+    Ok((lag, best_window))
+}
+
+/// Decodes a whole file with FFmpeg into one vector of samples per channel, in FFmpeg's channel order.
+pub fn decode_planar(path: &Path, ffmpeg: &Path) -> Result<Vec<Vec<f32>>, String> {
+    let channels = decoded_width(path, ffmpeg).ok_or("FFmpeg could not read the encoded file")?;
+    let mut child = spawn_decoder(path, ffmpeg, None)?;
+    let mut out = child.stdout.take().unwrap();
+    let mut planar = vec![Vec::new(); channels];
+    loop {
+        let block = read_frames(&mut out, channels, BLOCK).map_err(|e| e.to_string())?;
+        for (all, part) in planar.iter_mut().zip(&block) {
+            all.extend_from_slice(part);
+        }
+        if block[0].len() < BLOCK {
+            break;
+        }
+    }
+    let _ = child.wait();
+    Ok(planar)
+}
+
+/// How much `decoded` is shifted against `source` (samples; positive means it starts late), both one vector per
+/// channel and the decode in the same channel order as the source.
+pub fn align(source: &[Vec<f32>], decoded: &[Vec<f32>], rate: u32) -> Result<i64, String> {
+    let head = (LAG_SECONDS * rate as f64) as usize;
+    let cut = |v: &[Vec<f32>], n: usize| v.iter().map(|c| c[..n.min(c.len())].to_vec()).collect::<Vec<_>>();
+    find_lag(&cut(source, head), &cut(decoded, head + 2 * MAX_LAG), rate as f64).map(|(lag, _)| lag)
+}
+
+/// For each channel of `layout`, the channel of an FFmpeg decode that carries it.
+pub fn decoded_order(layout: &ChannelLayout) -> Vec<usize> {
+    let decoded = decoded_channels(layout.channels.len());
+    layout
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| decoded.iter().position(|d| d == c).unwrap_or(i))
+        .collect()
+}
+
 /// Running totals of one channel.
 #[derive(Default, Clone)]
 struct Tally {
@@ -270,41 +348,7 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
             "the file decodes to {decoded_channels_n} channels but the source has {channels}"
         ));
     }
-    if source_head[0].len() < WINDOW + 1 {
-        return Err("the source is too short to line up (it needs about two seconds)".into());
-    }
-    // the loudest second of the loudest source channel
-    let energy = |c: &[f32], from: usize| {
-        c[from..from + rate as usize]
-            .iter()
-            .map(|v| (*v as f64).powi(2))
-            .sum::<f64>()
-    };
-    let limit = source_head[0].len().saturating_sub(WINDOW);
-    let (mut best_window, mut best_channel, mut best_energy) = (0usize, 0usize, 0.0);
-    for (ch, c) in source_head.iter().enumerate() {
-        let mut from = 0;
-        while from + (rate as usize) <= c.len() && from <= limit {
-            let e = energy(c, from);
-            if e > best_energy {
-                (best_window, best_channel, best_energy) = (from, ch, e);
-            }
-            from += (rate / 4.0) as usize;
-        }
-    }
-    if best_energy == 0.0 {
-        return Err("the start of the source is silent, so the decode cannot be lined up with it".into());
-    }
-    let (mut lag, mut strength) = (0i64, 0.0);
-    for d in &head {
-        let (l, r) = best_lag(&source_head[best_channel], d, best_window);
-        if r > strength {
-            (lag, strength) = (l, r);
-        }
-    }
-    if strength < MIN_CORRELATION {
-        return Err("the decode does not line up with the source (is it the same programme?)".into());
-    }
+    let (lag, best_window) = find_lag(&source_head, &head, rate)?;
     let mapping = match_channels(&source_head, &head, lag, best_window);
 
     // 2. compare everything
@@ -359,13 +403,7 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
     let _ = child.kill();
     let _ = child.wait();
 
-    let expected: Vec<usize> = src
-        .layout
-        .channels
-        .iter()
-        .enumerate()
-        .map(|(i, c)| decoded_channels(channels).iter().position(|d| d == c).unwrap_or(i))
-        .collect();
+    let expected = decoded_order(src.layout);
     let comparison = Comparison {
         lag_samples: lag,
         compared_frames: compared,

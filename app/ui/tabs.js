@@ -22,6 +22,7 @@ function syncTabs() {
 // goes after its label. Anything that changes with the choices (what a stream type contains, for one) is added
 // to the end with setTip.
 const INFO = [
+  ["@#pvTitle", "Encodes about 20 seconds from the middle of your programme with these exact settings, decodes it again, and lets you flip between the source, the result, and what the encoder took away. Everything is mixed to stereo the same way, so the only difference you hear is the format. 1, 2 and 3 switch, space plays."],
   ["@.format .dh", "Everything about the stream itself: format, rate, bit rate and the loudness tag."],
   ["#dest", "Where this file is going. It sets the rules: which formats, rates and layouts are allowed. Blu-ray and DVD are strict, Generic is relaxed, and Audio files will take nearly anything."],
   ["#stream", "The audio format. Lossless keeps every bit; lossy keeps what you probably won't miss. Pick whatever your disc or player asks for."],

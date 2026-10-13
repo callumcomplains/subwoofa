@@ -12,7 +12,7 @@ use encoders::{
     verify_output, Run,
 };
 use log::{fmt_secs, log_header, peak_bit_rate_note};
-use sources::{open_sources, Sources};
+pub(crate) use sources::{open_sources, Sources};
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;

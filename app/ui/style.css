@@ -417,3 +417,13 @@ body.tools-mode .tools, body.tools-mode .settings { grid-row: 3 / span 3; }
 .lock-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--bad) 55%, var(--rule)); border-radius: var(--r); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
 .atmos.locked > :not(.lock-note):not(.atmos-engine) { opacity: .4; pointer-events: none; }
 option:disabled { color: var(--dim); }
+
+/* ---------- listening preview ---------- */
+.preview { margin: 0 0 8px; padding: 8px 10px; background: var(--screen); border: 1px solid var(--rule); border-radius: var(--r); display: grid; gap: 8px; }
+.pv-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pv-head .readout { flex: 1; min-width: 0; }
+.pv-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pv-row input[type=range] { flex: 1; min-width: 80px; accent-color: var(--lamp); }
+.pv-row .readout { min-width: 78px; text-align: right; }
+#pvPlay.on { color: var(--lamp); border-color: var(--lamp); }
+#pvProgress .bar-fill { display: block; transition: width .2s linear; }

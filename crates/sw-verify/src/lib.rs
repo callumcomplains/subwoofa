@@ -20,7 +20,7 @@ mod thd;
 
 pub use analysis::{Analysis, Spectrogram};
 use serde::Serialize;
-pub use source::{compare_with_source, ChannelMatch, Comparison, Source};
+pub use source::{align, compare_with_source, decode_planar, decoded_order, ChannelMatch, Comparison, Source};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};

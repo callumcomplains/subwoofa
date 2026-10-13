@@ -76,6 +76,7 @@ function update() {
   const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && (cat.has_ffmpeg || curStream().native) && curRate() > 0;
   const available = curStream().available && (!srcLayoutId || curStream().native);
   $("go").disabled = !ready || !available;
+  $("previewBtn").disabled = !pv.busy && !previewReady();
   if (!available && srcLayoutId) log("Mixing 22.2 down needs a format with a native Subwoofa encoder.");
   else if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
   syncChips();

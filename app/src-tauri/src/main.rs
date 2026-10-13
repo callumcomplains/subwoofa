@@ -9,6 +9,7 @@ mod catalog;
 mod downmix;
 mod jobs;
 mod loudness;
+mod preview;
 mod sources;
 mod streamtools;
 mod toolpaths;
@@ -70,6 +71,7 @@ fn main() {
             );
             app.manage(queue);
             app.manage(atmos::State::default());
+            app.manage(preview::State::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -90,6 +92,9 @@ fn main() {
             jobs::queue_set_concurrency,
             jobs::read_log,
             loudness::measure_loudness,
+            preview::make_preview,
+            preview::preview_cancel,
+            preview::read_preview_file,
             jobs::write_text,
             app_version,
             open_docs,
