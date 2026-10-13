@@ -1,10 +1,37 @@
 //! Writing the chunks of a channel pair (or a lone channel): the order a decoder parses them in.
 
 use crate::express::bits::{put_code, BitsLe};
-use crate::express::channel::Grids;
+use crate::express::channel::{ChanCoding, Grids};
 use crate::express::encoder::{chunk, LbrEncoder};
 use crate::express::filterbank::TS;
 use crate::express::levels::{alphabet, levels_from_profile, nearest};
+
+/// A channel pair (or a lone channel) after quantisation: everything its four chunks are written from.
+struct PairCoding {
+    /// First and second channel of the pair (the same for a lone channel).
+    ch1: usize,
+    ch2: usize,
+    stereo: bool,
+    /// Bands that are written, counted in coding order.
+    kw: usize,
+    /// Band at each coding position.
+    ord: Vec<usize>,
+    levels: Vec<usize>,
+    profile: u32,
+    c1: ChanCoding,
+    c2: Option<ChanCoding>,
+}
+
+impl PairCoding {
+    /// Which of the three LPC bands the channel uses.
+    fn lpc_used(&self, ch: usize) -> [bool; 3] {
+        if ch == self.ch1 {
+            self.c1.lpc_used
+        } else {
+            self.c2.as_ref().map_or([false; 3], |c| c.lpc_used)
+        }
+    }
+}
 
 impl LbrEncoder {
     /// The four chunks of one channel pair (or of a lone channel).
@@ -22,6 +49,24 @@ impl LbrEncoder {
         k: usize,
         muted: bool,
     ) -> (Vec<Vec<u8>>, f64, Vec<(usize, [[f64; 8]; 3], [bool; 3])>) {
+        let coding = self.code_pair(pair, ts, profile, k, muted);
+        let pid = pair as u8;
+        let chunks = vec![
+            chunk(0x30 + pid, self.grid1_chunk(&coding)),
+            chunk(0x40 + pid, self.high_resolution_chunk(&coding)),
+            chunk(0x50 + pid, self.samples1_chunk(&coding)),
+            chunk(0x60 + pid, self.samples2_chunk(&coding)),
+        ];
+        let (c1, c2) = (&coding.c1, &coding.c2);
+        let err = c1.err + c2.as_ref().map_or(0.0, |c| c.err);
+        let tails: Vec<(usize, [[f64; 8]; 3], [bool; 3])> = std::iter::once((coding.ch1, c1.tails, c1.lpc_used))
+            .chain(c2.as_ref().map(|c| (coding.ch2, c.tails, c.lpc_used)))
+            .collect();
+        (chunks, err, tails)
+    }
+
+    /// Quantises the channels of a pair: picks the bands' quantizer levels and codes each channel.
+    fn code_pair(&self, pair: usize, ts: &[Vec<Vec<f64>>], profile: u32, k: usize, muted: bool) -> PairCoding {
         let ch1 = pair * 2;
         let ch2 = (ch1 + 1).min(self.cfg.channels - 1);
         let stereo = ch1 != ch2;
@@ -55,12 +100,6 @@ impl LbrEncoder {
         } else {
             None
         };
-        let tails: Vec<(usize, [[f64; 8]; 3], [bool; 3])> = std::iter::once((ch1, c1.tails, c1.lpc_used))
-            .chain(c2.as_ref().map(|c| (ch2, c.tails, c.lpc_used)))
-            .collect();
-        let used = [c1.lpc_used, c2.as_ref().map_or([false; 3], |c| c.lpc_used)];
-        let lpc_used = |ch: usize| used[ch - ch1];
-        let err = c1.err + c2.as_ref().map_or(0.0, |c| c.err);
         if muted {
             for c in std::iter::once(&mut c1).chain(c2.as_mut()) {
                 for sb in 0..nsb {
@@ -73,18 +112,30 @@ impl LbrEncoder {
                 }
             }
         }
-        let pid = pair as u8;
-        let mut chunks = Vec::new();
+        PairCoding {
+            ch1,
+            ch2,
+            stereo,
+            kw,
+            ord,
+            levels,
+            profile,
+            c1,
+            c2,
+        }
+    }
 
-        // ---- grid 1 chunk
+    /// Chunk 0x30: first-grid scale factors and the third grid's averages of the first channel.
+    fn grid1_chunk(&self, pc: &PairCoding) -> BitsLe {
+        let (geo, nsb) = (self.geo, self.geo.nsb);
         let mut w = BitsLe::new();
         for sb in 2..geo.ng1 {
-            self.put_scale_factors(&mut w, &c1.grids.g1[sb]);
+            self.put_scale_factors(&mut w, &pc.c1.grids.g1[sb]);
         }
         for sb in 0..nsb - 4 {
-            self.t.avg_g3.put(&mut w, (c1.grids.avg[sb] + 16) as u32);
+            self.t.avg_g3.put(&mut w, (pc.c1.grids.avg[sb] + 16) as u32);
         }
-        if stereo {
+        if pc.stereo {
             w.put(0, 4); // min_v of both channels
             w.put(0, 4);
             for _ in 0..(nsb - geo.min_mono).div_ceil(4) * 2 * 4 {
@@ -92,17 +143,19 @@ impl LbrEncoder {
             }
         }
         w.put(0, 24);
-        chunks.push(chunk(0x30 + pid, w));
+        w
+    }
 
-        // ---- high resolution grid chunk
+    /// Chunk 0x40: the profile, the LPC codes and the first two (highest resolution) bands.
+    fn high_resolution_chunk(&self, pc: &PairCoding) -> BitsLe {
         let mut w = BitsLe::new();
-        w.put(profile, 8);
+        w.put(pc.profile, 8);
         {
             let plan = self.lpc_plan.read().unwrap();
             for sb in 0..2 {
-                for ch in ch1..=ch2 {
+                for ch in pc.ch1..=pc.ch2 {
                     for set in 0..2 {
-                        for code in if lpc_used(ch)[sb] {
+                        for code in if pc.lpc_used(ch)[sb] {
                             plan[ch].codes[sb][set]
                         } else {
                             [8u8; 8]
@@ -114,29 +167,32 @@ impl LbrEncoder {
             }
         }
         for sb in 0..2 {
-            if stereo {
+            if pc.stereo {
                 w.put(0, 8); // secondary channel flags: no mid/side
             }
-            self.put_ts(&mut w, &c1.q[sb], levels[sb]);
-            if let Some(c2) = &c2 {
-                self.put_ts(&mut w, &c2.q[sb], levels[sb]);
+            self.put_ts(&mut w, &pc.c1.q[sb], pc.levels[sb]);
+            if let Some(c2) = &pc.c2 {
+                self.put_ts(&mut w, &c2.q[sb], pc.levels[sb]);
             }
         }
         for sb in 0..2 {
-            self.put_scale_factors(&mut w, &c1.grids.g1[sb]);
-            if let Some(c2) = &c2 {
+            self.put_scale_factors(&mut w, &pc.c1.grids.g1[sb]);
+            if let Some(c2) = &pc.c2 {
                 self.put_scale_factors(&mut w, &c2.grids.g1[sb]);
             }
         }
         w.put(0, 24);
-        chunks.push(chunk(0x40 + pid, w));
+        w
+    }
 
-        // ---- time samples 1
+    /// Chunk 0x50: bands 2 to 5 of the first channel.
+    fn samples1_chunk(&self, pc: &PairCoding) -> BitsLe {
+        let geo = self.geo;
         let mut w = BitsLe::new();
         {
             let plan = self.lpc_plan.read().unwrap();
-            for ch in ch1..=ch2 {
-                for code in if lpc_used(ch)[2] {
+            for ch in pc.ch1..=pc.ch2 {
+                for code in if pc.lpc_used(ch)[2] {
                     plan[ch].codes[2][0]
                 } else {
                     [8u8; 8]
@@ -146,23 +202,27 @@ impl LbrEncoder {
             }
         }
         for sb in 2..4 {
-            if stereo {
+            if pc.stereo {
                 w.put(0, 8);
             }
-            self.put_ts(&mut w, &c1.q[sb], levels[sb]);
+            self.put_ts(&mut w, &pc.c1.q[sb], pc.levels[sb]);
         }
-        self.put_grid2(&mut w, &c1.g2, 0, 1.min(geo.ng2));
+        self.put_grid2(&mut w, &pc.c1.g2, 0, 1.min(geo.ng2));
         for sb in 4..6 {
-            self.put_g3(&mut w, &c1.grids, sb);
-            if stereo {
+            self.put_g3(&mut w, &pc.c1.grids, sb);
+            if pc.stereo {
                 w.put(0, 8);
             }
-            self.put_ts(&mut w, &c1.q[sb], levels[sb]);
+            self.put_ts(&mut w, &pc.c1.q[sb], pc.levels[sb]);
         }
         w.put(0, 24);
-        chunks.push(chunk(0x50 + pid, w));
+        w
+    }
 
-        // ---- time samples 2
+    /// Chunk 0x60: the remaining bands, and for a pair the second channel's grids and samples.
+    fn samples2_chunk(&self, pc: &PairCoding) -> BitsLe {
+        let (geo, nsb, kw) = (self.geo, self.geo.nsb, pc.kw);
+        let (c1, levels) = (&pc.c1, &pc.levels);
         let mut w = BitsLe::new();
         self.put_grid2(&mut w, &c1.g2, 1, 3.min(geo.ng2));
         // third grid scale factors are sent the first time a band shows up (bands 4 and 5 came with the chunk before),
@@ -172,7 +232,7 @@ impl LbrEncoder {
             pres[b] = true;
         }
         for p in 6..geo.max_mono.min(kw) {
-            let sb = ord[p];
+            let sb = pc.ord[p];
             w.put(sb as u32, geo.idx_bits);
             if p == 12 {
                 for sg in 0..self.g3_avg_only_start().saturating_sub(4) {
@@ -185,56 +245,61 @@ impl LbrEncoder {
                 self.put_g3(&mut w, &c1.grids, sb);
                 pres[sb] = true;
             }
-            if stereo {
+            if pc.stereo {
                 w.put(0, 8);
             }
             self.put_ts(&mut w, &c1.q[sb], levels[p]);
         }
-        if let Some(c2) = &c2 {
-            // the secondary channel: first grid scale factors and third grid averages
-            for sb in 2..geo.ng1 {
-                self.put_scale_factors(&mut w, &c2.grids.g1[sb]);
-            }
-            for sb in 0..nsb - 4 {
-                self.t.avg_g3.put(&mut w, (c2.grids.avg[sb] + 16) as u32);
-            }
-            self.put_grid2(&mut w, &c2.g2, 0, 3.min(geo.ng2));
-            // second pass over the bands: the secondary channel of the mono region, both channels above it
-            for sb in geo.min_mono..kw {
-                let in_mono = sb < geo.max_mono;
-                if sb >= 6 && !in_mono {
-                    w.put(sb as u32, geo.idx_bits);
-                }
-                if sb == 12 {
-                    for sg in 0..self.g3_avg_only_start() - 4 {
-                        if sg + 4 > 11 {
-                            self.put_g3(&mut w, &c2.grids, sg + 4);
-                        }
-                    }
-                } else if (4..12).contains(&sb) {
-                    self.put_g3(&mut w, &c2.grids, sb);
-                }
-                if !in_mono {
-                    w.put(0, 8); // sbms
-                }
-                w.put(0, 8); // lrms
-                if in_mono {
-                    self.put_ts(&mut w, &c2.q[sb], levels[sb]);
-                } else {
-                    self.put_ts(&mut w, &c1.q[sb], levels[sb]);
-                    self.put_ts(&mut w, &c2.q[sb], levels[sb]);
-                }
-            }
+        if let Some(c2) = &pc.c2 {
+            self.put_second_channel(&mut w, pc, c2);
         } else {
             for p in geo.max_mono..kw {
-                let sb = ord[p];
+                let sb = pc.ord[p];
                 w.put(sb as u32, geo.idx_bits);
                 self.put_ts(&mut w, &c1.q[sb], levels[p]);
             }
         }
         w.put(0, 24);
-        chunks.push(chunk(0x60 + pid, w));
-        (chunks, err, tails)
+        w
+    }
+
+    /// The secondary channel of a pair: first grid scale factors and third grid averages, then a second pass over
+    /// the bands (the secondary channel of the mono region, both channels above it).
+    fn put_second_channel(&self, w: &mut BitsLe, pc: &PairCoding, c2: &ChanCoding) {
+        let (geo, nsb, kw) = (self.geo, self.geo.nsb, pc.kw);
+        let (c1, levels) = (&pc.c1, &pc.levels);
+        for sb in 2..geo.ng1 {
+            self.put_scale_factors(w, &c2.grids.g1[sb]);
+        }
+        for sb in 0..nsb - 4 {
+            self.t.avg_g3.put(w, (c2.grids.avg[sb] + 16) as u32);
+        }
+        self.put_grid2(w, &c2.g2, 0, 3.min(geo.ng2));
+        for sb in geo.min_mono..kw {
+            let in_mono = sb < geo.max_mono;
+            if sb >= 6 && !in_mono {
+                w.put(sb as u32, geo.idx_bits);
+            }
+            if sb == 12 {
+                for sg in 0..self.g3_avg_only_start() - 4 {
+                    if sg + 4 > 11 {
+                        self.put_g3(w, &c2.grids, sg + 4);
+                    }
+                }
+            } else if (4..12).contains(&sb) {
+                self.put_g3(w, &c2.grids, sb);
+            }
+            if !in_mono {
+                w.put(0, 8); // sbms
+            }
+            w.put(0, 8); // lrms
+            if in_mono {
+                self.put_ts(w, &c2.q[sb], levels[sb]);
+            } else {
+                self.put_ts(w, &c1.q[sb], levels[sb]);
+                self.put_ts(w, &c2.q[sb], levels[sb]);
+            }
+        }
     }
 
     pub(crate) fn put_scale_factors(&self, w: &mut BitsLe, vals: &[i32; 8]) {
