@@ -363,7 +363,8 @@ mod tests {
             "LFE must be dropped: {out:?}"
         );
         m.apply(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], &mut out);
-        assert!((out[0] - 0.7071).abs() < 1e-3 && (out[1] - 0.7071).abs() < 1e-3);
+        let half_power = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((out[0] - half_power).abs() < 1e-3 && (out[1] - half_power).abs() < 1e-3);
     }
 
     #[test]

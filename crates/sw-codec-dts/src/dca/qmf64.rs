@@ -17,7 +17,7 @@ impl Analysis64 {
     pub fn new() -> Analysis64 {
         const AMP: i32 = 1 << 20;
         let blocks = 40;
-        let mut resp = vec![Vec::with_capacity(blocks * BANDS); BANDS];
+        let mut resp: Vec<Vec<_>> = (0..BANDS).map(|_| Vec::with_capacity(blocks * BANDS)).collect();
         for band in 0..BANDS {
             let mut sy = FixedSynth::new(false, true);
             for blk in 0..blocks {

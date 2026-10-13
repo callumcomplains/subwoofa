@@ -8,3 +8,6 @@ license.workspace = true
 sw-core = { path = "../sw-core" }
 serde.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

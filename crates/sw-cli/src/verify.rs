@@ -15,10 +15,11 @@ pub(crate) fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Opti
             Err(e) => {
                 // a file that cannot even be opened is reported like a failed check, and the others still run
                 eprintln!("{}: {e}", file.display());
-                let mut r = sw_verify::Report::default();
-                r.file = file.display().to_string();
-                r.format = "unreadable".into();
-                reports.push(r);
+                reports.push(sw_verify::Report {
+                    file: file.display().to_string(),
+                    format: "unreadable".into(),
+                    ..Default::default()
+                });
             }
         }
     }

@@ -87,7 +87,8 @@ pub(crate) fn substream_layout(cfg: &Config) -> Vec<Substream> {
     };
     let dm = cfg.downmix.as_ref();
     let none = || Vec::new();
-    let subs = if cfg.mlp.is_some() || n <= 2 {
+
+    if cfg.mlp.is_some() || n <= 2 {
         vec![Substream {
             min: 0,
             max: n - 1,
@@ -138,8 +139,7 @@ pub(crate) fn substream_layout(cfg: &Config) -> Vec<Substream> {
                 matrices: full,
             },
         ]
-    };
-    subs
+    }
 }
 
 pub(crate) struct BlockPlan {
@@ -169,9 +169,7 @@ pub(crate) fn plan_blocks(
         let mut want = DecState::restart();
         want.blocksize = len;
         want.matrices = mats.to_vec();
-        for ch in 0..sub.min {
-            want.quant[ch] = out_q[ch];
-        }
+        want.quant[..sub.min].copy_from_slice(&out_q[..sub.min]);
         let mut codings = [Coding {
             codebook: 0,
             lsb_bits: 0,

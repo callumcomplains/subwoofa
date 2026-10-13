@@ -98,8 +98,7 @@ impl PcmReader {
         }
         let (mut fmt, mut data, mut bext_ref, mut ds64_data) = (None, None, None, None::<u64>);
         let mut channel_mask: Option<u32> = None;
-        loop {
-            let Ok(id) = rd::<4>(&mut f, &name) else { break };
+        while let Ok(id) = rd::<4>(&mut f, &name) {
             let Ok(sz) = rd::<4>(&mut f, &name) else { break };
             let mut size = u32::from_le_bytes(sz) as u64;
             let body = f.stream_position().map_err(|e| Error::Io(name.clone(), e))?;
@@ -186,8 +185,7 @@ impl PcmReader {
         }
         let (mut comm, mut ssnd) = (None, None);
         let mut little = false;
-        loop {
-            let Ok(id) = rd::<4>(&mut f, &name) else { break };
+        while let Ok(id) = rd::<4>(&mut f, &name) {
             let Ok(sz) = rd::<4>(&mut f, &name) else { break };
             let size = u32::from_be_bytes(sz) as u64;
             let body = f.stream_position().map_err(|e| Error::Io(name.clone(), e))?;

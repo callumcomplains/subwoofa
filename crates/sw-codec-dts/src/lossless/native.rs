@@ -49,8 +49,8 @@ pub struct MaStats {
 
 /// The lossless stage on its own, or with a DTS core underneath it.
 enum Enc {
-    Core(MaCoreEncoder),
-    Lossless(MaEncoder),
+    Core(Box<MaCoreEncoder>),
+    Lossless(Box<MaEncoder>),
 }
 
 impl Enc {
@@ -167,7 +167,7 @@ impl Plan {
 
     fn make_encoder(&self, req: &MaRequest) -> Result<Enc, MaError> {
         Ok(match self.core_kbps {
-            Some(kbps) => Enc::Core(MaCoreEncoder::new(MaCoreConfig {
+            Some(kbps) => Enc::Core(Box::new(MaCoreEncoder::new(MaCoreConfig {
                 layout: req.layout,
                 sample_rate: self.rate,
                 bit_res: self.bit_res,
@@ -177,8 +177,8 @@ impl Plan {
                 wide_remap: self.wide_remap,
                 downmix: self.downmix.clone(),
                 effort: req.effort,
-            })?),
-            None => Enc::Lossless(MaEncoder::new(MaConfig {
+            })?)),
+            None => Enc::Lossless(Box::new(MaEncoder::new(MaConfig {
                 sample_rate: self.rate,
                 map: self.map.clone(),
                 bit_res: self.bit_res,
@@ -186,7 +186,7 @@ impl Plan {
                 wide_remap: self.wide_remap,
                 repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
                 effort: req.effort,
-            })),
+            }))),
         })
     }
 

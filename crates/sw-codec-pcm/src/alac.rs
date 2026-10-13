@@ -589,11 +589,7 @@ impl AlacWriter {
         let total = self.samples_done;
         let max_frame = self.frame_sizes.iter().copied().max().unwrap_or(0);
         let bytes: u64 = self.frame_sizes.iter().map(|&s| s as u64).sum();
-        let average_bitrate = if total > 0 {
-            (bytes * 8 * p.rate as u64 / total) as u32
-        } else {
-            0
-        };
+        let average_bitrate = (bytes * 8 * p.rate as u64).checked_div(total).unwrap_or(0) as u32;
 
         let mut cookie = Vec::new();
         cookie.extend_from_slice(&0u32.to_be_bytes()); // version and flags

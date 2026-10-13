@@ -256,7 +256,7 @@ pub fn apply_container_options(info: &mut DtsHdInfo, bs: &BitstreamOptions, span
                         units.push(branch_unit(t));
                         used.push(tc.clone());
                     }
-                    Some(t) if t == 0.0 => {}
+                    Some(0.0) => {}
                     Some(_) => notes.push(format!("branch point {tc} is outside the encode and was not used")),
                     None => notes.push(format!(
                         "branch point '{tc}' is not a timecode (HH:MM:SS:FF) and was ignored"

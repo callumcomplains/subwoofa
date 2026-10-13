@@ -237,7 +237,7 @@ fn execute_inner(
         sample_rate: Some(spec.sample_rate),
         dialnorm: spec.dialnorm,
         start_secs: spec.start,
-        duration_secs: Some(span).filter(|_| spec.start.is_some() || spec.duration.is_some()),
+        duration_secs: (spec.start.is_some() || spec.duration.is_some()).then_some(span),
         frames: Some((span * stems.sample_rate as f64).round() as u64),
         slots: Some(slots),
         ffmpeg: ffmpeg.clone().unwrap_or_default(),

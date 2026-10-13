@@ -134,6 +134,8 @@ pub(crate) enum AtmosCmd {
     Encode(AtmosEncodeArgs),
 }
 
+// the command line is parsed once, so the size of the largest variant does not matter
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
     /// Dolby Atmos through the Dolby Encoding Engine (a copy you are licensed to use).

@@ -217,10 +217,8 @@ fn noise_transfer_function() -> ([f64; ORDER], [f64; ORDER]) {
     let poles = butterworth_denominator(low);
     let mut b = [0.0; ORDER];
     let mut a = [0.0; ORDER];
-    for k in 0..ORDER {
-        b[k] = zeros[k + 1];
-        a[k] = poles[k + 1];
-    }
+    b.copy_from_slice(&zeros[1..=ORDER]);
+    a.copy_from_slice(&poles[1..=ORDER]);
     (b, a)
 }
 

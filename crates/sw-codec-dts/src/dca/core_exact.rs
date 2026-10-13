@@ -520,9 +520,7 @@ impl FixedLfe {
                 pcm[64 * i + 32 + j] = clip23(norm(b, 23));
             }
         }
-        for k in 0..8 {
-            self.history[k] = buf[n + k];
-        }
+        self.history.copy_from_slice(&buf[n..n + 8]);
         if !x96 {
             return pcm;
         }

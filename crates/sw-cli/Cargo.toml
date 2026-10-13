@@ -22,3 +22,6 @@ sw-backend-dee = { path = "../sw-backend-dee" }
 clap.workspace = true
 serde_json.workspace = true
 mimalloc = { version = "0.1", default-features = false }
+
+[lints]
+workspace = true

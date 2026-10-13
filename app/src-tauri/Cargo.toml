@@ -23,3 +23,6 @@ mimalloc = { version = "0.1", default-features = false }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

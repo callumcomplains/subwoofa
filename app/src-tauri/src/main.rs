@@ -368,7 +368,7 @@ async fn tools_split(path: String, output: String, at: Vec<f64>) -> Result<Vec<S
 #[tauri::command]
 async fn tools_append(inputs: Vec<String>, output: String) -> Result<String, String> {
     blocking(move || {
-        let refs: Vec<&std::path::Path> = inputs.iter().map(|p| std::path::Path::new(p)).collect();
+        let refs: Vec<&std::path::Path> = inputs.iter().map(std::path::Path::new).collect();
         sw_tools::append(&refs, std::path::Path::new(&output)).map_err(|e| e.to_string())?;
         Ok(format!("Wrote {output}"))
     })
@@ -487,7 +487,7 @@ async fn tool_status() -> ToolStatus {
         let dir = sw_verify::mas_dir();
         let files = ["DTSHDVerify.exe", "DtsJobQueue.exe", "dtshd.exe"]
             .iter()
-            .map(|n| (n.to_string(), dir.as_ref().map_or(false, |d| d.join(n).is_file())))
+            .map(|n| (n.to_string(), dir.as_ref().is_some_and(|d| d.join(n).is_file())))
             .collect();
         Ok(ToolStatus {
             ffmpeg: ffmpeg.map(|p| p.display().to_string()),

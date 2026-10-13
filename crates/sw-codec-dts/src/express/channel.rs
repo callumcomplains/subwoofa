@@ -69,10 +69,8 @@ impl LbrEncoder {
                 lpc_used[sb] = used;
                 err += e;
                 tails[sb] = tail;
-                for slot in 0..8 {
-                    scf[sb][slot] = s8[slot];
-                    q[sb][slot] = q8[slot].clone();
-                }
+                scf[sb] = s8;
+                q[sb].clone_from_slice(&q8);
                 continue;
             }
             for slot in 0..8 {

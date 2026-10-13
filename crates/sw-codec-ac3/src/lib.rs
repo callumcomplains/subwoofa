@@ -339,7 +339,7 @@ mod tests {
             0,
             "crc2 over the whole frame must leave a zero residual"
         );
-        let f58 = (((f.len() >> 2) + (f.len() >> 4)) << 1);
+        let f58 = ((f.len() >> 2) + (f.len() >> 4)) << 1;
         assert_eq!(
             crc16(&f[2..f58]),
             0,

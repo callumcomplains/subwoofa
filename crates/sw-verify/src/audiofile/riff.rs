@@ -145,8 +145,8 @@ fn wav_data(c: &mut Collector, body: u64, size: u64, len: u64, facts: &mut Facts
         c.check("Audio data size", Status::Pass, format!("{size} bytes of audio"));
     }
     let align = state.block_align as u64;
-    if align > 0 {
-        facts.frames = Some(size.min(len - body) / align);
+    if let Some(frames) = size.min(len - body).checked_div(align) {
+        facts.frames = Some(frames);
         if !size.is_multiple_of(align) {
             c.check(
                 "Whole frames",

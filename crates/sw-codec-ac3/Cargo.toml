@@ -9,3 +9,6 @@ sw-core = { path = "../sw-core" }
 thiserror.workspace = true
 sw-pcm = { path = "../sw-pcm" }
 rayon = "1.12.0"
+
+[lints]
+workspace = true

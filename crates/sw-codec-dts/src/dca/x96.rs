@@ -236,7 +236,7 @@ impl X96Encoder {
                     .map(|b| {
                         let mut best = (f64::MAX, 0usize);
                         for (i, c) in b.iter().enumerate() {
-                            let j = c.dist + lambda * (c.bits + if c.abits > 0 { 0 } else { 0 }) as f64;
+                            let j = c.dist + lambda * c.bits as f64;
                             if j < best.0 {
                                 best = (j, i);
                             }

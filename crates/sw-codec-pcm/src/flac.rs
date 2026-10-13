@@ -58,7 +58,6 @@ impl Search {
 }
 
 const LPC_PRECISION: u32 = 15;
-/// Largest partition order tried (blocks are split into up to 2^8 Rice partitions).
 
 // ---------------------------------------------------------------------------------------------------------------
 // bit and checksum helpers

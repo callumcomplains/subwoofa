@@ -10,3 +10,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 sw-verify = { path = "../sw-verify" }
+
+[lints]
+workspace = true

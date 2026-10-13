@@ -101,7 +101,7 @@ fn check(name: &str, layout_id: &str, expected_channels: usize, cs_is_matrixed: 
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
-    let nch = y.len() / 4 / (rate as usize) * 0 + expected_channels;
+    let nch = expected_channels;
     let frames = y.len() / nch;
     assert!(frames >= 4 * rate as usize - 100, "{name}: decoded {frames} frames");
     let amp = |c: usize, f: f64| -> f64 {
