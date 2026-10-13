@@ -10,11 +10,56 @@ use crate::dca::tables::{BITALLOC_HUFF, BIT_RATES, QUANT_HUFF, QUANT_LEVELS, TMO
 impl Encoder {
     pub(crate) fn pack(&self, plan: &Plan, lfe: Option<&(Vec<i32>, u8)>) -> Vec<u8> {
         let cfg = &self.cfg;
-        let nch = cfg.channels;
-        let blocks = cfg.blocks;
-        let nssc = blocks / 8;
         let mut w = BitWriter::new();
-        // frame header
+        self.put_frame_header(&mut w);
+        self.put_coding_header(&mut w, plan);
+        self.put_side_info(&mut w, plan);
+        // LFE
+        if let Some((q, idx)) = lfe {
+            for v in q {
+                w.put_signed(*v, 8);
+            }
+            w.put(*idx as u32, 8);
+        }
+        self.put_audio(&mut w, plan);
+        w.put(0xFFFF, 16);
+        if let Some(aux) = &self.aux {
+            w.put(aux.size() as u32, 6); // bytes of auxiliary data
+        }
+        let mut bytes = w.into_bytes();
+        if let Some(aux) = &self.aux {
+            // a decoder looks for the sync word at the next 32-bit boundary after the size field
+            let at = bytes.len().div_ceil(4) * 4;
+            assert!(
+                at <= self.aux_sync(aux),
+                "frame overflow before the auxiliary data: {at} > {}",
+                self.aux_sync(aux)
+            );
+            bytes.resize(at, 0);
+            bytes.extend_from_slice(&aux.block());
+        }
+        if cfg.xch {
+            // the extension ends the frame and its size field has 10 bits: after a quiet frame's short core data it
+            // starts later than the data ends, with zeros between
+            let start = bytes.len().div_ceil(4) * 4;
+            let start = start.max((self.frame_bytes - 1020) & !3);
+            bytes.resize(start, 0);
+            bytes.extend_from_slice(&self.pack_xch(plan, self.frame_bytes - start));
+        }
+        assert!(
+            bytes.len() <= self.frame_bytes,
+            "frame overflow: {} > {}",
+            bytes.len(),
+            self.frame_bytes
+        );
+        bytes.resize(self.frame_bytes, 0);
+        bytes
+    }
+
+    /// The frame header: sync word, sizes, rate, extension flags, dialogue level.
+    fn put_frame_header(&self, w: &mut BitWriter) {
+        let cfg = &self.cfg;
+        let blocks = cfg.blocks;
         w.put(0x7FFE_8001, 32);
         w.put(1, 1);
         w.put(31, 5);
@@ -60,7 +105,11 @@ impl Encoder {
         w.put(0, 1); // front sum/difference
         w.put(0, 1); // surround sum/difference
         w.put(dn as u32, 4);
-        // primary audio coding header
+    }
+
+    /// The primary audio coding header: channels, subbands, scale-factor tables, bit-allocation selectors.
+    fn put_coding_header(&self, w: &mut BitWriter, plan: &Plan) {
+        let nch = self.cfg.channels;
         w.put(0, 4); // one subframe
         w.put(nch as u32 - 1, 3);
         for _ in 0..nch {
@@ -93,7 +142,12 @@ impl Encoder {
                 }
             }
         }
-        // subframe side information
+    }
+
+    /// The subframe side information: ADPCM flags, bit allocation, transient modes and scale factors.
+    fn put_side_info(&self, w: &mut BitWriter, plan: &Plan) {
+        let nch = self.cfg.channels;
+        let nssc = self.cfg.blocks / 8;
         w.put(nssc as u32 - 1, 2);
         w.put(0, 3);
         for _ in 0..nch {
@@ -131,14 +185,12 @@ impl Encoder {
                 }
             }
         }
-        // LFE
-        if let Some((q, idx)) = lfe {
-            for v in q {
-                w.put_signed(*v, 8);
-            }
-            w.put(*idx as u32, 8);
-        }
-        // audio data
+    }
+
+    /// The samples of every subband, a sub-subframe at a time.
+    fn put_audio(&self, w: &mut BitWriter, plan: &Plan) {
+        let nch = self.cfg.channels;
+        let nssc = self.cfg.blocks / 8;
         for ss in 0..nssc {
             for ch in 0..nch {
                 for b in 0..BANDS {
@@ -147,42 +199,10 @@ impl Encoder {
                         continue;
                     }
                     let vals = &plan.q[ch][b][ss * 8..ss * 8 + 8];
-                    self.put_samples(&mut w, k, plan.sel[ch][k.min(10) - 1], vals);
+                    self.put_samples(w, k, plan.sel[ch][k.min(10) - 1], vals);
                 }
             }
         }
-        w.put(0xFFFF, 16);
-        if let Some(aux) = &self.aux {
-            w.put(aux.size() as u32, 6); // bytes of auxiliary data
-        }
-        let mut bytes = w.into_bytes();
-        if let Some(aux) = &self.aux {
-            // a decoder looks for the sync word at the next 32-bit boundary after the size field
-            let at = bytes.len().div_ceil(4) * 4;
-            assert!(
-                at <= self.aux_sync(aux),
-                "frame overflow before the auxiliary data: {at} > {}",
-                self.aux_sync(aux)
-            );
-            bytes.resize(at, 0);
-            bytes.extend_from_slice(&aux.block());
-        }
-        if cfg.xch {
-            // the extension ends the frame and its size field has 10 bits: after a quiet frame's short core data it
-            // starts later than the data ends, with zeros between
-            let start = bytes.len().div_ceil(4) * 4;
-            let start = start.max((self.frame_bytes - 1020) & !3);
-            bytes.resize(start, 0);
-            bytes.extend_from_slice(&self.pack_xch(plan, self.frame_bytes - start));
-        }
-        assert!(
-            bytes.len() <= self.frame_bytes,
-            "frame overflow: {} > {}",
-            bytes.len(),
-            self.frame_bytes
-        );
-        bytes.resize(self.frame_bytes, 0);
-        bytes
     }
 
     pub(crate) fn put_samples(&self, w: &mut BitWriter, k: usize, sel: u8, vals: &[i32]) {
