@@ -109,9 +109,15 @@ impl Encoder {
 
     /// The primary audio coding header: channels, subbands, scale-factor tables, bit-allocation selectors.
     fn put_coding_header(&self, w: &mut BitWriter, plan: &Plan) {
-        let nch = self.cfg.channels;
         w.put(0, 4); // one subframe
-        w.put(nch as u32 - 1, 3);
+        w.put(self.cfg.channels as u32 - 1, 3);
+        self.put_channel_tables(w, plan);
+    }
+
+    /// Per channel: active subbands, scale-factor and bit-allocation tables, sample codebook selectors. The core's
+    /// primary audio header and the XXCH channel set header both start their channel data this way.
+    pub(crate) fn put_channel_tables(&self, w: &mut BitWriter, plan: &Plan) {
+        let nch = self.cfg.channels;
         for _ in 0..nch {
             w.put(30, 5); // 32 active subbands
         }
@@ -146,10 +152,15 @@ impl Encoder {
 
     /// The subframe side information: ADPCM flags, bit allocation, transient modes and scale factors.
     fn put_side_info(&self, w: &mut BitWriter, plan: &Plan) {
+        w.put((self.cfg.blocks / 8) as u32 - 1, 2);
+        w.put(0, 3);
+        self.put_band_info(w, plan);
+    }
+
+    /// Per channel and subband: ADPCM flags, bit allocation, transient modes and scale factors.
+    pub(crate) fn put_band_info(&self, w: &mut BitWriter, plan: &Plan) {
         let nch = self.cfg.channels;
         let nssc = self.cfg.blocks / 8;
-        w.put(nssc as u32 - 1, 2);
-        w.put(0, 3);
         for _ in 0..nch {
             for _ in 0..BANDS {
                 w.put(0, 1); // no ADPCM
@@ -188,7 +199,7 @@ impl Encoder {
     }
 
     /// The samples of every subband, a sub-subframe at a time.
-    fn put_audio(&self, w: &mut BitWriter, plan: &Plan) {
+    pub(crate) fn put_audio(&self, w: &mut BitWriter, plan: &Plan) {
         let nch = self.cfg.channels;
         let nssc = self.cfg.blocks / 8;
         for ss in 0..nssc {

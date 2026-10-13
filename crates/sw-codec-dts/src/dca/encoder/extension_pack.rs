@@ -39,10 +39,20 @@ impl Encoder {
 
     /// The XXCH frame: frame header, one channel set (header and subframe), padded to `total` bytes.
     pub(crate) fn pack_xxch(&self, plan: &Plan, p: &XxchParams, total: usize) -> Vec<u8> {
+        let head = self.xxch_set_header(plan, p);
+        let data = self.xxch_subframe(plan);
+        let mut out = xxch_frame_header(p, head.len() + data.len());
+        out.extend_from_slice(&head);
+        out.extend_from_slice(&data);
+        assert!(out.len() <= total, "XXCH overflow: {} > {}", out.len(), total);
+        out.resize(total, 0);
+        out
+    }
+
+    /// The channel set header: size, channels, speakers, embedded downmix and the per-channel tables, with a CRC.
+    fn xxch_set_header(&self, plan: &Plan, p: &XxchParams) -> Vec<u8> {
         let nch = self.cfg.channels;
-        let nssc = self.cfg.blocks / 8;
         let nb = p.mask_bits;
-        // ---- channel set header
         let mut w = BitWriter::new();
         w.put(0, 7); // size, patched below
         w.put(nch as u32 - 1, 3);
@@ -65,116 +75,23 @@ impl Encoder {
             }
             None => w.put(0, 1),
         }
-        for _ in 0..nch {
-            w.put(30, 5); // 32 active subbands
-        }
-        for _ in 0..nch {
-            w.put(31, 5); // no high frequency VQ
-        }
-        for _ in 0..nch {
-            w.put(0, 3); // no joint intensity
-        }
-        for _ in 0..nch {
-            w.put(0, 2); // transient codebook A4
-        }
-        for _ in 0..nch {
-            w.put(6, 3); // 7-bit linear scale factors
-        }
-        for ch in 0..nch {
-            w.put(plan.bhuff[ch] as u32, 3);
-        }
-        for (i, nbits) in SEL_BITS.iter().enumerate() {
-            for ch in 0..nch {
-                w.put(plan.sel[ch][i] as u32, *nbits);
-            }
-        }
-        for (i, g) in GROUP_SIZE.iter().enumerate() {
-            for ch in 0..nch {
-                if (plan.sel[ch][i] as usize) < *g {
-                    w.put(0, 2);
-                }
-            }
-        }
+        self.put_channel_tables(&mut w, plan);
         w.align(8);
         let size = w.bit_len() / 8 + 2;
         let mut head = w.into_bytes();
         head[0] = (head[0] & 0x01) | (((size - 1) as u8) << 1);
         let crc = crate::lossless::xll::crc16(&head);
         head.extend_from_slice(&crc.to_be_bytes());
+        head
+    }
 
-        // ---- subframe: side information then samples
+    /// The subframe: side information then samples.
+    fn xxch_subframe(&self, plan: &Plan) -> Vec<u8> {
         let mut w = BitWriter::new();
-        for _ in 0..nch {
-            for _ in 0..BANDS {
-                w.put(0, 1); // no ADPCM
-            }
-        }
-        for ch in 0..nch {
-            for b in 0..BANDS {
-                let a = plan.abits[ch][b] as u32;
-                match plan.bhuff[ch] {
-                    6 => w.put(a, 5),
-                    5 => w.put(a, 4),
-                    j => {
-                        let (c, l) = BITALLOC_HUFF[j as usize][a as usize - 1];
-                        w.put(c as u32, l as u32);
-                    }
-                }
-            }
-        }
-        if nssc > 1 {
-            for ch in 0..nch {
-                for b in 0..BANDS {
-                    if plan.abits[ch][b] > 0 {
-                        let (c, l) = TMODE_HUFF[0][0];
-                        w.put(c as u32, l as u32);
-                    }
-                }
-            }
-        }
-        for ch in 0..nch {
-            for b in 0..BANDS {
-                if plan.abits[ch][b] > 0 {
-                    w.put(plan.scale_idx[ch][b] as u32, 7);
-                }
-            }
-        }
-        for ss in 0..nssc {
-            for ch in 0..nch {
-                for b in 0..BANDS {
-                    let k = plan.abits[ch][b] as usize;
-                    if k == 0 {
-                        continue;
-                    }
-                    let vals = &plan.q[ch][b][ss * 8..ss * 8 + 8];
-                    self.put_samples(&mut w, k, plan.sel[ch][k.min(10) - 1], vals);
-                }
-            }
-        }
+        self.put_band_info(&mut w, plan);
+        self.put_audio(&mut w, plan);
         w.put(0xFFFF, 16);
-        let data = w.into_bytes();
-        let set_bytes = head.len() + data.len();
-
-        // ---- frame header
-        let mut f = BitWriter::new();
-        f.put(0x4700_4A03, 32);
-        let hs = (32 + 6 + 1 + 5 + 2 + 14 + nb as usize).div_ceil(8) + 2;
-        f.put(hs as u32 - 1, 6);
-        f.put(1, 1); // channel set headers carry a CRC
-        f.put(nb - 1, 5);
-        f.put(0, 2); // one channel set
-        f.put(set_bytes as u32 - 1, 14);
-        f.put(p.core_mask, nb);
-        f.align(8);
-        let mut out = f.into_bytes();
-        let crc = crate::lossless::xll::crc16(&out[4..]);
-        out.extend_from_slice(&crc.to_be_bytes());
-        debug_assert_eq!(out.len(), hs);
-        out.extend_from_slice(&head);
-        out.extend_from_slice(&data);
-        assert!(out.len() <= total, "XXCH overflow: {} > {}", out.len(), total);
-        out.resize(total, 0);
-        out
+        w.into_bytes()
     }
 
     /// The XCH extension: the sixth channel coded like a core channel, ending at the end of the frame.
@@ -243,4 +160,24 @@ impl Encoder {
         bytes.resize(dist, 0);
         bytes
     }
+}
+
+/// The XXCH frame header, which announces one channel set of `set_bytes` bytes.
+fn xxch_frame_header(p: &XxchParams, set_bytes: usize) -> Vec<u8> {
+    let nb = p.mask_bits;
+    let mut f = BitWriter::new();
+    f.put(0x4700_4A03, 32);
+    let hs = (32 + 6 + 1 + 5 + 2 + 14 + nb as usize).div_ceil(8) + 2;
+    f.put(hs as u32 - 1, 6);
+    f.put(1, 1); // channel set headers carry a CRC
+    f.put(nb - 1, 5);
+    f.put(0, 2); // one channel set
+    f.put(set_bytes as u32 - 1, 14);
+    f.put(p.core_mask, nb);
+    f.align(8);
+    let mut out = f.into_bytes();
+    let crc = crate::lossless::xll::crc16(&out[4..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+    debug_assert_eq!(out.len(), hs);
+    out
 }
