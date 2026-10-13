@@ -283,6 +283,9 @@ fn speed_and_thread_settings_are_honoured() {
     assert_eq!(best, run("best", 1).unwrap());
     let balanced = run("balanced", 2).unwrap();
     let fast = run("fast", 0).unwrap();
-    assert!(best <= balanced && best <= fast, "best {best}, balanced {balanced}, fast {fast}");
+    assert!(
+        best <= balanced && best <= fast,
+        "best {best}, balanced {balanced}, fast {fast}"
+    );
     assert!(run("turbo", 0).unwrap_err().contains("unknown speed"));
 }
