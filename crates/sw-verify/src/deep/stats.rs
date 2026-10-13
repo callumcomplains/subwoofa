@@ -83,6 +83,16 @@ impl Stats {
         }
     }
     pub(crate) fn report(&self, c: &mut Collector, rate: u32) {
+        let (rows, clip_total) = self.channel_rows(rate);
+        c.section("Decoded audio", rows);
+        self.report_activity(c);
+        self.report_clipping(c, clip_total);
+        self.report_silence(c, rate);
+    }
+
+    /// One line per channel: peak, RMS, DC offset, unused low bits and full-scale samples. Also returns the number of
+    /// full-scale samples in all.
+    fn channel_rows(&self, rate: u32) -> (Vec<(String, String)>, u64) {
         let r = rate as f64;
         let db = |x: f64| {
             if x <= 0.0 {
@@ -121,7 +131,11 @@ impl Stats {
                 },
             ));
         }
-        c.section("Decoded audio", rows);
+        (rows, clip_total)
+    }
+
+    /// Which channels carry audio, and which are copies of each other.
+    fn report_activity(&self, c: &mut Collector) {
         let silent: Vec<usize> = (0..self.channels)
             .filter(|k| self.silent_all[*k])
             .map(|k| k + 1)
@@ -162,7 +176,15 @@ impl Stats {
                 format!("these channels are sample-for-sample identical: {}", dup.join(", ")),
             );
         }
+    }
+
+    fn report_clipping(&self, c: &mut Collector, clip_total: u64) {
         c.check("Clipping", if clip_total == 0 { Status::Pass } else { Status::Warn }, if clip_total == 0 { "no sample reaches full scale".to_string() } else { format!("{clip_total} full-scale sample(s) in all channels (decoded audio, so this includes any clipping in the source)") });
+    }
+
+    /// Silence at the start and end, and a long stretch of it inside the programme.
+    fn report_silence(&self, c: &mut Collector, rate: u32) {
+        let r = rate as f64;
         if let Some(f) = self.first_sound {
             c.kv("Silence before the first sound", format!("{:.3} s", f as f64 / r));
             c.kv(

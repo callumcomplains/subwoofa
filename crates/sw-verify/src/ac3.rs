@@ -190,10 +190,15 @@ fn walk_frames(w: &mut Window, c: &mut Collector, eac3: bool, p: &mut Probe) -> 
             t.samples += h.blocks as u64 * 256;
             p.frame_samples.push(h.blocks * 256);
         }
-        if p.frame_bytes.last().is_some_and(|last| *last != fsize as u32) {
-            t.size_changes += 1;
+        if eac3 && h.strmtyp == 1 && !p.frame_bytes.is_empty() {
+            // a dependent substream belongs to the access unit before it: the bit rate chart counts them together
+            *p.frame_bytes.last_mut().unwrap() += fsize as u32;
+        } else {
+            if p.frame_bytes.last().is_some_and(|last| *last != fsize as u32) {
+                t.size_changes += 1;
+            }
+            p.frame_bytes.push(fsize as u32);
         }
-        p.frame_bytes.push(fsize as u32);
         t.frames += 1;
         pos += fsize as u64;
     }

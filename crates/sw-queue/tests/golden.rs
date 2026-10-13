@@ -502,3 +502,20 @@ fn every_format_makes_the_same_bytes_as_before() {
     }
     assert!(changed.is_empty(), "output changed:\n{}", changed.join("\n"));
 }
+
+/// An E-AC-3 stream with dependent substreams (7.1) has more frames than access units: the deep check once ran off
+/// the end of its per-access-unit tables.
+#[test]
+fn deep_check_of_a_stream_with_dependent_substreams() {
+    let dir = scratch();
+    let case = cases().into_iter().find(|c| c.name == "eac3-7.1").unwrap();
+    run(&case, &dir);
+    let path = dir.join("eac3-7.1.eac3");
+    let options = sw_verify::Options {
+        deep: true,
+        ffmpeg: None,
+        reference_verifier: None,
+    };
+    let report = sw_verify::verify(&path, &options).unwrap();
+    assert!(report.passed);
+}
