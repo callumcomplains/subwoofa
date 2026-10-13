@@ -183,8 +183,8 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
                 let verify = sw_verify::verify(&done.output, &sw_verify::Options::default())
                     .ok()
                     .map(|r| {
-                        let text = r.to_text();
-                        crate::streamtools::VerifyOut { report: r, text }
+                        let (text, html) = (r.to_text(), r.to_html());
+                        crate::streamtools::VerifyOut { report: r, text, html }
                     });
                 s.progress = 1.0;
                 s.done = Some(Done {

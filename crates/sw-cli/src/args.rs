@@ -99,14 +99,7 @@ pub(crate) enum ToolsCmd {
         output: PathBuf,
     },
     /// Same as `subwoofa verify`.
-    Verify {
-        #[arg(required = true)]
-        files: Vec<PathBuf>,
-        #[arg(long)]
-        deep: bool,
-        #[arg(long)]
-        ffmpeg: Option<PathBuf>,
-    },
+    Verify(VerifyArgs),
 }
 
 #[derive(Subcommand)]
@@ -145,18 +138,7 @@ pub(crate) enum Cmd {
     },
     /// Check stream or audio files: structure, checksums and (with --deep) a full decode, statistics and header dumps.
     /// Several files may be given; a summary follows when there is more than one.
-    Verify {
-        #[arg(required = true)]
-        files: Vec<PathBuf>,
-        /// Also decode the audio and dump every header
-        #[arg(long)]
-        deep: bool,
-        /// Print the report as JSON
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        ffmpeg: Option<PathBuf>,
-    },
+    Verify(VerifyArgs),
     /// List channel layouts.
     Layouts,
     /// List destinations and the stream types each allows.
@@ -492,4 +474,23 @@ pub(crate) struct LoudnessArgs {
     /// Print the result as JSON.
     #[arg(long)]
     pub(crate) json: bool,
+}
+
+/// The options of `subwoofa verify`.
+#[derive(Args)]
+pub(crate) struct VerifyArgs {
+    #[arg(required = true)]
+    pub(crate) files: Vec<PathBuf>,
+    /// Also decode the audio and dump every header
+    #[arg(long)]
+    pub(crate) deep: bool,
+    /// Print the report as JSON
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[arg(long)]
+    pub(crate) ffmpeg: Option<PathBuf>,
+    /// Write a QC report as an HTML page (one file): the checks, loudness, bit rate chart and a spectrogram per
+    /// channel. Implies --deep.
+    #[arg(long, value_name = "FILE.html")]
+    pub(crate) report: Option<PathBuf>,
 }

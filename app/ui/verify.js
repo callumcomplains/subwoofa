@@ -3,7 +3,7 @@
 /* ---------- Verify ---------- */
 
 const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "wv", "ape", "als", "mxf", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
-const verify = { path: null, text: "", running: false };
+const verify = { path: null, text: "", html: "", running: false };
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const STATUS_TAG = { pass: "OK", fail: "FAIL", warn: "WARN", skipped: "SKIP", info: "INFO" };
 
@@ -59,6 +59,7 @@ function initVerify() {
     try {
       const out = await invoke("verify_file", { path: verify.path, deep });
       verify.text = out.text;
+      verify.html = out.html;
       renderVerify(out.report);
       $("vSave").disabled = false;
       vLog(`Done in ${((Date.now() - t0) / 1000).toFixed(1)} s.`);
@@ -72,7 +73,7 @@ function initVerify() {
   };
   $("vSave").onclick = async () => {
     const base = (verify.path || "report").replace(/\.[^.\\/]*$/, "");
-    const f = await dialog.save({ defaultPath: base + "_verify.txt", filters: [{ name: "Text", extensions: ["txt"] }] });
-    if (f) { await invoke("write_text", { path: f, text: verify.text }); vLog(`Saved ${f}`); }
+    const f = await dialog.save({ defaultPath: base + "_QC.html", filters: [{ name: "QC report (web page)", extensions: ["html"] }, { name: "Text", extensions: ["txt"] }] });
+    if (f) { await invoke("write_text", { path: f, text: /\.html?$/i.test(f) ? verify.html : verify.text }); vLog(`Saved ${f}`); }
   };
 }

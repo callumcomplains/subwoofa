@@ -300,6 +300,7 @@ pub(crate) fn verify_output(
             deep: ffmpeg.is_some(),
             ffmpeg: ffmpeg.map(Path::to_path_buf),
             reference_verifier: None,
+            ..Default::default()
         };
         let report = sw_verify::verify(Path::new(&spec.output), &options).map_err(|e| Failure::Error(e.to_string()))?;
         if !report.passed {

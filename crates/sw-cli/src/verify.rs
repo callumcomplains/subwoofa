@@ -1,15 +1,27 @@
 //! `subwoofa verify`: checking stream and audio files.
 
-use std::path::PathBuf;
+use crate::args::VerifyArgs;
 
-pub(crate) fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Option<PathBuf>) -> Result<(), String> {
-    let opt = sw_verify::Options {
+pub(crate) fn verify_cmd(args: VerifyArgs) -> Result<(), String> {
+    let VerifyArgs {
+        files,
         deep,
+        json,
+        ffmpeg,
+        report,
+    } = args;
+    if report.is_some() && files.len() != 1 {
+        return Err("--report writes one page: give one file".into());
+    }
+    let opt = sw_verify::Options {
+        // a QC report holds the decoded audio's loudness, so it needs the decode
+        deep: deep || report.is_some(),
+        analyse: report.is_some(),
         ffmpeg: ffmpeg.or_else(sw_backend_ffmpeg::find_ffmpeg),
         reference_verifier: None,
     };
     let mut reports = Vec::new();
-    for file in files {
+    for file in &files {
         match sw_verify::verify(file, &opt) {
             Ok(r) => reports.push(r),
             Err(e) => {
@@ -58,6 +70,10 @@ pub(crate) fn verify_cmd(files: &[PathBuf], deep: bool, json: bool, ffmpeg: Opti
                 );
             }
         }
+    }
+    if let Some(path) = report {
+        std::fs::write(&path, reports[0].to_html()).map_err(|e| format!("{}: {e}", path.display()))?;
+        eprintln!("QC report written to {}", path.display());
     }
     let bad = reports.iter().filter(|r| !r.passed).count();
     if bad == 0 {

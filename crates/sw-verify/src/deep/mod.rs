@@ -17,7 +17,7 @@ pub(crate) fn run(path: &Path, opt: &Options, c: &mut Collector, probe: Option<&
         bitrate_section(c, p);
     }
     let ffmpeg = opt.ffmpeg.clone().unwrap_or_else(|| PathBuf::from("ffmpeg"));
-    match decode(path, &ffmpeg, probe, c) {
+    match decode(path, &ffmpeg, probe, c, opt.analyse) {
         Decoded::Missing => {
             c.check(
                 "Full decode",

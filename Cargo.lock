@@ -3258,6 +3258,7 @@ dependencies = [
  "sw-codec-pcm",
  "sw-codec-truehd",
  "sw-core",
+ "sw-loudness",
  "sw-pcm",
  "thiserror 2.0.21",
 ]

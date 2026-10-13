@@ -8,13 +8,16 @@
 //!   dump of every header the stream carries.
 
 mod ac3;
+mod analysis;
 mod audiofile;
 mod bits;
 mod crc;
 mod deep;
 mod dts;
+mod html;
 mod thd;
 
+pub use analysis::{Analysis, Spectrogram};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -73,6 +76,9 @@ pub struct Report {
     /// Findings beyond the ones listed (the list is capped).
     pub findings_omitted: u64,
     pub sections: Vec<Section>,
+    /// Loudness, bit rate chart and spectrograms, when asked for (`Options::analyse`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<Analysis>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,6 +88,8 @@ pub struct Options {
     pub ffmpeg: Option<PathBuf>,
     /// DTS's own `DTSHDVerify`, used as a second opinion in a deep verification when present.
     pub reference_verifier: Option<PathBuf>,
+    /// Also measure the decoded audio for a QC report: loudness, bit rate chart and spectrograms (needs `deep`).
+    pub analyse: bool,
 }
 
 const MAX_FINDINGS: usize = 200;

@@ -97,7 +97,7 @@ pub(crate) fn run_tools(op: ToolsCmd) -> Result<(), String> {
                 t
             );
         }
-        ToolsCmd::Verify { files, deep, ffmpeg } => return verify_cmd(&files, deep, false, ffmpeg),
+        ToolsCmd::Verify(args) => return verify_cmd(args),
     }
     Ok(())
 }

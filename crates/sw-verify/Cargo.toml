@@ -9,12 +9,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 sw-codec-truehd = { path = "../sw-codec-truehd" }
+sw-core = { path = "../sw-core" }
+sw-loudness = { path = "../sw-loudness" }
 
 [dev-dependencies]
 sw-codec-ac3 = { path = "../sw-codec-ac3" }
 sw-codec-pcm = { path = "../sw-codec-pcm" }
 sw-pcm = { path = "../sw-pcm" }
-sw-core = { path = "../sw-core" }
 
 [lints]
 workspace = true

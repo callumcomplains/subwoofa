@@ -37,12 +37,7 @@ fn run() -> Result<(), String> {
         Cmd::Info { path, start, duration } => listing::info(&path, start, duration)?,
         Cmd::StreamInfo { path, count, first } => listing::stream_info(&path, first, count)?,
         Cmd::Tools { op } => tools::run_tools(op)?,
-        Cmd::Verify {
-            files,
-            deep,
-            json,
-            ffmpeg,
-        } => verify::verify_cmd(&files, deep, json, ffmpeg)?,
+        Cmd::Verify(args) => verify::verify_cmd(args)?,
         Cmd::Atmos { op } => atmos::run_atmos(op)?,
         Cmd::DownmixCheck(args) => downmix::run_downmix_check(args)?,
         Cmd::Loudness(args) => loudness::run_loudness(args)?,

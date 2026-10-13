@@ -1,5 +1,6 @@
 //! Decoding a file with FFmpeg and reading the samples back.
 
+use crate::analysis::AudioTap;
 use crate::deep::is_raw_als;
 use crate::deep::md5::Md5;
 use crate::deep::stats::Stats;
@@ -62,7 +63,7 @@ pub(crate) fn probe_channels(path: &Path, ffmpeg: &Path) -> Option<(usize, u32)>
     None
 }
 
-pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector) -> Decoded {
+pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut Collector, analyse: bool) -> Decoded {
     if is_raw_als(path) {
         c.check("Full decode", Status::Skipped, "FFmpeg cannot read a raw .als file; encode to .mp4 (the same stream in an MP4 file) for a full decode check");
         return Decoded::Done(Done { channels: 0 });
@@ -75,9 +76,14 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
         c.check("Full decode", Status::Fail, "FFmpeg could not open the file as audio");
         return Decoded::Done(Done { channels: 0 });
     };
-    let Some(run) = run_decoder(path, ffmpeg, channels) else {
+    let expected = probe.map_or(0, |p| (p.duration_secs * rate as f64) as u64);
+    let mut tap = (analyse && rate > 0).then(|| AudioTap::new(rate, channels, expected));
+    let Some(run) = run_decoder(path, ffmpeg, channels, tap.as_mut()) else {
         return Decoded::Missing;
     };
+    if let Some(tap) = tap {
+        c.report.analysis = Some(tap.finish(probe));
+    }
     let bad: Vec<&str> = run
         .messages
         .lines()
@@ -169,7 +175,7 @@ struct DecodeRun {
 }
 
 /// Decodes the whole file to 24-bit PCM, gathering statistics and a checksum as the samples arrive.
-fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize) -> Option<DecodeRun> {
+fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize, mut tap: Option<&mut AudioTap>) -> Option<DecodeRun> {
     let mut child = Command::new(ffmpeg)
         .args([
             "-hide_banner",
@@ -207,6 +213,9 @@ fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize) -> Option<DecodeRun>
         if whole > 0 {
             md5.update(&buf[..whole]);
             stats.feed(&buf[..whole]);
+            if let Some(tap) = tap.as_mut() {
+                tap.feed(&buf[..whole]);
+            }
             buf.copy_within(whole..have, 0);
             have -= whole;
         }

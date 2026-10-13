@@ -36,7 +36,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 ## Roadmap: making it more useful (ranked)
 
 1. [x] **Loudness built in.** `sw-loudness` (BS.1770-4: integrated, short-term, momentary, loudness range, true peak; checked against FFmpeg's ebur128 on a 5.1 programme: same integrated loudness and range), `subwoofa loudness`, `--auto-dialnorm`, a Measure button beside Dialnorm in the app (it flags a true peak over -1 dBTP; the downmix clip check was already there). Left: a loudness-normalising option (apply gain to reach a target).
-2. [ ] **A real QC report.** `subwoofa verify --report out.html`: checks, loudness, per-channel levels, bit rate chart, per-channel spectrograms; decode-and-compare against the source (null test, SNR) so lossless is proven and lossy gets an objective score.
+2. [ ] **A real QC report.** Done: `subwoofa verify --report out.html` and the app's Save report (checks, loudness, per-channel peaks, bit rate chart, per-channel spectrograms). Left: decode-and-compare against the source (null test, SNR) so lossless is proven and lossy gets an objective score.
 3. [ ] **Preview before committing.** Encode a short excerpt, decode it and play it with an A/B switch against the source.
 4. [ ] **Pipeline and automation.** Watch-folder mode, JSON job files for the CLI, DAW stem-naming conventions in auto-import, a headless encode server.
 5. [ ] **More inputs.** A video file or an existing DTS / AC-3 / TrueHD stream as input (with a warning for lossy to lossy), frame-rate conversion (23.976, 24, 25 fps, with and without pitch change), an audio delay control.

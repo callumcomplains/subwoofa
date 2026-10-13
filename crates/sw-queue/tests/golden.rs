@@ -515,6 +515,7 @@ fn deep_check_of_a_stream_with_dependent_substreams() {
         deep: true,
         ffmpeg: None,
         reference_verifier: None,
+        ..Default::default()
     };
     let report = sw_verify::verify(&path, &options).unwrap();
     assert!(report.passed);

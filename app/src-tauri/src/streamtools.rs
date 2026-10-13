@@ -126,6 +126,8 @@ pub async fn tools_add_silence(path: String, output: String, head: f64, tail: f6
 pub struct VerifyOut {
     pub(crate) report: sw_verify::Report,
     pub(crate) text: String,
+    /// The QC report page.
+    pub(crate) html: String,
 }
 
 /// Native verification of a stream file; `deep` adds the decode, statistics and header dumps.
@@ -134,12 +136,16 @@ pub async fn verify_file(path: String, deep: bool) -> Result<VerifyOut, String> 
     blocking(move || {
         let opt = sw_verify::Options {
             deep,
+            // a deep check also measures the audio, for the QC report
+            analyse: deep,
             ffmpeg: ff::find_ffmpeg(),
             reference_verifier: None,
         };
-        let report = sw_verify::verify(std::path::Path::new(&path), &opt).map_err(|e| e.to_string())?;
-        let text = report.to_text();
-        Ok(VerifyOut { report, text })
+        let mut report = sw_verify::verify(std::path::Path::new(&path), &opt).map_err(|e| e.to_string())?;
+        let (text, html) = (report.to_text(), report.to_html());
+        // the page shows the checks; the spectrograms only go into the saved report
+        report.analysis = None;
+        Ok(VerifyOut { report, text, html })
     })
     .await
 }
