@@ -402,19 +402,15 @@ fn parse_e(h: &[u8]) -> (Header, usize, bool) {
     let substream = b.get(3) as u8;
     let frmsiz = b.get(11) as usize;
     let fscod = b.get(2) as usize;
-    let blocks;
-    let rate;
-    if fscod == 3 {
+    let (rate, blocks) = if fscod == 3 {
         let fscod2 = b.get(2) as usize;
         if fscod2 == 3 {
             return (Header::default(), 0, false);
         }
-        rate = [24_000, 22_050, 16_000][fscod2];
-        blocks = 6;
+        ([24_000, 22_050, 16_000][fscod2], 6)
     } else {
-        rate = RATES[fscod];
-        blocks = [1, 2, 3, 6][b.get(2) as usize];
-    }
+        (RATES[fscod], [1, 2, 3, 6][b.get(2) as usize])
+    };
     let acmod = b.get(3) as u8;
     let lfe = b.flag();
     let bsid = b.get(5);
