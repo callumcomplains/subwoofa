@@ -13,7 +13,7 @@ never ships or downloads them. **Settings > Engines** shows what it found and le
 
 The installer offers to fetch FFmpeg for you (a checkbox on its Extras page), and **Settings > Engines > FFmpeg >
 Download FFmpeg** does the same later: it downloads the current "essentials" build from gyan.dev, checks it against
-its published SHA-256 and keeps it in `%LOCALAPPDATA%Subwoofafmpeg`. Subwoofa looks there after `PATH`.
+its published SHA-256 and keeps it in `%LOCALAPPDATA%\Subwoofa\ffmpeg`. Subwoofa looks there after `PATH`.
 
 Or download a Windows build from [ffmpeg.org](https://ffmpeg.org/download.html) (any recent "essentials" or "full"
 build). Either add its `bin` folder to your `PATH`, or open **Settings > Engines > FFmpeg** and choose `ffmpeg.exe`
