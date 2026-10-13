@@ -98,7 +98,7 @@ mod tests {
             sample_peak = sample_peak.max(x.abs());
             t.push(x);
         }
-        assert!((sample_peak - 0.7071).abs() < 0.001);
+        assert!((sample_peak - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.001);
         assert!(t.peak > 0.98 && t.peak < 1.03, "true peak {}", t.peak);
     }
 
