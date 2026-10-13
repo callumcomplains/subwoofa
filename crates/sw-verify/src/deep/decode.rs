@@ -75,7 +75,102 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
         c.check("Full decode", Status::Fail, "FFmpeg could not open the file as audio");
         return Decoded::Done(Done { channels: 0 });
     };
-    let mut child = match Command::new(ffmpeg)
+    let Some(run) = run_decoder(path, ffmpeg, channels) else {
+        return Decoded::Missing;
+    };
+    let bad: Vec<&str> = run
+        .messages
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.starts_with("Last message repeated") && !l.contains("Estimating duration from bitrate"))
+        .collect();
+    for l in bad.iter().take(60) {
+        c.finding(
+            if is_fatal(l) { Status::Fail } else { Status::Warn },
+            None,
+            format!("decoder: {l}"),
+        );
+    }
+    let any_fatal = bad.iter().any(|l| is_fatal(l));
+    let clean = run.exit_ok && bad.is_empty();
+    c.check(
+        "Full decode (FFmpeg, strict)",
+        if clean {
+            Status::Pass
+        } else if !run.exit_ok || any_fatal {
+            Status::Fail
+        } else {
+            Status::Warn
+        },
+        if clean {
+            format!("{} samples per channel decoded with no complaints", run.stats.frames)
+        } else if !run.exit_ok {
+            "the decoder stopped with an error".to_string()
+        } else {
+            format!("the decoder reported {} message(s)", bad.len())
+        },
+    );
+    if let Some(p) = probe {
+        report_length(c, p, &run.stats, channels, rate);
+    }
+    c.kv("Decoded PCM (24-bit) MD5", run.digest.clone());
+    if run.stats.frames > 0 {
+        run.stats.report(c, rate.max(1));
+    }
+    Decoded::Done(Done { channels })
+}
+
+/// Messages from the decoder that mean the file is damaged; the rest are warnings.
+fn is_fatal(line: &str) -> bool {
+    let low = line.to_lowercase();
+    [
+        "error", "invalid", "corrupt", "crc", "missing", "overread", "failed", "checksum",
+    ]
+    .iter()
+    .any(|word| low.contains(word))
+}
+
+/// Does the decoded length and channel count match what the headers say?
+fn report_length(c: &mut Collector, p: &Probe, stats: &Stats, channels: usize, rate: u32) {
+    if p.sample_rate > 0 && rate > 0 && stats.frames > 0 {
+        let expect = (p.duration_secs * rate as f64).round() as i64;
+        let diff = stats.frames as i64 - expect;
+        let tol = 4096;
+        c.check(
+            "Decoded length",
+            if diff.abs() <= tol { Status::Pass } else { Status::Warn },
+            format!(
+                "{} samples decoded, the frame count implies {expect} (difference {diff})",
+                stats.frames
+            ),
+        );
+    }
+    if channels != 0 && p.channels != 0 && channels as u32 != p.channels {
+        c.check(
+            "Channel count",
+            Status::Info,
+            format!(
+                "the decoder outputs {channels} channels; the headers describe {}",
+                p.channels
+            ),
+        );
+    }
+}
+
+/// What came out of one run of the decoder.
+struct DecodeRun {
+    stats: Stats,
+    /// MD5 of the decoded 24-bit PCM.
+    digest: String,
+    /// Everything the decoder wrote to its error output.
+    messages: String,
+    exit_ok: bool,
+}
+
+/// Decodes the whole file to 24-bit PCM, gathering statistics and a checksum as the samples arrive.
+fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize) -> Option<DecodeRun> {
+    let mut child = Command::new(ffmpeg)
         .args([
             "-hide_banner",
             "-v",
@@ -89,10 +184,7 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return Decoded::Missing,
-    };
+        .ok()?;
     let mut err = child.stderr.take().unwrap();
     let errs = std::thread::spawn(move || {
         let mut s = String::new();
@@ -102,7 +194,8 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
     let mut out = child.stdout.take().unwrap();
     let mut stats = Stats::new(channels);
     let mut md5 = Md5::new();
-    let mut buf = vec![0u8; 3 * channels.max(1) * 4096];
+    let frame_bytes = 3 * channels.max(1);
+    let mut buf = vec![0u8; frame_bytes * 4096];
     let mut have = 0usize;
     loop {
         let n = match out.read(&mut buf[have..]) {
@@ -110,7 +203,7 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
             Ok(n) => n,
         };
         have += n;
-        let whole = have / (3 * channels.max(1)) * 3 * channels.max(1);
+        let whole = have / frame_bytes * frame_bytes;
         if whole > 0 {
             md5.update(&buf[..whole]);
             stats.feed(&buf[..whole]);
@@ -119,90 +212,12 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
         }
     }
     let status = child.wait();
-    let messages = errs.join().unwrap_or_default();
-    let digest = md5.finish();
-    let lines: Vec<&str> = messages.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    let bad: Vec<&&str> = lines
-        .iter()
-        .filter(|l| !l.starts_with("Last message repeated") && !l.contains("Estimating duration from bitrate"))
-        .collect();
-    for l in bad.iter().take(60) {
-        let low = l.to_lowercase();
-        let fatal = low.contains("error")
-            || low.contains("invalid")
-            || low.contains("corrupt")
-            || low.contains("crc")
-            || low.contains("missing")
-            || low.contains("overread")
-            || low.contains("failed")
-            || low.contains("checksum");
-        c.finding(
-            if fatal { Status::Fail } else { Status::Warn },
-            None,
-            format!("decoder: {l}"),
-        );
-    }
-    let any_fatal = bad.iter().any(|l| {
-        let low = l.to_lowercase();
-        low.contains("error")
-            || low.contains("invalid")
-            || low.contains("corrupt")
-            || low.contains("crc")
-            || low.contains("missing")
-            || low.contains("overread")
-            || low.contains("failed")
-            || low.contains("checksum")
-    });
-    let ok_exit = status.map(|s| s.success()).unwrap_or(false);
-    c.check(
-        "Full decode (FFmpeg, strict)",
-        if ok_exit && bad.is_empty() {
-            Status::Pass
-        } else if !ok_exit || any_fatal {
-            Status::Fail
-        } else {
-            Status::Warn
-        },
-        if bad.is_empty() && ok_exit {
-            format!("{} samples per channel decoded with no complaints", stats.frames)
-        } else if !ok_exit {
-            "the decoder stopped with an error".to_string()
-        } else {
-            format!("the decoder reported {} message(s)", bad.len())
-        },
-    );
-    // length
-    if let Some(p) = probe {
-        if p.sample_rate > 0 && rate > 0 && stats.frames > 0 {
-            let expect = (p.duration_secs * rate as f64).round() as i64;
-            let diff = stats.frames as i64 - expect;
-            let tol = 4096;
-            c.check(
-                "Decoded length",
-                if diff.abs() <= tol { Status::Pass } else { Status::Warn },
-                format!(
-                    "{} samples decoded, the frame count implies {expect} (difference {diff})",
-                    stats.frames
-                ),
-            );
-        }
-        if channels != 0 && p.channels != 0 && channels as u32 != p.channels {
-            c.check(
-                "Channel count",
-                Status::Info,
-                format!(
-                    "the decoder outputs {channels} channels; the headers describe {}",
-                    p.channels
-                ),
-            );
-        }
-    }
-    // results
-    c.kv("Decoded PCM (24-bit) MD5", digest.clone());
-    if stats.frames > 0 {
-        stats.report(c, rate.max(1));
-    }
-    Decoded::Done(Done { channels })
+    Some(DecodeRun {
+        stats,
+        digest: md5.finish(),
+        messages: errs.join().unwrap_or_default(),
+        exit_ok: status.map(|s| s.success()).unwrap_or(false),
+    })
 }
 
 pub(crate) fn read_pcm(path: &Path, ffmpeg: &Path, core_only: bool, seconds: u32) -> Option<Vec<i32>> {
