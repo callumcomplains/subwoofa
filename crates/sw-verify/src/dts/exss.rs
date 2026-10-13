@@ -337,43 +337,61 @@ pub(crate) fn exss_rows(e: &Exss) -> Vec<(String, String)> {
         ),
         ("substream size".to_string(), format!("{} bytes", e.size)),
     ];
-    if e.static_fields {
-        v.push((
-            "reference clock".to_string(),
-            ["32 kHz", "44.1 kHz", "48 kHz", "reserved"][e.ref_clock as usize].to_string(),
-        ));
-        v.push((
-            "frame duration".to_string(),
-            format!(
-                "code {} ({} samples at the clock)",
-                e.frame_dur,
-                (e.frame_dur + 1) * 512
-            ),
-        ));
-        v.push((
-            "presentations / assets".to_string(),
-            format!("{} / {}", e.npresent, e.nassets),
-        ));
-        v.push(("mixing metadata".to_string(), e.mix_metadata.to_string()));
-        v.push(("PCM resolution".to_string(), format!("{} bits", e.pcm_bits)));
-        v.push(("maximum sample rate".to_string(), format!("{} Hz", e.max_rate)));
-        v.push(("total channels".to_string(), e.nchannels.to_string()));
-        if e.one_to_one {
-            v.push((
-                "embedded downmixes".to_string(),
-                format!("stereo {}, 5.1 {}", e.embedded_stereo, e.embedded_6ch),
-            ));
-            v.push((
-                "speaker activity mask".to_string(),
-                format!("0x{:X} = {}", e.spk_mask, speakers(e.spk_mask)),
-            ));
-        }
-    }
+    static_rows(e, &mut v);
     v.push(("asset size".to_string(), format!("{} bytes", e.asset_size)));
     v.push((
         "coding mode".to_string(),
         ["several components", "lossless only", "low bit rate only", "auxiliary"][e.coding_mode as usize].to_string(),
     ));
+    component_rows(e, &mut v);
+    if let Some(d) = e.dialnorm {
+        v.push(("dialogue normalization".to_string(), format!("-{d} dBFS")));
+    }
+    if let Some(d) = e.drc {
+        v.push(("dynamic range code".to_string(), d.to_string()));
+    }
+    v
+}
+
+/// The fields only an extension substream with static fields has: clock, presentations, format of the asset.
+fn static_rows(e: &Exss, v: &mut Vec<(String, String)>) {
+    if !e.static_fields {
+        return;
+    }
+    v.push((
+        "reference clock".to_string(),
+        ["32 kHz", "44.1 kHz", "48 kHz", "reserved"][e.ref_clock as usize].to_string(),
+    ));
+    v.push((
+        "frame duration".to_string(),
+        format!(
+            "code {} ({} samples at the clock)",
+            e.frame_dur,
+            (e.frame_dur + 1) * 512
+        ),
+    ));
+    v.push((
+        "presentations / assets".to_string(),
+        format!("{} / {}", e.npresent, e.nassets),
+    ));
+    v.push(("mixing metadata".to_string(), e.mix_metadata.to_string()));
+    v.push(("PCM resolution".to_string(), format!("{} bits", e.pcm_bits)));
+    v.push(("maximum sample rate".to_string(), format!("{} Hz", e.max_rate)));
+    v.push(("total channels".to_string(), e.nchannels.to_string()));
+    if e.one_to_one {
+        v.push((
+            "embedded downmixes".to_string(),
+            format!("stereo {}, 5.1 {}", e.embedded_stereo, e.embedded_6ch),
+        ));
+        v.push((
+            "speaker activity mask".to_string(),
+            format!("0x{:X} = {}", e.spk_mask, speakers(e.spk_mask)),
+        ));
+    }
+}
+
+/// What the asset holds: its parts and where each is kept.
+fn component_rows(e: &Exss, v: &mut Vec<(String, String)>) {
     let mut comps = Vec::new();
     for (bit, name, size) in [
         (0x10, "core", e.core_size),
@@ -428,13 +446,6 @@ pub(crate) fn exss_rows(e: &Exss) -> Vec<(String, String)> {
         ));
         v.push(("hd stream id".to_string(), e.hd_stream_id.to_string()));
     }
-    if let Some(d) = e.dialnorm {
-        v.push(("dialogue normalization".to_string(), format!("-{d} dBFS")));
-    }
-    if let Some(d) = e.drc {
-        v.push(("dynamic range code".to_string(), d.to_string()));
-    }
-    v
 }
 
 pub(crate) fn speakers(mask: u32) -> String {
