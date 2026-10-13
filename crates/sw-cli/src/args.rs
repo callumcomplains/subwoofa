@@ -186,6 +186,8 @@ pub(crate) enum Cmd {
     },
     /// Check a downmix for clipping (three or more consecutive full-scale samples).
     DownmixCheck(DownmixArgs),
+    /// Measure loudness (BS.1770-4 / EBU R 128): integrated, short-term, momentary, range and true peak.
+    Loudness(LoudnessArgs),
     /// Encode per-channel PCM files to a multichannel stream.
     Encode(EncodeArgs),
 }
@@ -417,6 +419,9 @@ pub(crate) struct EncodeArgs {
     pub(crate) sample_rate: u32,
     #[arg(long)]
     pub(crate) dialnorm: Option<u8>,
+    /// Measure the input first and set the dialnorm from its integrated loudness (instead of --dialnorm).
+    #[arg(long, conflicts_with = "dialnorm")]
+    pub(crate) auto_dialnorm: bool,
     /// Start offset into the source, in seconds.
     #[arg(long)]
     pub(crate) start: Option<f64>,
@@ -461,4 +466,30 @@ pub(crate) struct EncodeArgs {
     pub(crate) threads: u32,
     #[command(flatten)]
     pub(crate) bitstream: BitstreamArgs,
+}
+
+/// The options of `subwoofa loudness`.
+#[derive(Args)]
+pub(crate) struct LoudnessArgs {
+    /// Layout of the files (see `subwoofa layouts`).
+    #[arg(long, default_value = "5.1")]
+    pub(crate) layout: String,
+    /// The L (first channel) file; sibling channel files are found automatically.
+    #[arg(long)]
+    pub(crate) auto_import: Option<PathBuf>,
+    /// Explicit channel file, e.g. `--input C=center.wav` (repeatable).
+    #[arg(long = "input", value_name = "CH=FILE")]
+    pub(crate) inputs: Vec<String>,
+    /// Channel order inside a multichannel input file: auto (default), mask or file.
+    #[arg(long, default_value = "auto")]
+    pub(crate) channel_order: String,
+    /// Start offset into the source, in seconds.
+    #[arg(long)]
+    pub(crate) start: Option<f64>,
+    /// Length to measure, in seconds.
+    #[arg(long)]
+    pub(crate) duration: Option<f64>,
+    /// Print the result as JSON.
+    #[arg(long)]
+    pub(crate) json: bool,
 }

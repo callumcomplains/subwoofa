@@ -8,6 +8,7 @@ mod atmos;
 mod catalog;
 mod downmix;
 mod jobs;
+mod loudness;
 mod sources;
 mod streamtools;
 mod toolpaths;
@@ -88,6 +89,7 @@ fn main() {
             jobs::queue_clear,
             jobs::queue_set_concurrency,
             jobs::read_log,
+            loudness::measure_loudness,
             jobs::write_text,
             app_version,
             open_docs,

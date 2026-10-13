@@ -54,6 +54,11 @@ fn build_spec(args: &EncodeArgs) -> Result<EncodeSpec, String> {
         None => layout,
     };
     let inputs = collect_inputs(source, args.auto_import.clone(), &args.inputs)?;
+    let dialnorm = if args.auto_dialnorm {
+        Some(measured_dialnorm(source, &inputs, args)?)
+    } else {
+        args.dialnorm
+    };
     let bitrate = args
         .bitrate
         .or_else(|| bitrate_range_kbps(dest, stream, layout, args.sample_rate).map(|r| r.1.min(default_cap(stream))));
@@ -63,7 +68,7 @@ fn build_spec(args: &EncodeArgs) -> Result<EncodeSpec, String> {
         layout: layout.id.to_string(),
         sample_rate: args.sample_rate,
         bitrate,
-        dialnorm: args.dialnorm,
+        dialnorm,
         start: args.start,
         duration: args.duration,
         inputs: inputs
@@ -122,4 +127,22 @@ fn default_cap(stream: StreamType) -> u32 {
         StreamType::DtsDigitalSurround => 1509,
         _ => u32::MAX,
     }
+}
+
+/// The dialnorm that matches the integrated loudness of the input, measured now.
+fn measured_dialnorm(
+    layout: &'static ChannelLayout,
+    inputs: &HashMap<Channel, PathBuf>,
+    args: &EncodeArgs,
+) -> Result<u8, String> {
+    let order = sw_pcm::ChannelOrder::parse(&args.channel_order).ok_or("--channel-order must be auto, mask or file")?;
+    let loudness = crate::loudness::measure_inputs(layout, inputs, order, args.start, args.duration)?;
+    let dialnorm = loudness
+        .dialnorm()
+        .ok_or("cannot set the dialnorm from the input: it is silent")?;
+    eprintln!(
+        "measured {:.1} LUFS: dialnorm -{dialnorm} dBFS",
+        loudness.integrated.unwrap_or_default()
+    );
+    Ok(dialnorm)
 }

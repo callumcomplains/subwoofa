@@ -29,6 +29,7 @@ const INFO = [
   ["#bitrate", "Kilobits per second for the lossy part. More sounds better and weighs more. The range beside the label is what this format allows; the buttons are the usual suspects."],
   ["#x96Core", "Adds an extension so a decoder that only reads the core still gets the full 96 kHz band."],
   ["#coreOn", "The lossy core lets players without DTS-HD decode something. Switch it off for lossless data only: smaller, but picky players may stay silent."],
+  ["#dialnormMeasure", "Reads your input files and sets the dialnorm to their integrated loudness (BS.1770). Dolby asks for the loudness of the dialogue; a whole film mix is a fair stand-in when the dialogue sits where it should. Over a span if you set one."],
   ["#dialnormOn", "Dialogue normalisation: the average loudness of your speech, stored so players can level different titles. Don't know your figure? Leave it off. Film mixes often sit around −27."],
   ["#dtsOpts", "ES phase shift keeps the rear centre from cancelling against the other rears. The −3 dB option lowers the rears to match a matrixed surround."],
   ["#pcmFormat", "How each sample is stored in the file: integer or float, 16 to 64 bits, or one-bit DSD for the brave."],

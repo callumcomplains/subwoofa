@@ -48,6 +48,9 @@ h2, h3 { margin: 0; }
 em { font-style: normal; color: var(--dim); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
 small { color: var(--dim); font-size: 11px; line-height: 1.4; }
 .readout { font: 11px var(--mono); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.readout.bad { color: var(--bad); }
+.readout.flag { color: var(--lamp); }
+#loudReadout { white-space: normal; margin-top: 4px; }
 .cap { font: 600 11px var(--label); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--rule-hi); border-radius: 5px; border: 2px solid var(--panel); }

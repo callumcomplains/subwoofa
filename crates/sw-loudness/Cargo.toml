@@ -1,0 +1,12 @@
+[package]
+name = "sw-loudness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sw-core = { path = "../sw-core" }
+serde.workspace = true
+
+[lints]
+workspace = true

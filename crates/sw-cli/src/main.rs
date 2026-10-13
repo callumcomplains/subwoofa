@@ -6,6 +6,7 @@ mod atmos;
 mod downmix;
 mod encode;
 mod listing;
+mod loudness;
 mod progress;
 mod tools;
 mod verify;
@@ -44,6 +45,7 @@ fn run() -> Result<(), String> {
         } => verify::verify_cmd(&files, deep, json, ffmpeg)?,
         Cmd::Atmos { op } => atmos::run_atmos(op)?,
         Cmd::DownmixCheck(args) => downmix::run_downmix_check(args)?,
+        Cmd::Loudness(args) => loudness::run_loudness(args)?,
         Cmd::Encode(args) => encode::run_encode(args)?,
     }
     Ok(())

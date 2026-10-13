@@ -1,6 +1,7 @@
 //! Encode job queue: a small pool of workers, per-job progress, cancel, optional verification
 //! and a per-job log file written next to the output (`<name>_log.txt`).
 
+pub mod measure;
 pub mod run;
 pub mod threads;
 

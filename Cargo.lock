@@ -3106,6 +3106,7 @@ dependencies = [
  "sw-backend-dee",
  "sw-backend-ffmpeg",
  "sw-core",
+ "sw-loudness",
  "sw-pcm",
  "sw-queue",
  "sw-tools",
@@ -3146,6 +3147,7 @@ dependencies = [
  "sw-codec-dts",
  "sw-codec-truehd",
  "sw-core",
+ "sw-loudness",
  "sw-pcm",
  "sw-queue",
  "sw-tools",
@@ -3203,6 +3205,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sw-loudness"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sw-core",
+]
+
+[[package]]
 name = "sw-pcm"
 version = "0.1.0"
 dependencies = [
@@ -3224,6 +3234,7 @@ dependencies = [
  "sw-codec-pcm",
  "sw-codec-truehd",
  "sw-core",
+ "sw-loudness",
  "sw-pcm",
  "sw-tools",
  "sw-verify",

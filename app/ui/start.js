@@ -22,6 +22,7 @@ async function init() {
   fill($("dest"), cat.destinations.map((d) => [d.id, d.name]), "generic");
   $("dialnormOn").onchange = () => { $("dialnorm").disabled = !$("dialnormOn").checked; syncDialnorm(); };
   $("dialnorm").oninput = syncDialnorm;
+  $("dialnormMeasure").onclick = measureLoudness;
   syncDialnorm();
   setUnlocked(store.get("unlocked") === "1");
   await cascade("dest");

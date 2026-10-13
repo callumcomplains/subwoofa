@@ -6,6 +6,30 @@ function dialnormValue() {
   const v = Math.abs(Math.round(Number($("dialnorm").value)));
   return Number.isFinite(v) && v >= 1 ? Math.min(v, 31) : 31;
 }
+/** Measures the input files and sets the dialnorm from the integrated loudness. */
+async function measureLoudness() {
+  const out = $("loudReadout");
+  const files = {};
+  for (const ch of inLayout().channels) if (inputs[ch]) files[ch] = inputs[ch];
+  if (!Object.keys(files).length) { out.hidden = false; out.className = "readout bad"; out.textContent = "Choose the input files first."; return; }
+  const entire = $("entire").checked;
+  const btn = $("dialnormMeasure");
+  btn.disabled = true;
+  out.hidden = false; out.className = "readout"; out.textContent = "Measuring...";
+  try {
+    const l = await invoke("measure_loudness", { layout: inLayout().id, inputs: files, channelOrder, start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value) });
+    if (l.integrated == null) { out.className = "readout bad"; out.textContent = "The input is silent."; return; }
+    const tp = l.channels.reduce((m, c) => (c.true_peak != null && c.true_peak > m ? c.true_peak : m), -Infinity);
+    const dn = Math.min(31, Math.max(1, Math.round(-l.integrated)));
+    $("dialnormOn").checked = true; $("dialnorm").disabled = false; $("dialnorm").value = -dn;
+    syncDialnorm();
+    const over = tp > -1;
+    out.className = over ? "readout flag" : "readout";
+    out.textContent = `${l.integrated.toFixed(1)} LUFS, range ${l.range == null ? "-" : l.range.toFixed(1)} LU, true peak ${tp.toFixed(1)} dBTP${over ? " (over -1 dBTP)" : ""}`;
+  } catch (e) { out.className = "readout bad"; out.textContent = String(e); }
+  finally { btn.disabled = false; }
+}
+
 function syncDialnorm() {
   const on = $("dialnormOn").checked;
   const raw = Math.abs(Math.round(Number($("dialnorm").value)));

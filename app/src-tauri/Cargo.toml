@@ -15,6 +15,7 @@ serde_json.workspace = true
 sw-core = { path = "../../crates/sw-core" }
 sw-backend-ffmpeg = { path = "../../crates/sw-backend-ffmpeg" }
 sw-pcm = { path = "../../crates/sw-pcm" }
+sw-loudness = { path = "../../crates/sw-loudness" }
 sw-queue = { path = "../../crates/sw-queue" }
 sw-tools = { path = "../../crates/sw-tools" }
 sw-verify = { path = "../../crates/sw-verify" }

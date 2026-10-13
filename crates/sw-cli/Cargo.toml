@@ -17,6 +17,7 @@ sw-codec-truehd = { path = "../sw-codec-truehd" }
 sw-codec-dts = { path = "../sw-codec-dts" }
 sw-tools = { path = "../sw-tools" }
 sw-queue = { path = "../sw-queue" }
+sw-loudness = { path = "../sw-loudness" }
 sw-verify = { path = "../sw-verify" }
 sw-backend-dee = { path = "../sw-backend-dee" }
 clap.workspace = true
