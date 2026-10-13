@@ -100,6 +100,7 @@ fn main() {
             open_docs,
             toolpaths::set_tool_paths,
             toolpaths::tool_status,
+            toolpaths::fetch_ffmpeg,
             streamtools::tools_info,
             streamtools::tools_pbr,
             streamtools::tools_trim,

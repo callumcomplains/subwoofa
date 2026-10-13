@@ -26,6 +26,11 @@
     "copyright": "Subwoofa contributors, GPL-3.0-or-later",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
     "licenseFile": "../../LICENSE",
+    "resources": {
+      "installer/fetch-ffmpeg.ps1": "fetch-ffmpeg.ps1",
+      "installer/path.ps1": "path.ps1",
+      "installer/stage/subwoofa.exe": "subwoofa.exe"
+    },
     "windows": {
       "webviewInstallMode": { "type": "embedBootstrapper" },
       "nsis": {
@@ -33,6 +38,8 @@
         "headerImage": "installer/header.bmp",
         "sidebarImage": "installer/sidebar.bmp",
         "installMode": "currentUser",
+        "installerHooks": "installer/hooks.nsh",
+        "template": "installer/installer.nsi",
         "startMenuFolder": "Subwoofa"
       }
     }

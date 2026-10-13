@@ -94,6 +94,8 @@ function initSettings() {
     if (f) { toolPaths.ffmpeg = f; store.set("ffmpegPath", f); await pushToolPaths(); await refreshEngines(); }
   };
   $("ffReset").onclick = async () => { toolPaths.ffmpeg = ""; store.set("ffmpegPath", ""); await pushToolPaths(); await refreshEngines(); };
+  $("ffFetch").onclick = () => downloadFfmpeg([$("ffFetch"), $("toolBannerFetch")], (t) => { $("ffVersion").textContent = t; });
+  $("toolBannerFetch").onclick = () => downloadFfmpeg([$("ffFetch"), $("toolBannerFetch")], (t) => { $("toolBannerText").textContent = t; });
   $("masBrowse").onclick = async () => {
     const d = await dialog.open({ directory: true });
     if (d) { toolPaths.mas = d; store.set("masPath", d); await pushToolPaths(); await refreshEngines(); }
@@ -104,4 +106,18 @@ function initSettings() {
     if (f) { store.set("dee", f); await refreshEngine(); await refreshEngines(); }
   };
   $("deeReset").onclick = async () => { store.set("dee", ""); await refreshEngine(); await refreshEngines(); };
+}
+
+/** Downloads FFmpeg into Subwoofa's own folder, with the buttons that offered it showing progress. */
+async function downloadFfmpeg(buttons, note) {
+  for (const b of buttons) b.disabled = true;
+  note("Downloading FFmpeg (about 115 MB)...");
+  try {
+    const result = await invoke("fetch_ffmpeg");
+    toolPaths.ffmpeg = ""; store.set("ffmpegPath", "");
+    await pushToolPaths();
+    await refreshEngines();
+    note(result);
+  } catch (e) { note(String(e)); }
+  finally { for (const b of buttons) b.disabled = false; }
 }

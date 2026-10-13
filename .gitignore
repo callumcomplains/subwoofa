@@ -5,3 +5,4 @@ dist/
 *.cpt
 *.log
 CHANGELOG-CURRENT.md
+app/src-tauri/installer/stage/

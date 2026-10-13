@@ -56,3 +56,42 @@ pub async fn tool_status() -> ToolStatus {
         mas_files: vec![],
     })
 }
+
+/// The download script: next to the program when installed, or in the source tree when run from a build folder.
+fn fetch_script() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors().skip(1).find_map(|dir| {
+        [
+            dir.join("fetch-ffmpeg.ps1"),
+            dir.join("app/src-tauri/installer/fetch-ffmpeg.ps1"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file())
+    })
+}
+
+/// Downloads FFmpeg into Subwoofa's own folder (the same step the installer offers) and says how it went.
+#[tauri::command]
+pub async fn fetch_ffmpeg() -> Result<String, String> {
+    crate::blocking(|| {
+        let script = fetch_script().ok_or("The download script was not found next to the program.")?;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // no console window
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("PowerShell could not be started: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() {
+            Ok(text.lines().last().unwrap_or("FFmpeg is ready.").to_string())
+        } else {
+            Err(text.lines().last().unwrap_or("FFmpeg could not be set up.").to_string())
+        }
+    })
+    .await
+}

@@ -412,17 +412,24 @@ fn overridden() -> Option<PathBuf> {
     file.is_file().then_some(file)
 }
 
-/// Locate ffmpeg: the path set in the app, else PATH.
+/// Where the installer's (or Settings') optional FFmpeg download puts it: `%LOCALAPPDATA%\Subwoofa\ffmpeg`.
+pub fn downloaded_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    Some(PathBuf::from(base).join("Subwoofa").join("ffmpeg"))
+}
+
+/// Locate ffmpeg: the path set in the app, else PATH, else the copy Subwoofa downloaded itself.
 pub fn find_ffmpeg() -> Option<PathBuf> {
     if let Some(p) = overridden() {
         return Some(p);
     }
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-    std::env::var_os("PATH").and_then(|p| {
+    let on_path = std::env::var_os("PATH").and_then(|p| {
         std::env::split_paths(&p)
             .map(|d| d.join(exe))
             .find(|c: &PathBuf| Path::new(c).is_file())
-    })
+    });
+    on_path.or_else(|| downloaded_dir().map(|d| d.join(exe)).filter(|f| f.is_file()))
 }
 
 #[cfg(test)]

@@ -11,8 +11,10 @@
 3. **Specifications and software.** The encoders were written from public specifications (ETSI TS 102 114 for DTS,
    TS 102 366 for AC-3/E-AC-3, Dolby's published TrueHD high-level description, community MLP notes) and from
    observing the behaviour of streams. No proprietary code, documentation or images are included. Third-party
-   programs (FFmpeg, DTS and Dolby tools) are not shipped or downloaded; you supply your own and follow their
-   licences.
+   programs are not shipped: DTS and Dolby tools you supply yourself and follow their licences. FFmpeg is not shipped
+   either, but on request (a checkbox in the installer, or the Download button in Settings) Subwoofa fetches the
+   Windows build the FFmpeg website links to, from its publisher, onto your PC; that is your copy under FFmpeg's
+   own licence (the build is GPL), not part of Subwoofa.
 4. **Atmos** has no public encoding specification. Support is through a Dolby Encoding Engine that you are licensed
    to use.
 5. **Licence.** Subwoofa is released under the GNU General Public License, version 3 or later. Modified versions

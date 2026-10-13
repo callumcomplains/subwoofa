@@ -1,4 +1,7 @@
-name: Release
+name: Release      - name: Stage the command-line program for the installer
+        run: mkdir -p app/src-tauri/installer/stage && cp target/release/subwoofa.exe app/src-tauri/installer/stage/subwoofa.exe
+
+
 
 # Push a tag like  b0.1.0-2026-10-11-14-30-00  (b + version from Cargo.toml + UTC date and time) to publish a
 # pre-release. "Run workflow" by hand does a dry run: it builds and uploads the files as a workflow artifact only.
@@ -53,6 +56,12 @@ jobs:
         run: cargo build --release -p sw-cli
         env:
           SUBWOOFA_BUILD_STAMP: ${{ steps.ver.outputs.stamp }}
+
+      - name: Stage the command-line program for the installer
+        run: |
+          mkdir -p app/src-tauri/installer/stage
+          cp target/release/subwoofa.exe app/src-tauri/installer/stage/subwoofa.exe
+        shell: bash
 
       - name: App and installer
         working-directory: app
