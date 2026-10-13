@@ -298,14 +298,14 @@ impl Encoder {
         }
     }
 
-    pub(crate) fn finish_plan(
+    /// The scale factor index of every coded band.
+    fn scale_indexes(
         &self,
         sub: &[Vec<Vec<f64>>],
-        abits: Vec<[u8; BANDS]>,
+        abits: &[[u8; BANDS]],
         peak: &[[f64; BANDS]],
-        blocks: usize,
         cache: &BandCache,
-    ) -> Plan {
+    ) -> Vec<[u8; BANDS]> {
         let nch = self.nplan();
         let mut scale_idx = vec![[0u8; BANDS]; nch];
         for ch in 0..nch {
@@ -318,7 +318,19 @@ impl Encoder {
                 }
             }
         }
-        // codebook choices
+        scale_idx
+    }
+
+    pub(crate) fn finish_plan(
+        &self,
+        sub: &[Vec<Vec<f64>>],
+        abits: Vec<[u8; BANDS]>,
+        peak: &[[f64; BANDS]],
+        blocks: usize,
+        cache: &BandCache,
+    ) -> Plan {
+        let nch = self.nplan();
+        let scale_idx = self.scale_indexes(sub, &abits, peak, cache);
         let mut sel = vec![[0u8; 10]; nch];
         let mut bhuff = vec![6u8; nch];
         let mut bits = self.header_bits();
@@ -326,64 +338,18 @@ impl Encoder {
         let mut xch_bits = 0usize;
         for ch in 0..nch {
             let bits_before = bits;
-            // ABITS coding
-            let all_huff = abits[ch].iter().all(|a| (1..=12).contains(a));
-            let all4 = abits[ch].iter().all(|a| *a <= 15);
-            let mut best = (5 * BANDS, 6u8);
-            if all4 && 4 * BANDS < best.0 {
-                best = (4 * BANDS, 5);
-            }
-            if all_huff {
-                for (j, t) in BITALLOC_HUFF.iter().enumerate() {
-                    let c: usize = abits[ch].iter().map(|a| t[*a as usize - 1].1 as usize).sum();
-                    if c < best.0 {
-                        best = (c, j as u8);
-                    }
-                }
-            }
-            bits += best.0;
-            bhuff[ch] = best.1;
+            let (alloc_bits, table) = bit_allocation_coding(&abits[ch]);
+            bits += alloc_bits;
+            bhuff[ch] = table;
             // transient mode flags and scale factors
             let active = abits[ch].iter().filter(|a| **a > 0).count();
             if nssc > 1 {
                 bits += active * TMODE_HUFF[0][0].1 as usize;
             }
             bits += active * 7;
-            // sample coding per quantizer
-            for k in 1..=26usize {
-                let bands: Vec<usize> = (0..BANDS).filter(|b| abits[ch][*b] as usize == k).collect();
-                if bands.is_empty() {
-                    if k <= 10 {
-                        sel[ch][k - 1] = GROUP_SIZE[k - 1] as u8;
-                    }
-                    continue;
-                }
-                let nsamp = bands.len() * blocks;
-                if k > 10 {
-                    bits += nsamp * raw_bits(k) as usize;
-                    continue;
-                }
-                let g = GROUP_SIZE[k - 1];
-                let plain = if k <= 7 {
-                    nsamp / 4 * BLOCK_BITS[k - 1] as usize
-                } else {
-                    nsamp * raw_bits(k) as usize
-                };
-                let mut best = (plain, g as u8);
-                for s in 0..g {
-                    let mut c = 2usize; // adjustment index
-                    for b in &bands {
-                        c += cache
-                            .get(ch, *b, k, || self.code_band(&sub[ch][*b], peak[ch][*b], k))
-                            .cost[s] as usize;
-                    }
-                    if c < best.0 {
-                        best = (c, s as u8);
-                    }
-                }
-                sel[ch][k - 1] = best.1;
-                bits += best.0;
-            }
+            let (sample_bits, selectors) = self.sample_codebooks(ch, sub, &abits[ch], peak, blocks, cache);
+            sel[ch] = selectors;
+            bits += sample_bits;
             bits += SEL_BITS.iter().sum::<u32>() as usize;
             for (i, g) in GROUP_SIZE.iter().enumerate() {
                 if (sel[ch][i] as usize) < *g {
@@ -420,6 +386,56 @@ impl Encoder {
         }
     }
 
+    /// Per quantizer, the cheapest sample codebook of channel `ch` (the group size means "no codebook: plain
+    /// codes"), and the bits the samples take with it.
+    fn sample_codebooks(
+        &self,
+        ch: usize,
+        sub: &[Vec<Vec<f64>>],
+        abits: &[u8; BANDS],
+        peak: &[[f64; BANDS]],
+        blocks: usize,
+        cache: &BandCache,
+    ) -> (usize, [u8; 10]) {
+        let mut sel = [0u8; 10];
+        let mut bits = 0usize;
+        for k in 1..=26usize {
+            let bands: Vec<usize> = (0..BANDS).filter(|b| abits[*b] as usize == k).collect();
+            if bands.is_empty() {
+                if k <= 10 {
+                    sel[k - 1] = GROUP_SIZE[k - 1] as u8;
+                }
+                continue;
+            }
+            let nsamp = bands.len() * blocks;
+            if k > 10 {
+                bits += nsamp * raw_bits(k) as usize;
+                continue;
+            }
+            let g = GROUP_SIZE[k - 1];
+            let plain = if k <= 7 {
+                nsamp / 4 * BLOCK_BITS[k - 1] as usize
+            } else {
+                nsamp * raw_bits(k) as usize
+            };
+            let mut best = (plain, g as u8);
+            for s in 0..g {
+                let mut c = 2usize; // adjustment index
+                for b in &bands {
+                    c += cache
+                        .get(ch, *b, k, || self.code_band(&sub[ch][*b], peak[ch][*b], k))
+                        .cost[s] as usize;
+                }
+                if c < best.0 {
+                    best = (c, s as u8);
+                }
+            }
+            sel[k - 1] = best.1;
+            bits += best.0;
+        }
+        (bits, sel)
+    }
+
     /// Frame header + primary audio coding header + fixed parts of the subframe.
     pub(crate) fn header_bits(&self) -> usize {
         if let Some(h) = self.header_bits_override {
@@ -428,4 +444,24 @@ impl Encoder {
         let nch = self.cfg.channels;
         104 + 7 + 5 * nch + 5 * nch + 3 * nch + 2 * nch + 3 * nch + 3 * nch + 5 + BANDS * nch
     }
+}
+
+/// How a channel's bit allocation is coded: the cheapest of the Huffman tables, or plain 4 or 5 bit codes (table 5
+/// and 6). Returns the bits it takes and the table.
+fn bit_allocation_coding(abits: &[u8; BANDS]) -> (usize, u8) {
+    let all_huff = abits.iter().all(|a| (1..=12).contains(a));
+    let all4 = abits.iter().all(|a| *a <= 15);
+    let mut best = (5 * BANDS, 6u8);
+    if all4 && 4 * BANDS < best.0 {
+        best = (4 * BANDS, 5);
+    }
+    if all_huff {
+        for (j, t) in BITALLOC_HUFF.iter().enumerate() {
+            let c: usize = abits.iter().map(|a| t[*a as usize - 1].1 as usize).sum();
+            if c < best.0 {
+                best = (c, j as u8);
+            }
+        }
+    }
+    best
 }
