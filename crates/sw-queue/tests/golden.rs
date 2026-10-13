@@ -170,6 +170,35 @@ fn cases() -> Vec<Case> {
             rate: 96_000,
             ..c("dts-hra-96k-5.1", "bluray-primary", "dtshd-hra", "dtshd")
         },
+        Case {
+            bitrate: Some(3018),
+            rate: 96_000,
+            layout: "6.1-matrix",
+            ..c("dts-hra-96k-6.1-matrix", "bluray-primary", "dtshd-hra", "dtshd")
+        },
+        Case {
+            bitrate: Some(3018),
+            rate: 96_000,
+            layout: "6.1-discrete",
+            ..c("dts-hra-96k-6.1-discrete", "bluray-primary", "dtshd-hra", "dtshd")
+        },
+        Case {
+            rate: 96_000,
+            layout: "7.1-side-rear",
+            ..c("dts-hra-96k-7.1", "bluray-primary", "dtshd-hra", "dtshd")
+        },
+        Case {
+            layout: "2.0",
+            rate: 44_100,
+            bitrate: Some(1411),
+            ..c("dts-cd", "dts-music-disc", "dts", "wav")
+        },
+        Case {
+            layout: "2.0",
+            rate: 88_200,
+            bitrate: Some(1411),
+            ..c("dts-96-cd", "dts-music-disc", "dts-96-24", "wav")
+        },
         c("dts-ma-5.1-best", "bluray-primary", "dtshd-ma", "dtshd"),
         Case {
             speed: "balanced",
@@ -372,6 +401,11 @@ const GOLDEN: &[(&str, &str)] = &[
     ("dts-96-24-5.1", "30cb866a697d1063482838ffc91ea34e"),
     ("dts-hra-5.1", "bc3d8ac811d972b4b2716057fe48236e"),
     ("dts-hra-96k-5.1", "94fe40ca33f05026d4c2d9fa6b69db9e"),
+    ("dts-hra-96k-6.1-matrix", "99f59ce9e5b5cd158caba1440ba0447f"),
+    ("dts-hra-96k-6.1-discrete", "1b465a2e7b58492c939e70b8573874cc"),
+    ("dts-hra-96k-7.1", "32410c495dc1903a97c4ff9839f8cdfa"),
+    ("dts-cd", "4384934d5dea58aae8eb4e37d33882cc"),
+    ("dts-96-cd", "8cc2ec7c8d7d4976cfb3436c9b72ac87"),
     ("dts-ma-5.1-best", "ef7cdcc2be694c909dee68a6b0c07309"),
     ("dts-ma-5.1-balanced", "1f746b56aaa1d060f1810379bf5f4e72"),
     ("dts-ma-5.1-fast", "c63299f84d2c3f44821fe8f042af4547"),

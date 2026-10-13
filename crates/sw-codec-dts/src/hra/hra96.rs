@@ -15,6 +15,7 @@ use crate::container::exss::{exss_frame_x96, exss_frame_xxch_x96, ExssParams};
 use crate::dca::dts96::{decimator_taps, CORE_ADVANCE, DECIMATION_PHASE, HALF};
 use crate::dca::encoder::{Config as CoreConfig, Encoder as CoreEncoder, XxchParams};
 use crate::dca::native::{NativeError, Request, Stats};
+use crate::dca::native_xxch::XxchMix;
 use crate::dca::qmf64::{Analysis64, BANDS as BANDS64};
 use crate::dca::x96::X96Encoder;
 use crate::Error;
@@ -444,173 +445,164 @@ pub fn hra96_map(layout: &ChannelLayout) -> Option<Hra96Map> {
     })
 }
 
-/// File-level driver: 96 kHz stems in, `.dtshd` (or raw) out.
-pub fn encode_to_file(
-    stems: &mut StemSet,
-    req: &Request,
+/// What the request and the layout fix before encoding starts.
+struct Plan {
+    rate: u32,
     map: Hra96Map,
-    on_progress: &mut dyn FnMut(f32),
-    cancel: &AtomicBool,
-) -> Result<Stats, NativeError> {
-    let rate = stems.sample_rate;
-    if rate != 96_000 {
-        return Err(Error::Unsupported(
-            "HRA above 5.1 channels, and HRA 6.x, are implemented at 96 kHz (and 7.x at 48 kHz)".into(),
-        )
-        .into());
-    }
-    if req.es.is_some_and(|e| e.phase_shift || e.rear_minus_3db) {
-        return Err(Error::Unsupported(
-            "the ES phase shift and the rear -3 dB trim are not available for DTS-HD High Resolution at 96 kHz".into(),
-        )
-        .into());
-    }
-    let total_kbps = req
-        .hra_kbps
-        .unwrap_or(if map.kind == Hra96Kind::Rear { 5376 } else { 4224 });
-    let has_lfe = map.lfe.is_some();
-    let kind = map.kind;
-    // the channels the extension header describes: the core channels, and what is coded beside them
-    let coded_extra = if kind == Hra96Kind::Matrix { 0 } else { map.extra.len() };
-    let nprim = map.core.len();
-    let nch_total = nprim + usize::from(has_lfe) + coded_extra;
-    let exss_mask: u32 = req
-        .layout
-        .channels
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i)))
-        .map(|(_, c)| crate::lossless::ma::exss_bit(*c))
-        .fold(0, |m, b| m | b);
-    let make_exss = || ExssParams {
-        sample_rate: rate,
-        channels: nch_total,
-        bit_res: req.pcm_bits,
-        spk_mask: exss_mask,
-        with_core: true,
-        dialnorm: (-req.dialnorm) as u32,
-        frame_duration_code: 0,
-        x96_in_core: false,
-        xch_in_core: kind == Hra96Kind::Discrete,
-        secondary: false,
-        extras: crate::container::exss::ExssExtras {
-            min_header: 28,
-            repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
-            ..Default::default()
-        },
-    };
-    let make_encoder = || {
-        Hra96Encoder::new(Hra96Config {
-            amode: map.amode,
-            nprim,
-            has_lfe,
+    kind: Hra96Kind,
+    total_kbps: u32,
+    /// Primary channels in the core.
+    nprim: usize,
+    has_lfe: bool,
+    /// Speakers the extension header describes: the core's and what is coded beside them.
+    exss_mask: u32,
+    /// Input buffers of the encoder: core channels, LFE and the extra channels it takes.
+    buffers: usize,
+}
+
+impl Plan {
+    fn new(req: &Request, map: Hra96Map, rate: u32) -> Result<Plan, NativeError> {
+        if rate != 96_000 {
+            return Err(Error::Unsupported(
+                "HRA above 5.1 channels, and HRA 6.x, are implemented at 96 kHz (and 7.x at 48 kHz)".into(),
+            )
+            .into());
+        }
+        if req.es.is_some_and(|e| e.phase_shift || e.rear_minus_3db) {
+            return Err(Error::Unsupported(
+                "the ES phase shift and the rear -3 dB trim are not available for DTS-HD High Resolution at 96 kHz"
+                    .into(),
+            )
+            .into());
+        }
+        let kind = map.kind;
+        let total_kbps = req
+            .hra_kbps
+            .unwrap_or(if kind == Hra96Kind::Rear { 5376 } else { 4224 });
+        let has_lfe = map.lfe.is_some();
+        let nprim = map.core.len();
+        let exss_mask: u32 = req
+            .layout
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !(kind == Hra96Kind::Matrix && map.extra.contains(i)))
+            .map(|(_, c)| crate::lossless::ma::exss_bit(*c))
+            .fold(0, |m, b| m | b);
+        Ok(Plan {
+            rate,
             kind,
             total_kbps,
+            nprim,
+            has_lfe,
+            exss_mask,
+            buffers: nprim + usize::from(has_lfe) + kind.extra_channels(),
+            map,
+        })
+    }
+
+    /// The channels the extension header describes: the core channels, and what is coded beside them.
+    fn exss(&self, req: &Request) -> ExssParams {
+        let coded_extra = if self.kind == Hra96Kind::Matrix {
+            0
+        } else {
+            self.map.extra.len()
+        };
+        ExssParams {
+            sample_rate: self.rate,
+            channels: self.nprim + usize::from(self.has_lfe) + coded_extra,
+            bit_res: req.pcm_bits,
+            spk_mask: self.exss_mask,
+            with_core: true,
+            dialnorm: (-req.dialnorm) as u32,
+            frame_duration_code: 0,
+            x96_in_core: false,
+            xch_in_core: self.kind == Hra96Kind::Discrete,
+            secondary: false,
+            extras: crate::container::exss::ExssExtras {
+                min_header: 28,
+                repr_type: (req.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn encoder(&self, req: &Request) -> Result<Hra96Encoder, Error> {
+        Hra96Encoder::new(Hra96Config {
+            amode: self.map.amode,
+            nprim: self.nprim,
+            has_lfe: self.has_lfe,
+            kind: self.kind,
+            total_kbps: self.total_kbps,
             dialnorm: req.dialnorm,
             pcm_bits: req.pcm_bits,
-            exss: make_exss(),
+            exss: self.exss(req),
             core_es: req.layout.id == "7.1-ls-rs-lsr-rsr",
             xxch: crate::dca::native_xxch::xxch_map(req.layout).map(|m| m.params(&req.bitstream.downmix)),
             aux: crate::lossless::ma::core_aux(
                 &req.bitstream.downmix,
                 req.layout,
-                map.amode,
-                has_lfe,
-                kind == Hra96Kind::Discrete,
+                self.map.amode,
+                self.has_lfe,
+                self.kind == Hra96Kind::Discrete,
             ),
         })
-    };
-    let mix = crate::dca::native_xxch::xxch_map(req.layout).map(|m| m.mix(&req.bitstream.downmix));
-    let mut enc = make_encoder()?;
-    let want = stems.select_span(req.start_secs, req.duration_secs)?;
-    if want == 0 {
-        return Err(NativeError::Empty);
     }
-    let n = enc.frame_samples();
-    let container = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
-    let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
-    let codec_delay = 2048usize;
-    // what the core carries: the 5.1 downmix of a 7.1 programme, or the core channels alone
-    let core_mask: u32 = if kind == Hra96Kind::Rear {
-        map.core
+
+    /// What the core carries: the 5.1 downmix of a 7.1 programme, or the core channels alone.
+    fn core_mask(&self, req: &Request) -> u32 {
+        if self.kind != Hra96Kind::Rear {
+            return self.exss_mask;
+        }
+        let speakers = self
+            .map
+            .core
             .iter()
             .map(|&i| crate::lossless::ma::exss_bit(req.layout.channels[i]))
-            .fold(0, |m, b| m | b)
-            | if has_lfe { 0x8 } else { 0 }
-    } else {
-        exss_mask
-    };
-    let info = container.then(|| {
-        let mut i = crate::container::dtshd::DtsHdInfo::new(
-            rate,
+            .fold(0, |m, b| m | b);
+        speakers | if self.has_lfe { 0x8 } else { 0 }
+    }
+
+    /// The header of the `.dtshd` file.
+    fn container_info(&self, req: &Request, n: usize, want: u64) -> crate::container::dtshd::DtsHdInfo {
+        let mut info = crate::container::dtshd::DtsHdInfo::new(
+            self.rate,
             n as u16,
             want,
-            exss_mask as u16,
+            self.exss_mask as u16,
             crate::container::dtshd::Kind::CoreAndExtension,
         );
-        crate::container::mixmeta::apply_container_options(&mut i, &req.bitstream, want as f64 / rate as f64);
-        i.core_kbps = 1509;
-        i.core_payload = core_payload;
-        i.codec_delay = codec_delay as u16;
-        i.core_rate = Some(48_000);
-        i.core_mask = Some(core_mask as u16);
-        i
-    });
-    let mut out = crate::container::dtshd::StreamOut::create(req.output, info)?;
-    // the decoder lags the source by `delay`: a container states `codec_delay` and the stream starts with silence
-    // to make up the difference; a raw stream starts that many samples into the source instead
-    let delay = enc.delay();
-    let (skip, lead) = if container {
-        (0usize, codec_delay.saturating_sub(delay))
-    } else {
-        (delay.min(want as usize), 0)
-    };
-    let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut left = skip as u64;
-    while left > 0 {
-        let k = left.min(n as u64) as usize;
-        stems.read_planar(&mut planar, k)?;
-        left -= k as u64;
+        let secs = want as f64 / self.rate as f64;
+        crate::container::mixmeta::apply_container_options(&mut info, &req.bitstream, secs);
+        info.core_kbps = 1509;
+        info.core_payload = CORE_PAYLOAD;
+        info.codec_delay = CODEC_DELAY as u16;
+        info.core_rate = Some(48_000);
+        info.core_mask = Some(self.core_mask(req) as u16);
+        info
     }
-    let mut remaining = want - skip as u64;
-    let to24 = |v: f32| v as f64 * 8_388_608.0;
-    let clamp = |v: f64| v.clamp(-8_388_608.0, 8_388_607.0);
-    let (mut frames, mut bytes) = (0u64, 0u64);
-    let write = |out: &mut crate::container::dtshd::StreamOut,
-                 fr: Vec<Vec<u8>>,
-                 frames: &mut u64,
-                 bytes: &mut u64|
-     -> Result<(), NativeError> {
-        for f in fr {
-            out.write_frame(&f, f.len().saturating_sub(core_payload as usize))?;
-            *frames += 1;
-            *bytes += f.len() as u64;
-        }
-        Ok(())
-    };
-    let extra_channels = kind.extra_channels();
-    let buffers = nprim + usize::from(has_lfe) + extra_channels;
-    if lead > 0 {
-        let silence = vec![vec![0.0f64; lead]; buffers];
-        let fr = enc.push(&silence);
-        write(&mut out, fr, &mut frames, &mut bytes)?;
+
+    /// The silent frame StreamTools' Add silence inserts: a fresh encoder fed zeros until its filters have settled.
+    fn silent_frame(&self, req: &Request, n: usize) -> Option<Vec<u8>> {
+        let mut enc = self.encoder(req).ok()?;
+        let zeros = vec![vec![0.0f64; 6 * n]; self.buffers];
+        enc.push(&zeros).pop()
     }
-    let lfe_slot = nprim;
-    let extra_start = nprim + usize::from(has_lfe);
-    let chunk = n * 4;
-    while remaining > 0 {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(NativeError::Canceled);
-        }
-        let got = (remaining as usize).min(chunk);
-        stems.read_planar(&mut planar, got)?;
-        let mut block: Vec<Vec<f64>> = vec![vec![0.0; got]; buffers];
+
+    /// One block of `got` samples shaped for the encoder: `[buffer][sample]`, scaled to 24 bits.
+    fn shape_block(&self, mix: Option<&XxchMix>, planar: &[Vec<f32>], got: usize) -> Vec<Vec<f64>> {
+        let (map, kind) = (&self.map, self.kind);
+        let to24 = |v: f32| v as f64 * 8_388_608.0;
+        let clamp = |v: f64| v.clamp(-8_388_608.0, 8_388_607.0);
+        let lfe_slot = self.nprim;
+        let extra_start = self.nprim + usize::from(self.has_lfe);
+        let mut block: Vec<Vec<f64>> = vec![vec![0.0; got]; self.buffers];
         for i in 0..got {
             for (slot, &src) in map.core.iter().enumerate() {
                 let value = match kind {
                     // 7.x: scaled, with the rear on the same side added to the sides
                     Hra96Kind::Rear => {
-                        let m = mix.as_ref().expect("7.x mix");
+                        let m = mix.expect("7.x mix");
                         let mut v = to24(planar[src][i]) * m.scale;
                         for e in 0..2 {
                             if m.extra[e][slot] != 0.0 {
@@ -629,7 +621,7 @@ pub fn encode_to_file(
             }
             if let Some(l) = map.lfe {
                 let v = to24(planar[l][i]);
-                block[lfe_slot][i] = clamp(match &mix {
+                block[lfe_slot][i] = clamp(match mix {
                     Some(m) if kind == Hra96Kind::Rear => {
                         v * m.scale
                             + (0..2)
@@ -649,24 +641,94 @@ pub fn encode_to_file(
                 _ => {}
             }
         }
+        block
+    }
+}
+
+/// Bytes of the 1509 kbps core in each frame.
+const CORE_PAYLOAD: u32 = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
+/// How far the decoder's output lags the source; a container states it and the stream starts with silence to match.
+const CODEC_DELAY: usize = 2048;
+
+/// The output file and a count of what went into it.
+struct Writer {
+    file: crate::container::dtshd::StreamOut,
+    frames: u64,
+    bytes: u64,
+}
+
+impl Writer {
+    fn write(&mut self, frames: Vec<Vec<u8>>) -> std::io::Result<()> {
+        for f in frames {
+            self.file
+                .write_frame(&f, f.len().saturating_sub(CORE_PAYLOAD as usize))?;
+            self.frames += 1;
+            self.bytes += f.len() as u64;
+        }
+        Ok(())
+    }
+}
+
+/// File-level driver: 96 kHz stems in, `.dtshd` (or raw) out.
+pub fn encode_to_file(
+    stems: &mut StemSet,
+    req: &Request,
+    map: Hra96Map,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Stats, NativeError> {
+    let plan = Plan::new(req, map, stems.sample_rate)?;
+    let mix = crate::dca::native_xxch::xxch_map(req.layout).map(|m| m.mix(&req.bitstream.downmix));
+    let mut enc = plan.encoder(req)?;
+    let want = stems.select_span(req.start_secs, req.duration_secs)?;
+    if want == 0 {
+        return Err(NativeError::Empty);
+    }
+    let n = enc.frame_samples();
+    let container = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
+    let info = container.then(|| plan.container_info(req, n, want));
+    let mut out = Writer {
+        file: crate::container::dtshd::StreamOut::create(req.output, info)?,
+        frames: 0,
+        bytes: 0,
+    };
+    // the decoder lags the source by `delay`: a container states `CODEC_DELAY` and the stream starts with silence
+    // to make up the difference; a raw stream starts that many samples into the source instead
+    let delay = enc.delay();
+    let (skip, lead) = if container {
+        (0usize, CODEC_DELAY.saturating_sub(delay))
+    } else {
+        (delay.min(want as usize), 0)
+    };
+    let mut planar: Vec<Vec<f32>> = Vec::new();
+    let mut left = skip as u64;
+    while left > 0 {
+        let k = left.min(n as u64) as usize;
+        stems.read_planar(&mut planar, k)?;
+        left -= k as u64;
+    }
+    let mut remaining = want - skip as u64;
+    if lead > 0 {
+        out.write(enc.push(&vec![vec![0.0f64; lead]; plan.buffers]))?;
+    }
+    let chunk = n * 4;
+    while remaining > 0 {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(NativeError::Canceled);
+        }
+        let got = (remaining as usize).min(chunk);
+        stems.read_planar(&mut planar, got)?;
+        let block = plan.shape_block(mix.as_ref(), &planar, got);
         remaining -= got as u64;
-        let fr = enc.push(&block);
-        write(&mut out, fr, &mut frames, &mut bytes)?;
+        out.write(enc.push(&block))?;
         on_progress(1.0 - remaining as f32 / want as f32);
     }
-    let fr = enc.finish();
-    write(&mut out, fr, &mut frames, &mut bytes)?;
-    // the silent frame StreamTools' Add silence inserts: a fresh encoder fed zeros until its filters have settled
-    let blackout = if container {
-        make_encoder().ok().and_then(|mut e| {
-            let zeros = vec![vec![0.0f64; 6 * n]; buffers];
-            let mut fr = e.push(&zeros);
-            fr.pop()
-        })
-    } else {
-        None
-    };
-    out.finish(blackout.as_deref())?;
+    out.write(enc.finish())?;
+    let blackout = if container { plan.silent_frame(req, n) } else { None };
+    out.file.finish(blackout.as_deref())?;
     on_progress(1.0);
-    Ok(Stats { frames, bytes })
+    Ok(Stats {
+        frames: out.frames,
+        bytes: out.bytes,
+    })
 }
