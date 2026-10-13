@@ -76,12 +76,6 @@ pub(crate) fn quantize_coords(g: &[f64]) -> (u32, Vec<(u32, u32)>) {
     (mstr as u32, out)
 }
 
-/// Value of a quantized coupling coordinate (the gain applied to the coupling channel).
-#[allow(dead_code)] // the coupling-coordinate gain formula, kept as the reference for the coupling encoder
-pub(crate) fn coord_gain(mstr: u32, exp: u32, mant: u32) -> f64 {
-    8.0 * (mant + 16) as f64 / 32.0 * 2f64.powi(-((exp + 3 * mstr) as i32))
-}
-
 /// Coupling in use for a frame.
 #[derive(Clone)]
 pub(crate) struct CplInfo {

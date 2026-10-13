@@ -49,10 +49,14 @@ pub enum Error {
     Unsupported(String),
 }
 
+/// Samples per channel in a frame.
 pub const SAMPLES_PER_FRAME: usize = 1536;
+/// Audio blocks in a frame.
 const BLOCKS: usize = 6;
+/// Bands of the bit allocation (A/52 table of band starts).
 const BANDS: usize = 50;
 
+/// The bit rates AC-3 can signal (kbit/s). E-AC-3 takes any whole number of 16-bit words per frame instead.
 const BITRATES: [u32; 19] = [
     32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640,
 ];
@@ -64,7 +68,9 @@ const MDCT_SCALE: f64 = -1.0 / 256.0;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Audio coding mode (A/52 table 5.8): 1 = 1/0 (mono) ... 7 = 3/2 (L C R Ls Rs).
     pub acmod: u8,
+    /// A low-frequency effects channel follows the full-bandwidth ones.
     pub lfe: bool,
     pub sample_rate: u32,
     pub bitrate_kbps: u32,
@@ -78,22 +84,33 @@ pub struct Config {
     pub eac3: bool,
 }
 
+/// The encoder. Frames go in as planar `f32` and come out as AC-3 or E-AC-3 frames; see the crate documentation for
+/// the steps. The transform state (overlap and transient detectors) carries over from frame to frame; the fields
+/// named `cur_*` describe the frame being planned.
 #[derive(Clone)]
 pub struct Encoder {
     cfg: Config,
+    /// Full-bandwidth channels, and all channels (those plus the LFE).
     nfch: usize,
     nch: usize,
+    /// Sample rate code (0 = 48 kHz, 1 = 44.1, 2 = 32) and the index into the bit rate table (AC-3).
     fscod: usize,
     size_idx: usize,
+    /// The MDCT and the short-block transform. Shared when a batch of frames is planned on several threads.
     mdct: std::sync::Arc<Mdct>,
-    hist: Vec<[f32; M]>,
-    end: Vec<usize>,
-    frame_no: u64,
-    frac: f64,
-    b2b: [u8; 256],
-    sets: Vec<(usize, usize)>, // (first block, block count)
-    strat: Strat,
     switched: std::sync::Arc<blocksw::Switched>,
+    /// Per channel: the 256 samples before the block being transformed (the MDCT's overlap).
+    hist: Vec<[f32; M]>,
+    /// Per channel: the bin the channel is coded up to (the low-pass).
+    end: Vec<usize>,
+    /// Bits left over from rounding the frame size, carried to the next frame (E-AC-3 and 44.1 kHz sizes alternate).
+    frac: f64,
+    band_of_bin: [u8; 256],
+    /// The blocks that share exponents by default: `(first block, block count)`.
+    sets: Vec<(usize, usize)>,
+    /// The exponent strategy used for ordinary channels.
+    strat: Strat,
+    /// One transient detector per full-bandwidth channel.
     dets: Vec<blocksw::Detector>,
     block_switching: bool,
     /// Exponent sets and block-switch flags of the frame being encoded.
@@ -103,7 +120,7 @@ pub struct Encoder {
     cur_remat: Vec<[bool; 4]>,
     /// Channel coupling for multichannel AC-3 at low rates.
     coupling: bool,
-    cur_cpl: Option<CplInfo>,
+    cur_coupling: Option<CplInfo>,
     rematrixing: bool,
     /// E-AC-3 dependent substream: the custom channel map (bit 15 = Left ... bit 0 = LFE) it carries.
     dependent: Option<u16>,
@@ -165,20 +182,19 @@ impl Encoder {
             mdct: std::sync::Arc::new(Mdct::new(MDCT_SCALE)),
             hist: vec![[0.0; M]; nch],
             end,
-            frame_no: 0,
             frac: 0.0,
-            b2b: bin_to_band(),
+            band_of_bin: bin_to_band(),
             sets: sets.clone(),
             strat,
             switched: std::sync::Arc::new(blocksw::Switched::new(MDCT_SCALE)),
             dets: (0..nfch).map(|_| blocksw::Detector::new(cfg.sample_rate)).collect(),
-            block_switching: !cfg.eac3 && std::env::var_os("SW_AC3_NOBLKSW").is_none(),
+            block_switching: !cfg.eac3,
             cur_sets: sets,
             cur_blksw: vec![[false; BLOCKS]; nfch],
             cur_remat: vec![[false; 4]; BLOCKS],
-            rematrixing: std::env::var_os("SW_AC3_NOREMAT").is_none(),
-            coupling: cfg.acmod >= 2 && std::env::var_os("SW_AC3_NOCPL").is_none() && kbps_per_ch < 96.0,
-            cur_cpl: None,
+            rematrixing: true,
+            coupling: cfg.acmod >= 2 && kbps_per_ch < 96.0,
+            cur_coupling: None,
             dependent: None,
             cfg,
         })

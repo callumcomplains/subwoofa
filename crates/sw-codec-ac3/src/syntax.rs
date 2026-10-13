@@ -116,7 +116,7 @@ impl Encoder {
             .chain(chans.iter().filter(|c| !c.is_cpl).take(self.nfch))
             .collect();
         let frame_expstr = self.frame_exponent_strategies(&exp_chans);
-        let cpl_off = usize::from(self.cur_cpl.is_some());
+        let cpl_off = usize::from(self.cur_coupling.is_some());
         let (csnr, fsnr) = (snr_code >> 4, snr_code & 15);
 
         w.put(0x0B77, 16);
@@ -150,7 +150,7 @@ impl Encoder {
         w.put(0, 1); // skipflde
         w.put(0, 1); // spxattene
         if cfg.acmod > 1 {
-            w.put(u32::from(self.cur_cpl.is_some()), 1); // cplinu, block 0
+            w.put(u32::from(self.cur_coupling.is_some()), 1); // cplinu, block 0
             for _ in 1..BLOCKS {
                 w.put(0, 1); // cplstre: later blocks keep the first block's choice
             }
@@ -239,7 +239,7 @@ impl Encoder {
         let nfch = self.nfch;
         if self.cfg.eac3 {
             w.put(0, 1); // spxinu
-            if let (0, Some(c)) = (block.index, &self.cur_cpl) {
+            if let (0, Some(c)) = (block.index, &self.cur_coupling) {
                 w.put(0, 1); // ecplinu: plain coupling
                 if acmod > 2 {
                     for _ in 0..nfch {
@@ -258,7 +258,7 @@ impl Encoder {
             }
         } else if block.index == 0 {
             w.put(1, 1); // cplstre
-            match &self.cur_cpl {
+            match &self.cur_coupling {
                 Some(c) => {
                     w.put(1, 1); // cplinu
                     for _ in 0..nfch {
@@ -282,7 +282,7 @@ impl Encoder {
 
     /// The coupling coordinates (`cplcoe`, `mstrcplco`, `cplcoexp`, `cplcomant`) and phase flags.
     fn write_coupling_coordinates(&self, w: &mut BitWriter, block: Block) {
-        let Some(c) = &self.cur_cpl else { return };
+        let Some(c) = &self.cur_coupling else { return };
         for ch in 0..self.nfch {
             // E-AC-3 takes the first coordinates of a frame as sent without a flag
             if !(self.cfg.eac3 && block.index == 0) {
@@ -336,7 +336,7 @@ impl Encoder {
                 0
             }
         };
-        if self.cur_cpl.is_some() {
+        if self.cur_coupling.is_some() {
             w.put(strat(chans.last().unwrap()), 2); // cplexpstr
         }
         for cp in chans.iter().take(self.nfch) {
@@ -351,7 +351,7 @@ impl Encoder {
     /// channel's exponents and gain range.
     fn write_exponents_of_block(&self, w: &mut BitWriter, chans: &[ChannelPlan], block: Block) {
         let set = block.set;
-        if self.cur_cpl.is_none() {
+        if self.cur_coupling.is_none() {
             for cp in chans.iter().take(self.nfch) {
                 w.put(((cp.end - 73) / 3) as u32, 6); // chbwcod (coupled channels have none)
             }
@@ -372,7 +372,7 @@ impl Encoder {
         if self.dependent.is_none() {
             w.put(0, 1); // convsnroffste (independent substreams only)
         }
-        if self.cur_cpl.is_some() {
+        if self.cur_coupling.is_some() {
             if block.index == 0 {
                 w.put(0, 3); // cplfleak (cplleake is implied in a frame's first coupling block)
                 w.put(0, 3); // cplsleak
@@ -395,7 +395,7 @@ impl Encoder {
             w.put(FLOORCOD as u32, 3);
             w.put(1, 1); // snroffste
             w.put(csnr, 6);
-            if self.cur_cpl.is_some() {
+            if self.cur_coupling.is_some() {
                 w.put(fsnr, 4); // cplfsnroffst
                 w.put(FGAINCOD as u32, 3); // cplfgaincod
             }
@@ -407,7 +407,7 @@ impl Encoder {
             w.put(0, 1); // baie
             w.put(0, 1); // snroffste
         }
-        if self.cur_cpl.is_some() {
+        if self.cur_coupling.is_some() {
             if block.index == 0 {
                 w.put(1, 1); // cplleake
                 w.put(0, 3); // cplfleak
@@ -445,7 +445,7 @@ impl Encoder {
             }
             collect(&mut items, ch, cp);
             // the coupling channel's mantissas follow the first coupled channel's
-            if ch == 0 && self.cur_cpl.is_some() {
+            if ch == 0 && self.cur_coupling.is_some() {
                 collect(&mut items, cpl_index, &chans[cpl_index]);
             }
         }

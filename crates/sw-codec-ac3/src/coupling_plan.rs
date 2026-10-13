@@ -30,9 +30,6 @@ impl Encoder {
         };
         let end_bin = self.end[0];
         let endf = (((end_bin.saturating_sub(37)) / 12).saturating_sub(3)).min(15);
-        if std::env::var_os("SW_AC3_DEBUG").is_some() {
-            eprintln!("coupling: end_bin {end_bin} begf {begf} endf {endf}");
-        }
         // low bandwidth: start coupling as low as the format allows (stereo needs four rematrix bands, begf > 2)
         let begf = if self.cfg.acmod == 2 {
             begf.min(endf.saturating_sub(2)).max(3)
