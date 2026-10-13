@@ -27,6 +27,13 @@ pub struct Dts96Config {
 /// Half-band decimator taps (linear phase, Kaiser window), `2 * HALF + 1` of them.
 pub(crate) const HALF: usize = 191;
 
+/// Samples (at the core's 48 kHz rate) the core's input runs ahead of the output: what lines the core's
+/// reconstruction up with the 96 kHz source in the extension. Found by measuring against the reference encoder.
+pub(crate) const CORE_ADVANCE: usize = 480;
+
+/// Where, in 96 kHz samples, the decimating filter is centred relative to the 48 kHz grid (a half sample).
+pub(crate) const DECIMATION_PHASE: f64 = 0.5;
+
 fn bessel_i0(x: f64) -> f64 {
     let mut sum = 1.0;
     let mut term = 1.0;
@@ -75,8 +82,6 @@ pub struct Dts96Encoder {
     phase: usize,
     lookahead: usize,
     ext_delay: usize,
-    ext_shift: isize,
-    ext_adj: isize,
     hra: Option<crate::hra::HraStage>,
 }
 
@@ -100,19 +105,11 @@ impl Dts96Encoder {
         core.x96_reserve = cfg.x96_bytes;
         core.set_aux_downmix(cfg.aux.clone());
         let n = core.frame_samples() * 2;
-        let l48: usize = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-        let phase: f64 = std::env::var("SW_PHASE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.5);
-        let frac = phase - phase.floor();
-        let phase = phase.floor() as usize;
+        let l48 = CORE_ADVANCE;
+        let frac = DECIMATION_PHASE - DECIMATION_PHASE.floor();
+        let phase = DECIMATION_PHASE.floor() as usize;
         let ext: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
         let ext_delay = ext[0].delay();
-        let ext_shift: isize = std::env::var("SW_X96_SHIFT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
         let lookahead = (2 * (l48 + 1) + phase + HALF + 2).max(ext_delay + 64 * cfg.blocks + 64);
         Ok(Dts96Encoder {
             core,
@@ -128,11 +125,6 @@ impl Dts96Encoder {
             phase,
             lookahead,
             ext_delay,
-            ext_shift,
-            ext_adj: std::env::var("SW_X96_ADJ")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
             hra: None,
         })
     }
@@ -208,7 +200,7 @@ impl Dts96Encoder {
         // extension analysis of the programme, aligned with what the decoder's synthesis outputs: the banks of the
         // channels are independent, and each follows its own channel through the frames
         let blocks = self.core.frame_samples() / 32;
-        let (n, delay, shift, adj, dropped) = (self.n, self.ext_delay, self.ext_shift, self.ext_adj, self.dropped);
+        let (n, delay, dropped) = (self.n, self.ext_delay, self.dropped);
         let bufs = &self.buf;
         let per_channel: Vec<Vec<Vec<Vec<f64>>>> = self
             .ext
@@ -218,7 +210,7 @@ impl Dts96Encoder {
                 let src = &bufs[ch];
                 (0..count)
                     .map(|k| {
-                        let start = ((first + k) * n) as isize + delay as isize + 64 * shift + adj - dropped as isize;
+                        let start = ((first + k) * n) as isize + delay as isize - dropped as isize;
                         let input: Vec<f64> = (0..blocks * 64)
                             .map(|i| {
                                 let idx = start + i as isize;

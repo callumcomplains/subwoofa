@@ -3,8 +3,9 @@
 //! The codec works on "time samples": 32 bands of 128 samples per frame (4096 samples at 48 kHz) produced
 //! by a hybrid filterbank (`lbr_fb`). Per band and 16-sample slot an amplitude (scale factor) is sent, the
 //! normalised samples are quantized with one of five small alphabets chosen by a quantizer profile, and
-//! bands that are not coded are replaced by noise of the right level by the decoder. This encoder has no
-//! tonal component coding. The writers below follow the order in which a decoder parses the chunks.
+//! bands that are not coded are replaced by noise of the right level by the decoder. Steady tones are coded
+//! separately as tonal components (`lbr_tonal`). The writers below follow the order in which a decoder parses the
+//! chunks.
 
 use crate::lbr_fb::{Analysis, BANDS, HOP, TS};
 use crate::lbr_tables::*;
@@ -171,11 +172,6 @@ impl Tables {
     }
 }
 
-/// Quantizer alphabets by level (1..=5): the values the decoder reconstructs before the scale factor.
-/// Largest attenuation step the second grid is given, and the largest correction that is not worth sending.
-const G2_MAX: u8 = 12;
-const G2_MIN: u8 = 1;
-
 /// Amplitude the decoder applies to a sample pair with scale factor `s` and `step` attenuation steps: the step
 /// is subtracted from the scale factor, and a negative result silences the pair.
 fn step_gain(s: usize, step: u8) -> f64 {
@@ -186,6 +182,7 @@ fn step_gain(s: usize, step: u8) -> f64 {
     }
 }
 
+/// The values the decoder reconstructs, before the scale factor, for quantizer level 1 to 5.
 fn alphabet(level: usize) -> Vec<f32> {
     match level {
         1 => RSD_LEVEL_2A.to_vec(),
@@ -267,8 +264,6 @@ pub struct LbrEncoder {
     geo: Geo,
     /// Size of the previous frame's coarsest possible residual: what tones must leave room for.
     min_resid: std::sync::atomic::AtomicUsize,
-    /// Tonal components on (Express streams of the decoder's tone model).
-    tonal: bool,
     groups: Vec<crate::lbr_tonal::Group>,
     /// Prediction state after the last frame and the plan of the frame being coded, per channel.
     lpc_state: std::sync::RwLock<Vec<LpcState>>,
@@ -333,6 +328,9 @@ const LFE_WIDE_FROM: u32 = 256_000;
 /// Narrowest coded bandwidth (in bands) the rate control may fall back to.
 const MIN_K: usize = 6;
 
+/// How far above the noise floor a spectral line has to stand before it is coded as a tonal component.
+const TONE_KAPPA: f64 = 4.0;
+
 /// Everything derived from the time samples of one channel for one frame and quantizer profile.
 struct ChanCoding {
     /// Squared error against the input time samples (noise-filled bands count twice their energy).
@@ -378,18 +376,16 @@ impl LbrEncoder {
             .unwrap_or((cfg.bitrate as u64 * 4096 / cfg.sample_rate as u64 / 16) as usize * 2);
         let n = cfg.channels;
         let per_channel = cfg.bitrate as f64 / 1000.0 / cfg.channels as f64;
-        let band_limit = std::env::var("SW_LBR_BL")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(if cfg.dialog_mode {
-                1
-            } else if per_channel >= 128.0 {
-                0
-            } else if per_channel >= 56.0 {
-                1
-            } else {
-                2
-            });
+        // how much of the band is coded: all of it from 128 kbps per channel, half from 56, a quarter below
+        let band_limit = if cfg.dialog_mode {
+            1
+        } else if per_channel >= 128.0 {
+            0
+        } else if per_channel >= 56.0 {
+            1
+        } else {
+            2
+        };
         let geo = Geo::new(cfg.sample_rate, band_limit);
         // the decoder scales a band-limited stream's filter bank output by sqrt(2^(2 - limited range)), so the
         // coefficients are scaled down by the same factor here
@@ -420,7 +416,6 @@ impl LbrEncoder {
             frame_bytes,
             geo,
             min_resid: std::sync::atomic::AtomicUsize::new(0),
-            tonal: std::env::var_os("SW_LBR_NOTONES").is_none(),
             groups: (0..5).map(crate::lbr_tonal::Group::new).collect(),
             lpc_state: std::sync::RwLock::new(vec![LpcState::default(); n]),
             lpc_plan: std::sync::RwLock::new(vec![LpcPlan::default(); n]),
@@ -481,7 +476,7 @@ impl LbrEncoder {
     /// Samples ahead of a frame's own hops that the tone sets of the frame need (their span reaches 54 steps
     /// beyond the frame's last step).
     fn lookahead(&self) -> usize {
-        if self.tonal {
+        if true {
             54 * HOP
         } else {
             0
@@ -490,7 +485,7 @@ impl LbrEncoder {
 
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.frames;
-        let need = 32 * f + 32 + if self.tonal { 54 } else { 0 };
+        let need = 32 * f + 32 + 54;
         while self.next_hop <= need {
             let start = self.next_hop * HOP - self.base;
             for (c, a) in self.ana.iter_mut().enumerate() {
@@ -501,7 +496,7 @@ impl LbrEncoder {
             }
             self.next_hop += 1;
         }
-        let tonal_chunks = if self.tonal { self.choose_tones(f) } else { Vec::new() };
+        let tonal_chunks = self.choose_tones(f);
         for a in self.ana.iter_mut() {
             a.commit_upto(32 * f + 32);
         }
@@ -536,16 +531,6 @@ impl LbrEncoder {
                 self.lfe_base += d;
             }
         }
-        if let Some(p) = std::env::var_os("SW_LBR_DUMP_TS") {
-            use std::io::Write;
-            if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
-                for b in 0..8.min(ts[0].len()) {
-                    for v in &ts[0][b] {
-                        let _ = fh.write_all(&v.to_le_bytes());
-                    }
-                }
-            }
-        }
         self.frames += 1;
         self.encode_frame(&ts, lfe, tonal_chunks)
     }
@@ -556,17 +541,9 @@ impl LbrEncoder {
         use crate::lbr_tonal as tn;
         let nch = self.cfg.channels;
         let lr = 2 - self.geo.band_limit as i32;
-        let kappa = std::env::var("SW_LBR_KAPPA")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4.0);
-        let max_g = std::env::var("SW_LBR_GROUPS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(5);
         let search = tn::Search {
             max_line: (4 * self.geo.nsb).saturating_sub(6),
-            kappa,
+            kappa: TONE_KAPPA,
             max_tones: 12,
         };
         let mut all: Vec<Vec<Vec<tn::Tone>>> = Vec::new();
@@ -581,10 +558,6 @@ impl LbrEncoder {
         for g in 0..5usize {
             let mut subs: Vec<Vec<tn::Tone>> = Vec::new();
             for j in 0..(1usize << g) {
-                if g >= max_g {
-                    subs.push(Vec::new());
-                    continue;
-                }
                 let grp = &self.groups[g];
                 let first = 32 * f + tn::TONE_DELAY + j * grp.steps;
                 let mut targets: Vec<Vec<[f64; HOP]>> = (0..nch)
@@ -666,23 +639,6 @@ impl LbrEncoder {
             }
             self.min_resid.store(n, std::sync::atomic::Ordering::Relaxed);
         }
-        if let Ok(v) = std::env::var("SW_LBR_FIXED") {
-            let mut it = v.split(',').map(|s| s.parse::<usize>().unwrap());
-            let (p, k) = (it.next().unwrap() as u32, it.next().unwrap());
-            let mut chunks = Vec::new();
-            for pair in 0..npairs {
-                chunks.extend(self.write_pair(pair, ts, p, k));
-            }
-            if std::env::var_os("SW_LBR_DEBUG").is_some() {
-                eprintln!(
-                    "fixed bytes {} chunks {:?}",
-                    chunks.iter().map(|c| c.len()).sum::<usize>(),
-                    chunks.iter().map(|c| c.len()).collect::<Vec<_>>()
-                );
-            }
-            chunks.extend(tonal);
-            return self.assemble(chunks);
-        }
         // For every profile the widest coding that fits the frame; the one with the least error wins.
         // each profile is searched on its own, so they run side by side
         let fits: Vec<Option<(f64, Vec<Vec<u8>>, Vec<(usize, [[f64; 8]; 3], [bool; 3])>)>> = profiles
@@ -753,30 +709,19 @@ impl LbrEncoder {
     /// and their direct-form coefficients).
     fn plan_prediction(&self, ts: &[Vec<Vec<f64>>]) {
         let mut plans = vec![LpcPlan::default(); ts.len()];
-        if std::env::var_os("SW_LBR_NOLPC").is_none() {
-            let only: Option<usize> = std::env::var("SW_LBR_LPC_CH").ok().and_then(|v| v.parse().ok());
-            for (ch, plan) in plans.iter_mut().enumerate() {
-                if only.is_some_and(|o| o != ch) {
-                    plan.codes = [[[8; 8]; 2]; 3];
-                    continue;
+        for (ch, plan) in plans.iter_mut().enumerate() {
+            for sb in 0..3 {
+                let y = &ts[ch][sb];
+                let sets: [&[f64]; 2] = if sb < 2 {
+                    [&y[16..80], &y[80..128]]
+                } else {
+                    [&y[16..128], &y[16..128]]
+                };
+                for (set, seg) in sets.iter().enumerate() {
+                    let codes = crate::lbr_lpc::analyse(seg);
+                    plan.codes[sb][set] = codes;
+                    plan.cur[sb][set] = crate::lbr_lpc::direct(&codes);
                 }
-                for sb in 0..3 {
-                    let y = &ts[ch][sb];
-                    let sets: [&[f64]; 2] = if sb < 2 {
-                        [&y[16..80], &y[80..128]]
-                    } else {
-                        [&y[16..128], &y[16..128]]
-                    };
-                    for (set, seg) in sets.iter().enumerate() {
-                        let codes = crate::lbr_lpc::analyse(seg);
-                        plan.codes[sb][set] = codes;
-                        plan.cur[sb][set] = crate::lbr_lpc::direct(&codes);
-                    }
-                }
-            }
-        } else {
-            for plan in plans.iter_mut() {
-                plan.codes = [[[8; 8]; 2]; 3];
             }
         }
         *self.lpc_plan.write().unwrap() = plans;
@@ -820,18 +765,7 @@ impl LbrEncoder {
         out.extend_from_slice(&(br as u16).to_le_bytes());
         out.extend_from_slice(&(br as u16).to_le_bytes());
         // frame chunk with its 16-bit checksum: the id byte, both length bytes and every byte after the checksum
-        if std::env::var_os("SW_LBR_DEBUG").is_some() && out.len() + 5 + body.len() > self.frame_bytes {
-            eprintln!(
-                "frame {} overshoots: {} bytes against {}",
-                self.frames,
-                out.len() + 5 + body.len(),
-                self.frame_bytes
-            );
-        }
         let pad = self.frame_bytes.saturating_sub(out.len() + 3 + 2 + body.len() + 2);
-        if std::env::var_os("SW_LBR_PAD").is_some() {
-            eprintln!("pad {pad} of {}", self.frame_bytes);
-        }
         let len = 2 + body.len() + pad;
         let mut csum: u32 = 0x84 + (len >> 8) as u32 + (len & 0xFF) as u32;
         csum += body.iter().map(|b| *b as u32).sum::<u32>();
@@ -877,13 +811,12 @@ impl LbrEncoder {
         let mut err = 0.0;
         let mut tails = [[0f64; 8]; 3];
         let mut lpc_used = [false; 3];
-        let lpc = std::env::var_os("SW_LBR_NOLPC").is_none();
         for sb in 0..nsb {
             // the quantizer level belongs to the position a band is coded at (which need not be its own index)
             let alpha = alphabet(levels[pos[sb].min(nsb - 1)]);
             let lmax = alpha.iter().fold(0f32, |m, a| m.max(a.abs()));
             let group = SCF_TO_GRID_2[sb] as usize;
-            if lpc && sb < 3 && pos[sb] < k {
+            if sb < 3 && pos[sb] < k {
                 // the lowest bands are predicted: a closed loop over what the decoder will have produced
                 // with the predictor of the frame, or without it (the first samples still follow the last frame's)
                 let off = self.lpc_band(ch, sb, &x[sb], &alpha, lmax, false);
@@ -939,14 +872,6 @@ impl LbrEncoder {
                     q[sb][slot] = Vec::new();
                 }
             }
-        }
-        if std::env::var_os("SW_LBR_DEBUG3").is_some() {
-            let mut line = String::new();
-            for sb in 0..nsb {
-                let e: f64 = x[sb].iter().map(|v| v * v).sum();
-                line += &format!("[b{} L{} E{:.1e}] ", sb, levels[pos[sb].min(nsb - 1)], e);
-            }
-            eprintln!("{line} err {err:.3e}");
         }
         ChanCoding {
             err,
@@ -1101,48 +1026,6 @@ impl LbrEncoder {
     /// The temporal attenuation of every group of bands from the signal's own envelope: the loudest sample pair
     /// of a slot keeps its scale factor, quieter ones are turned down in steps of 3 dB (the decoder subtracts
     /// the steps from the scale factor of the slot, and a negative result silences the pair).
-    fn grid2_curves(&self, x: &[Vec<f64>]) -> Vec<[u8; 64]> {
-        let nsb = self.geo.nsb;
-        let mut out = vec![[0u8; 64]; self.geo.ng2];
-        for (g, curve) in out.iter_mut().enumerate() {
-            let bands: Vec<usize> = (4..nsb).filter(|&b| SCF_TO_GRID_2[b] as usize == g).collect();
-            if bands.is_empty() {
-                continue;
-            }
-            let amp: Vec<f64> = (0..64)
-                .map(|i| {
-                    (bands
-                        .iter()
-                        .map(|&b| x[b][2 * i] * x[b][2 * i] + x[b][2 * i + 1] * x[b][2 * i + 1])
-                        .sum::<f64>()
-                        / (2 * bands.len()) as f64)
-                        .sqrt()
-                })
-                .collect();
-            for slot in 0..8 {
-                let a = &amp[slot * 8..slot * 8 + 8];
-                let top = a.iter().cloned().fold(0.0, f64::max);
-                if top < 1e-9 {
-                    continue;
-                }
-                let steps: Vec<u8> = a
-                    .iter()
-                    .map(|v| {
-                        (2.0 * (top / v.max(top * 1e-4)).log2())
-                            .round()
-                            .clamp(0.0, G2_MAX as f64) as u8
-                    })
-                    .collect();
-                // flat slots stay flat: the side information is not worth a small correction
-                if steps.iter().all(|s| *s <= G2_MIN) {
-                    continue;
-                }
-                curve[slot * 8..slot * 8 + 8].copy_from_slice(&steps);
-            }
-        }
-        out
-    }
-
     /// Grid 1 values (11 groups x 8 slots), the third grid averages and per-band offsets.
     fn grids(&self, scf: &[[usize; 8]]) -> Grids {
         let nsb = self.geo.nsb;
@@ -1205,20 +1088,16 @@ impl LbrEncoder {
         let nsb = geo.nsb;
         let k = k.min(nsb);
         // the strongest of the first eight bands gets the finest quantizer (the low bits of the profile name it)
-        let profile = if std::env::var_os("SW_LBR_NOMAXSB").is_some() {
-            profile
-        } else {
-            let energy = |b: usize| -> f64 { (ch1..=ch2).map(|c| ts[c][b].iter().map(|v| v * v).sum::<f64>()).sum() };
-            let m = (0..8.min(nsb))
-                .max_by(|&a, &b| energy(a).partial_cmp(&energy(b)).unwrap())
-                .unwrap_or(0);
-            (profile & !7) | m as u32
-        };
+        let energy = |b: usize| -> f64 { (ch1..=ch2).map(|c| ts[c][b].iter().map(|v| v * v).sum::<f64>()).sum() };
+        let loudest = (0..8.min(nsb))
+            .max_by(|&a, &b| energy(a).partial_cmp(&energy(b)).unwrap())
+            .unwrap_or(0);
+        let profile = (profile & !7) | loudest as u32;
         let levels = levels_from_profile(profile, nsb, geo.limited_rate);
         let kw = if stereo { k.max(geo.max_mono) } else { k };
         // a lone channel codes its bands in order of energy (the quantizer levels fall with the position, so the
         // strongest bands get the finest ones); a pair keeps them in order
-        let ord = if stereo || std::env::var_os("SW_LBR_NOORDER").is_some() {
+        let ord = if stereo {
             (0..nsb).collect::<Vec<usize>>()
         } else {
             self.band_order(&ts[ch1])
@@ -1227,14 +1106,8 @@ impl LbrEncoder {
         for (p, &b) in ord.iter().enumerate() {
             pos[b] = p;
         }
-        // the second grid is used for a lone channel; in a pair it stays flat
-        let g2_for = |ch: usize| -> Vec<[u8; 64]> {
-            if stereo || std::env::var_os("SW_LBR_G2").is_none() {
-                vec![[0u8; 64]; geo.ng2]
-            } else {
-                self.grid2_curves(&ts[ch])
-            }
-        };
+        // the second grid stays flat: its attenuation steps did not pay for their bits
+        let g2_for = |_ch: usize| -> Vec<[u8; 64]> { vec![[0u8; 64]; geo.ng2] };
         let mut c1 = self.code_channel(ch1, &ts[ch1], &levels, &pos, k, kw, g2_for(ch1));
         let mut c2 = if stereo {
             Some(self.code_channel(ch2, &ts[ch2], &levels, &pos, k, kw, g2_for(ch2)))

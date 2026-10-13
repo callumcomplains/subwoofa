@@ -132,25 +132,21 @@ fn rc_value(idx: i32) -> i32 {
     }
 }
 
+/// The fraction of a frame the autocorrelation window tapers over (a Tukey window).
+const WINDOW_TAPER: f64 = 0.3;
+
 /// Levinson-Durbin: reflection coefficients of the error filter `1 + sum a_k z^-k` up to `max_order`.
 fn reflection_coefficients(x: &[i32], max_order: usize) -> Vec<f64> {
     let n = x.len();
-    let taper: f64 = std::env::var("SW_TAPER")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.3);
+    // a Tukey window: flat in the middle, cosine ramps over the outer `WINDOW_TAPER / 2` at each end
     let xs: Vec<f64> = x
         .iter()
         .enumerate()
         .map(|(i, v)| {
             let t = (i as f64 + 0.5) / n as f64;
-            let w = if taper > 0.0 {
-                let e = t.min(1.0 - t);
-                if e < taper / 2.0 {
-                    0.5 - 0.5 * (std::f64::consts::PI * (2.0 * e / taper)).cos()
-                } else {
-                    1.0
-                }
+            let edge = t.min(1.0 - t);
+            let w = if edge < WINDOW_TAPER / 2.0 {
+                0.5 - 0.5 * (std::f64::consts::PI * (2.0 * edge / WINDOW_TAPER)).cos()
             } else {
                 1.0
             };
@@ -334,27 +330,16 @@ fn choose_code(u: &[u32]) -> (Code, u64) {
 }
 
 /// Hybrid coding is only tried for a segment whose largest value is at least this many times its mean (output
-/// is identical to trying it always on the 192 kHz test material, 14% faster; 0 turns hybrid coding off).
-fn hybrid_gate() -> Option<f64> {
-    static G: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *G.get_or_init(|| {
-        Some(
-            std::env::var("SW_HYB_GATE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(8.0),
-        )
-    })
-}
+/// is identical to trying it always on the 192 kHz test material, 14% faster).
+const HYBRID_GATE: f64 = 8.0;
 
-/// The channel with its predictable part taken out (an order-2 linear predictor fitted to it; `SW_WHITEN` sets the
-/// order, 0 = the samples as they are).
+/// The order of the linear predictor `whiten` takes out of a channel.
+const WHITEN_ORDER: usize = 2;
+
+/// The channel with its predictable part taken out (an order-2 linear predictor fitted to it).
 fn whiten(x: &[i32]) -> Vec<f64> {
-    let order: usize = std::env::var("SW_WHITEN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2);
-    if order == 0 || x.len() < 64 || x.iter().all(|v| *v == 0) {
+    let order = WHITEN_ORDER;
+    if x.len() < 64 || x.iter().all(|v| *v == 0) {
         return x.iter().map(|v| *v as f64).collect();
     }
     let ks = reflection_coefficients(x, order);
@@ -379,19 +364,14 @@ fn hybrid_code(u: &[u32], posbits: u32, nabits: u32) -> Option<(Code, u64)> {
     if n < 16 {
         return None;
     }
-    if let Some(g) = hybrid_gate() {
-        if g == 0.0 {
-            return None;
-        }
-        // outliers make hybrid coding pay; without a value well above the typical one it cannot
-        let (mut mx, mut sum) = (0u32, 0u64);
-        for v in u {
-            mx = mx.max(*v);
-            sum += *v as u64;
-        }
-        if (mx as f64) < g * (sum as f64 / n as f64 + 1.0) {
-            return None;
-        }
+    // outliers make hybrid coding pay; without a value well above the typical one it cannot
+    let (mut mx, mut sum) = (0u32, 0u64);
+    for v in u {
+        mx = mx.max(*v);
+        sum += *v as u64;
+    }
+    if (mx as f64) < HYBRID_GATE * (sum as f64 / n as f64 + 1.0) {
+        return None;
     }
     let max_c = ((1usize << posbits.min(20)) - 1).min(n - 1).min(32);
     // sums of u >> k over everything, then per candidate set only the isolated samples are taken out

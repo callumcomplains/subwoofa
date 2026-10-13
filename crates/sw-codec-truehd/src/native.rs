@@ -86,7 +86,7 @@ pub fn encode_to_file(
         } else {
             None
         },
-        decorrelate: std::env::var_os("SW_NODECOR").is_none(),
+        decorrelate: true,
         effort: req.effort,
         mlp,
     })?;

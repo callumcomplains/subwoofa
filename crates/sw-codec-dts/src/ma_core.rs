@@ -4,6 +4,7 @@
 //! For 96 kHz sources the core is a 48 kHz stream of the (decimated) programme; the decoder synthesises
 //! it at 96 kHz with its 64-band filter bank and the lossless extension carries the remaining difference.
 
+use crate::dts96::{CORE_ADVANCE, DECIMATION_PHASE};
 use crate::encoder::{Config as CoreConfig, Encoder as CoreEncoder};
 use crate::exss::{exss_frame, ExssParams};
 use crate::ma::map_layout_with;
@@ -255,18 +256,10 @@ impl MaCoreEncoder {
         let (l48, phase) = if ratio == 1 {
             (core.delay(), 0)
         } else {
-            let l48 = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-            let phase: f64 = std::env::var("SW_PHASE").ok().and_then(|v| v.parse().ok()).unwrap_or(
-                if ratio == 4 && std::env::var_os("SW_NOB0").is_some() {
-                    14.5
-                } else if ratio == 4 {
-                    0.0
-                } else {
-                    0.5
-                },
-            );
+            // at 192 kHz the core is fed from band 0 of the split, which has no half-sample offset
+            let phase = if ratio == 4 { 0.0 } else { DECIMATION_PHASE };
             frac = phase - phase.floor();
-            (l48, phase.floor() as usize)
+            (CORE_ADVANCE, phase.floor() as usize)
         };
         let half = half_len(ratio);
         let mut lookahead = if ratio == 1 {
@@ -296,16 +289,13 @@ impl MaCoreEncoder {
             lookahead,
             ratio,
             half,
-            from_band0: ratio == 4 && std::env::var_os("SW_NOB0").is_none(),
+            from_band0: ratio == 4,
             taps_b0: if ratio == 4 {
                 decimator_taps(frac, 2)
             } else {
                 Vec::new()
             },
-            cgain: std::env::var("SW_CGAIN")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1.0),
+            cgain: 1.0,
             taps: if ratio >= 2 {
                 decimator_taps(frac, ratio)
             } else {
@@ -626,16 +616,6 @@ impl MaCoreEncoder {
                         .map(|i| self.buf[x][start + i] - ((c[i] + round) >> self.shift))
                         .collect(),
                 ),
-            }
-        }
-        if let Some(path) = std::env::var_os("SW_DUMP_RESID") {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                for r in &resid {
-                    for v in r {
-                        let _ = f.write_all(&v.to_le_bytes());
-                    }
-                }
             }
         }
         core_bytes.resize(core_bytes.len() + self.core_pad, 0);

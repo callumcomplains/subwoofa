@@ -458,34 +458,12 @@ fn parse_params(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
             if st.presence & 8 != 0 && b.get(1) == 1 {
                 let mut f = Fir::default();
                 parse_filter(b, &mut f);
-                if std::env::var_os("SW_DUMP_FIR").is_some() {
-                    eprintln!(
-                        "ch{ch} FIR shift {} bits {} cs {} : {:?}",
-                        f.shift,
-                        f.coeff_bits,
-                        f.coeff_shift,
-                        f.coeffs
-                            .iter()
-                            .map(|c| *c as f64 / (1u64 << f.shift) as f64)
-                            .collect::<Vec<_>>()
-                    );
-                }
                 st.ch[ch].fir = f;
                 stats.fir_updates += 1;
             }
             if st.presence & 4 != 0 && b.get(1) == 1 {
                 let mut f = Fir::default();
                 parse_filter(b, &mut f);
-                if std::env::var_os("SW_DUMP_FIR").is_some() {
-                    eprintln!(
-                        "ch{ch} IIR shift {} : {:?}",
-                        f.shift,
-                        f.coeffs
-                            .iter()
-                            .map(|c| *c as f64 / (1u64 << f.shift) as f64)
-                            .collect::<Vec<_>>()
-                    );
-                }
                 st.ch[ch].iir_order = f.order;
                 stats.iir_updates += 1;
             }

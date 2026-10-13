@@ -11,7 +11,7 @@
 //! | 6.1 discrete      | Cs mixed in, and sent again in XCH    | X96 (the core channels, then Cs)  |
 //! | 7.1 / 7.0         | rears folded into the sides           | XXCH (the rear pair) and X96      |
 
-use crate::dts96::{decimator_taps, HALF};
+use crate::dts96::{decimator_taps, CORE_ADVANCE, DECIMATION_PHASE, HALF};
 use crate::encoder::{Config as CoreConfig, Encoder as CoreEncoder, XxchParams};
 use crate::exss::{exss_frame_x96, exss_frame_xxch_x96, ExssParams};
 use crate::native::{NativeError, Request, Stats};
@@ -99,7 +99,6 @@ pub struct Hra96Encoder {
     bits_num: u64,
     bits_den: u64,
     overhead: usize,
-    timing: [std::time::Duration; 5],
 }
 
 fn core_config(
@@ -157,13 +156,9 @@ impl Hra96Encoder {
             None
         };
         let n = core.frame_samples() * 2;
-        let l48: usize = std::env::var("SW_L48").ok().and_then(|v| v.parse().ok()).unwrap_or(480);
-        let phase: f64 = std::env::var("SW_PHASE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.5);
-        let frac = phase - phase.floor();
-        let phase = phase.floor() as usize;
+        let l48 = CORE_ADVANCE;
+        let frac = DECIMATION_PHASE - DECIMATION_PHASE.floor();
+        let phase = DECIMATION_PHASE.floor() as usize;
         let nprim = cfg.nprim;
         let core_ana: Vec<Analysis64> = (0..nprim).map(|_| Analysis64::new()).collect();
         // the rears and the XCH channel each get an X96 channel; the LFE does not
@@ -213,7 +208,6 @@ impl Hra96Encoder {
             bits_num: cfg.total_kbps as u64 * 1000 * n as u64,
             bits_den: 96_000,
             overhead,
-            timing: [std::time::Duration::ZERO; 5],
         })
     }
 
@@ -251,12 +245,6 @@ impl Hra96Encoder {
         let mut out = Vec::new();
         while self.emitted < frames {
             out.push(self.next_frame());
-        }
-        if std::env::var_os("SW_TIMING").is_some() {
-            eprintln!(
-                "hra96 timing: decimate {:?}, core+xxch {:?}, 64-band analysis {:?}, x96 coding {:?}",
-                self.timing[0], self.timing[1], self.timing[2], self.timing[3]
-            );
         }
         out
     }
@@ -314,14 +302,11 @@ impl Hra96Encoder {
 
     fn next_frame(&mut self) -> Vec<u8> {
         let f = self.emitted;
-        let t0 = std::time::Instant::now();
         let dec: Vec<Vec<f64>> = {
             let me: &Hra96Encoder = &*self;
             use rayon::prelude::*;
             (0..me.buf.len()).into_par_iter().map(|c| me.decimated(c, f)).collect()
         };
-        self.timing[0] += t0.elapsed();
-        let t0 = std::time::Instant::now();
         let core_in: Vec<Vec<f64>> = self.core_inputs.iter().map(|&i| dec[i].clone()).collect();
         let mut data = self.core.encode_frame(&core_in);
         data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
@@ -340,8 +325,6 @@ impl Hra96Encoder {
             Some(r) => r.encode_xxch(&dec[self.extra_start..], xxch_bytes, &self.params),
             None => Vec::new(),
         };
-        self.timing[1] += t0.elapsed();
-        let t0 = std::time::Instant::now();
         // X96: the five core channels, then the extra channels that have a set of their own
         let (f_off, dropped, delay) = (f * self.n, self.dropped, self.ana_delay);
         let bufs = &self.buf;
@@ -373,14 +356,11 @@ impl Hra96Encoder {
                 .collect();
             (a, b)
         };
-        self.timing[2] += t0.elapsed();
-        let t0 = std::time::Instant::now();
         let x96 = if r_extra.is_empty() {
             self.x96.encode_exss(&[&r_core], x96_bytes)
         } else {
             self.x96.encode_exss(&[&r_core, &r_extra], x96_bytes)
         };
-        self.timing[3] += t0.elapsed();
         if self.kind == Hra96Kind::Rear {
             data.extend_from_slice(&exss_frame_xxch_x96(&self.exss, &xxch, &x96));
         } else {

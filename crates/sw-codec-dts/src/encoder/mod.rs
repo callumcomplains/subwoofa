@@ -22,6 +22,11 @@ use emulation::ExactState;
 use lfe::{lfe_decimator, LFE_ALIGN};
 use pack::sfreq_code;
 
+/// How much the noise of a band follows the masking estimate rather than being the same in every band, as found by
+/// listening and measuring against the reference encoder (0 is equal noise, which gives the best SNR; 1 follows the
+/// masking curve).
+const MASK_WEIGHT: f64 = 0.4;
+
 pub struct Encoder {
     cfg: Config,
     analysis: Vec<Analysis>,
@@ -96,10 +101,7 @@ impl Encoder {
             frame_bytes,
             lfe_decim,
             lfe_fir,
-            mask_weight: std::env::var("SW_DTS_BETA")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0.4),
+            mask_weight: MASK_WEIGHT,
             exact: None,
             last_offset: 30.0,
             last_core_pcm: Vec::new(),
