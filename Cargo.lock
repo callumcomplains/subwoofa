@@ -3215,6 +3215,7 @@ dependencies = [
 name = "sw-queue"
 version = "0.1.0"
 dependencies = [
+ "md5",
  "rayon",
  "serde",
  "sw-backend-ffmpeg",
