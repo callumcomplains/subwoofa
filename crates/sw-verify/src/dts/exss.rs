@@ -77,6 +77,41 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
     let nbits = 16 + 4 * wide;
     e.size = b.get(nbits) as usize + 1;
     e.static_fields = b.flag();
+    let mix_out = parse_static_fields(&mut b, &mut e);
+    if e.nassets > 1 {
+        return Err(format!("{} audio assets (only one is understood)", e.nassets));
+    }
+    e.asset_size = b.get(nbits) as usize + 1;
+    // asset descriptor
+    let descr_pos = b.pos;
+    let descr_size = b.get(9) as usize + 1;
+    b.get(3);
+    parse_asset_format(&mut b, &mut e)?;
+    let drc = b.flag();
+    if drc {
+        e.drc = Some(b.get(8));
+    }
+    if b.flag() {
+        e.dialnorm = Some(b.get(5));
+    }
+    if drc && e.embedded_stereo {
+        b.skip(8);
+    }
+    parse_asset_mixing(&mut b, &mut e, &mix_out)?;
+    parse_coding_mode(&mut b, nbits, &mut e);
+    if b.over {
+        return Err("the header runs past the data given".into());
+    }
+    if descr_pos + descr_size * 8 > e.header_size * 8 {
+        return Err("asset descriptor runs past the header".into());
+    }
+    locate_components(&mut e)?;
+    Ok(e)
+}
+
+/// The static fields: reference clock, frame duration, presentations and assets, mixing outputs. Returns the number of
+/// channels of each mixing output.
+fn parse_static_fields(b: &mut Bits, e: &mut Exss) -> Vec<u32> {
     let mut mix_out = Vec::new();
     if e.static_fields {
         e.ref_clock = b.get(2);
@@ -106,14 +141,11 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
         e.npresent = 1;
         e.nassets = 1;
     }
-    if e.nassets > 1 {
-        return Err(format!("{} audio assets (only one is understood)", e.nassets));
-    }
-    e.asset_size = b.get(nbits) as usize + 1;
-    // asset descriptor
-    let descr_pos = b.pos;
-    let descr_size = b.get(9) as usize + 1;
-    b.get(3);
+    mix_out
+}
+
+/// The asset descriptor's format fields: bit depth, rate, channel count and speaker layout.
+fn parse_asset_format(b: &mut Bits, e: &mut Exss) -> Result<(), String> {
     if e.static_fields {
         if b.flag() {
             b.skip(4);
@@ -156,16 +188,11 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
             b.get(3);
         }
     }
-    let drc = b.flag();
-    if drc {
-        e.drc = Some(b.get(8));
-    }
-    if b.flag() {
-        e.dialnorm = Some(b.get(5));
-    }
-    if drc && e.embedded_stereo {
-        b.skip(8);
-    }
+    Ok(())
+}
+
+/// Mixing metadata of the asset (skipped over: only its size matters here).
+fn parse_asset_mixing(b: &mut Bits, e: &mut Exss, mix_out: &[u32]) -> Result<(), String> {
     if e.mix_metadata && b.flag() {
         b.skip(1 + 6);
         if b.get(2) == 3 {
@@ -174,7 +201,7 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
             b.skip(3);
         }
         if b.flag() {
-            for n in &mix_out {
+            for n in mix_out {
                 b.skip(6 * *n as usize);
             }
         } else {
@@ -187,7 +214,7 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
         if e.embedded_stereo {
             nd += 2;
         }
-        for n in &mix_out {
+        for n in mix_out {
             if *n == 0 {
                 return Err("invalid speaker layout mask for a mixing configuration".into());
             }
@@ -197,6 +224,11 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
             }
         }
     }
+    Ok(())
+}
+
+/// How the asset is coded and the sizes of its parts.
+fn parse_coding_mode(b: &mut Bits, nbits: usize, e: &mut Exss) {
     e.coding_mode = b.get(2);
     match e.coding_mode {
         0 => {
@@ -223,7 +255,7 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
                 }
             }
             if e.ext_mask & 0x200 != 0 {
-                parse_xll_params(&mut b, nbits, &mut e);
+                parse_xll_params(b, nbits, e);
             }
             if e.ext_mask & 0x400 != 0 {
                 b.skip(16);
@@ -234,7 +266,7 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
         }
         1 => {
             e.ext_mask = 0x200;
-            parse_xll_params(&mut b, nbits, &mut e);
+            parse_xll_params(b, nbits, e);
         }
         2 => {
             e.ext_mask = 0x100;
@@ -253,12 +285,10 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
     if e.ext_mask & 0x200 != 0 {
         e.hd_stream_id = b.get(3);
     }
-    if b.over {
-        return Err("the header runs past the data given".into());
-    }
-    if descr_pos + descr_size * 8 > e.header_size * 8 {
-        return Err("asset descriptor runs past the header".into());
-    }
+}
+
+/// Where each component of the asset starts, checking that they fit.
+fn locate_components(e: &mut Exss) -> Result<(), String> {
     // component offsets inside the asset
     let mut off = e.header_size;
     let mut left = e.asset_size;
@@ -279,7 +309,7 @@ pub(crate) fn parse_exss(d: &[u8]) -> Result<Exss, String> {
     place(e.ext_mask & 0x80 != 0, e.x96_size, &mut e.x96_offset)?;
     place(e.ext_mask & 0x100 != 0, e.lbr_size, &mut e.lbr_offset)?;
     place(e.ext_mask & 0x200 != 0, e.xll_size, &mut e.xll_offset)?;
-    Ok(e)
+    Ok(())
 }
 
 pub(crate) fn parse_xll_params(b: &mut Bits, nbits: usize, e: &mut Exss) {
