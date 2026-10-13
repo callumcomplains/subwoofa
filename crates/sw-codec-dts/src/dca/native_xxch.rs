@@ -307,7 +307,7 @@ impl Xxch {
         let mut last = Vec::new();
         for f in 0..4 {
             last = fresh
-                .frames(&[core_zeros.clone()], &[ext_zeros.clone()], f)
+                .frames(std::slice::from_ref(&core_zeros), std::slice::from_ref(&ext_zeros), f)
                 .pop()
                 .expect("one frame");
         }
