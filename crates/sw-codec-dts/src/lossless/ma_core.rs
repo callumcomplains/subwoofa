@@ -459,7 +459,7 @@ impl MaCoreEncoder {
             let src_hi = ((2 * hi_b0 - self.dropped as isize) as usize).min(src.len()) & !1;
             let mut out = vec![0f64; n48];
             if src_hi > src_lo + 64 {
-                let (b0, _, _) = crate::lossless::xll_bands::split(&src[src_lo..src_hi]);
+                let (b0, _, _) = crate::lossless::xll::bands::split(&src[src_lo..src_hi]);
                 let b0_origin = ((src_lo + self.dropped) / 2) as isize; // band-0 index of b0[0]
                 for (i, o) in out.iter_mut().enumerate() {
                     let centre = (2 * (first_m + i) + self.phase) as isize - b0_origin;

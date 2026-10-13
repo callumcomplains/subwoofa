@@ -4,6 +4,3 @@ pub mod ma;
 pub mod ma_core;
 pub mod native;
 pub mod xll;
-pub mod xll_bands;
-#[rustfmt::skip]
-pub mod xll_table;
