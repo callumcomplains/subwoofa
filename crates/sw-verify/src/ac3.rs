@@ -57,50 +57,85 @@ struct Header {
     substream: u8,
 }
 
+/// What the walk through the frames found.
+#[derive(Default)]
+struct Tally {
+    frames: u64,
+    /// Access units: an independent frame together with the dependent substreams that follow it.
+    access_units: u64,
+    dependent: u64,
+    bad_crc1: u64,
+    bad_crc2: u64,
+    bad_headers: u64,
+    resyncs: u64,
+    truncated: u64,
+    param_changes: u64,
+    size_changes: u64,
+    /// Bytes skipped while looking for the next sync word.
+    skipped_bytes: u64,
+    /// Complexity index of Joint Object Coding (Dolby Atmos), and in how many access units it was signalled.
+    joc: Option<u32>,
+    joc_frames: u64,
+    samples: u64,
+    first: Option<Header>,
+    first_dump: Vec<(String, String)>,
+}
+
 pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
     let mut p = Probe::default();
-    let (mut pos, len) = (0u64, w.len);
-    let (mut frames, mut aus) = (0u64, 0u64);
-    let (mut bad_crc1, mut bad_crc2, mut bad_hdr, mut resync, mut gaps) = (0u64, 0u64, 0u64, 0u64, 0u64);
-    let mut first: Option<Header> = None;
-    let mut changes = 0u64;
-    let mut cur: Option<Header> = None;
-    let mut sizes: Vec<u32> = Vec::new();
-    let mut size_changes = 0u64;
-    let mut dependent = 0u64;
-    let mut dump: Vec<(String, String)> = Vec::new();
-    let mut extra_bytes = 0u64;
-    let mut joc: Option<u32> = None;
-    let mut joc_frames = 0u64;
-    let mut sample_total = 0u64;
+    let tally = walk_frames(w, c, eac3, &mut p);
+    let h0 = tally.first.clone().unwrap_or_default();
+    p.sample_rate = h0.rate;
+    p.channels = NFCH[h0.acmod as usize & 7] + u32::from(h0.lfe);
+    p.duration_secs = if h0.rate > 0 {
+        tally.samples as f64 / h0.rate as f64
+    } else {
+        0.0
+    };
+    report_facts(c, &p, &tally, &h0, w.len, eac3);
+    report_checks(c, &p, &tally, &h0, eac3);
+    if c.report.deep {
+        c.section("First frame header", tally.first_dump);
+    }
+    p
+}
+
+/// The position of the next sync word after `pos`, looking at most a megabyte ahead.
+fn next_sync(w: &mut Window, pos: u64) -> Option<u64> {
+    let len = w.len;
+    let from = pos + 1;
+    let mut q = from;
+    while q < len && q < from + (1 << 20) {
+        let chunk = w.get(q, 1 << 16).to_vec();
+        if chunk.len() < 2 {
+            break;
+        }
+        if let Some(i) = chunk.windows(2).position(|pair| pair == [0x0B, 0x77]) {
+            return Some(q + i as u64);
+        }
+        q += chunk.len() as u64 - 1;
+    }
+    None
+}
+
+/// Walks the frames from the start of the file, checking each one and filling in `p` and the tally.
+fn walk_frames(w: &mut Window, c: &mut Collector, eac3: bool, p: &mut Probe) -> Tally {
+    let mut t = Tally::default();
+    let mut pos = 0u64;
+    let len = w.len;
+    let mut current: Option<Header> = None;
     while pos + 8 <= len {
         let head = w.get(pos, 16).to_vec();
         if head.len() < 8 || head[0] != 0x0B || head[1] != 0x77 {
-            // lost sync: look for the next one
-            let from = pos + 1;
-            let mut found = None;
-            let mut q = from;
-            'scan: while q < len && q < from + (1 << 20) {
-                let chunk = w.get(q, 1 << 16).to_vec();
-                if chunk.len() < 2 {
-                    break;
-                }
-                for i in 0..chunk.len() - 1 {
-                    if chunk[i] == 0x0B && chunk[i + 1] == 0x77 {
-                        found = Some(q + i as u64);
-                        break 'scan;
-                    }
-                }
-                q += chunk.len() as u64 - 1;
-            }
-            resync += 1;
+            let found = next_sync(w, pos);
             let skipped = found.unwrap_or(len) - pos;
+            t.resyncs += 1;
             c.finding(
                 Status::Fail,
                 Some(pos),
                 format!("no sync word here; {skipped} bytes skipped to the next one"),
             );
-            extra_bytes += skipped;
+            t.skipped_bytes += skipped;
             match found {
                 Some(f) => {
                     pos = f;
@@ -109,10 +144,9 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
                 None => break,
             }
         }
-        // header
-        let (h, fsize, hdr_ok) = if eac3 { parse_e(&head) } else { parse_a(&head) };
-        if !hdr_ok || fsize == 0 {
-            bad_hdr += 1;
+        let (h, fsize, header_ok) = if eac3 { parse_e(&head) } else { parse_a(&head) };
+        if !header_ok || fsize == 0 {
+            t.bad_headers += 1;
             c.finding(Status::Fail, Some(pos), "invalid frame header".to_string());
             pos += 2;
             continue;
@@ -123,93 +157,74 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
                 Some(pos),
                 format!("the last frame is cut short ({} of {} bytes)", len - pos, fsize),
             );
-            gaps += 1;
+            t.truncated += 1;
             break;
         }
         let frame = w.get(pos, fsize).to_vec();
-        // checksums
-        if eac3 {
-            if crc::ac3(&frame[2..]) != 0 {
-                bad_crc2 += 1;
-                c.finding(Status::Fail, Some(pos), "frame checksum (CRC) mismatch".to_string());
-            }
-        } else {
-            let f58 = ((fsize >> 2) + (fsize >> 4)) << 1;
-            if crc::ac3(&frame[2..f58]) != 0 {
-                bad_crc1 += 1;
-                c.finding(
-                    Status::Fail,
-                    Some(pos),
-                    "first-part checksum (CRC1) mismatch".to_string(),
-                );
-            }
-            if crc::ac3(&frame[2..]) != 0 {
-                bad_crc2 += 1;
-                c.finding(Status::Fail, Some(pos), "frame checksum (CRC2) mismatch".to_string());
-            }
-        }
-        if first.is_none() {
-            let f = match eac3 {
-                true => dump_e(&frame),
-                false => dump_a(&frame),
-            };
-            dump = f;
-            first = Some(h.clone());
+        check_crcs(c, &frame, pos, eac3, &mut t);
+        if t.first.is_none() {
+            t.first_dump = if eac3 { dump_e(&frame) } else { dump_a(&frame) };
+            t.first = Some(h.clone());
         }
         if eac3 {
             if let Some(j) = joc_complexity(&frame) {
-                joc_frames += 1;
-                joc.get_or_insert(j);
+                t.joc_frames += 1;
+                t.joc.get_or_insert(j);
             }
         }
         if eac3 && h.strmtyp == 1 {
-            dependent += 1;
+            t.dependent += 1;
         } else {
-            if let Some(prev) = &cur {
-                if *prev != h {
-                    changes += 1;
-                    if changes <= 5 {
-                        c.finding(
-                            Status::Warn,
-                            Some(pos),
-                            "stream parameters change here (rate, channels or bit rate)",
-                        );
-                    }
+            if current.as_ref().is_some_and(|prev| *prev != h) {
+                t.param_changes += 1;
+                if t.param_changes <= 5 {
+                    c.finding(
+                        Status::Warn,
+                        Some(pos),
+                        "stream parameters change here (rate, channels or bit rate)",
+                    );
                 }
             }
-            cur = Some(h.clone());
-            aus += 1;
-            sample_total += h.blocks as u64 * 256;
+            current = Some(h.clone());
+            t.access_units += 1;
+            t.samples += h.blocks as u64 * 256;
             p.frame_samples.push(h.blocks * 256);
         }
-        if sizes.last().is_some_and(|l| *l != fsize as u32) {
-            size_changes += 1;
+        if p.frame_bytes.last().is_some_and(|last| *last != fsize as u32) {
+            t.size_changes += 1;
         }
-        sizes.push(fsize as u32);
         p.frame_bytes.push(fsize as u32);
-        frames += 1;
+        t.frames += 1;
         pos += fsize as u64;
     }
-    let h0 = first.unwrap_or_default();
-    p.sample_rate = h0.rate;
-    p.channels = if eac3 {
-        NFCH[h0.acmod as usize & 7] + u32::from(h0.lfe)
-    } else {
-        NFCH[h0.acmod as usize & 7] + u32::from(h0.lfe)
-    };
-    p.duration_secs = if h0.rate > 0 {
-        sample_total as f64 / h0.rate as f64
-    } else {
-        0.0
-    };
-    c.kv(
-        "Format",
-        if eac3 {
-            format!("E-AC-3, bit stream id {}", h0.bsid)
-        } else {
-            format!("AC-3, bit stream id {}", h0.bsid)
-        },
-    );
+    t
+}
+
+/// AC-3 has two checksums (the first covers the first 5/8 of the frame), E-AC-3 one over the whole frame.
+fn check_crcs(c: &mut Collector, frame: &[u8], pos: u64, eac3: bool, t: &mut Tally) {
+    if !eac3 {
+        let size = frame.len();
+        let five_eighths = ((size >> 2) + (size >> 4)) << 1;
+        if crc::ac3(&frame[2..five_eighths]) != 0 {
+            t.bad_crc1 += 1;
+            c.finding(
+                Status::Fail,
+                Some(pos),
+                "first-part checksum (CRC1) mismatch".to_string(),
+            );
+        }
+    }
+    if crc::ac3(&frame[2..]) != 0 {
+        t.bad_crc2 += 1;
+        let name = if eac3 { "CRC" } else { "CRC2" };
+        c.finding(Status::Fail, Some(pos), format!("frame checksum ({name}) mismatch"));
+    }
+}
+
+/// The facts block: format, rate, channels, length, bit rate, dialogue level and Atmos signalling.
+fn report_facts(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, file_len: u64, eac3: bool) {
+    let family = if eac3 { "E-AC-3" } else { "AC-3" };
+    c.kv("Format", format!("{family}, bit stream id {}", h0.bsid));
     c.kv("Sample rate", format!("{} Hz", h0.rate));
     c.kv(
         "Channels",
@@ -221,10 +236,13 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
     );
     c.kv(
         "Frames",
-        if eac3 && dependent > 0 {
-            format!("{aus} access units ({frames} frames, {dependent} in dependent substreams)")
+        if eac3 && t.dependent > 0 {
+            format!(
+                "{} access units ({} frames, {} in dependent substreams)",
+                t.access_units, t.frames, t.dependent
+            )
         } else {
-            format!("{frames}")
+            format!("{}", t.frames)
         },
     );
     c.kv("Duration", format!("{:.3} s", p.duration_secs));
@@ -233,98 +251,103 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
             "Average bit rate",
             format!(
                 "{:.1} kbps",
-                (len - extra_bytes) as f64 * 8.0 / p.duration_secs / 1000.0
+                (file_len - t.skipped_bytes) as f64 * 8.0 / p.duration_secs / 1000.0
             ),
         );
     }
     c.kv("Dialogue level", format!("-{} dBFS", h0.dialnorm));
-    if eac3 {
-        match joc {
-            Some(j) => {
-                c.kv(
-                    "Dolby Atmos",
-                    format!("yes: Joint Object Coding, complexity index {j} (in {joc_frames} of {aus} access units)"),
-                );
-                c.check(
-                    "Dolby Atmos signalling",
-                    if joc_frames == aus { Status::Pass } else { Status::Warn },
-                    if joc_frames == aus {
-                        format!("every access unit carries the JOC flag (complexity index {j})")
-                    } else {
-                        format!("only {joc_frames} of {aus} access units carry the JOC flag")
-                    },
-                );
-            }
-            None => c.kv("Dolby Atmos", "no"),
-        }
+    if !eac3 {
+        return;
     }
+    let Some(j) = t.joc else {
+        c.kv("Dolby Atmos", "no");
+        return;
+    };
+    let (joc_frames, aus) = (t.joc_frames, t.access_units);
+    c.kv(
+        "Dolby Atmos",
+        format!("yes: Joint Object Coding, complexity index {j} (in {joc_frames} of {aus} access units)"),
+    );
+    let every = joc_frames == aus;
+    c.check(
+        "Dolby Atmos signalling",
+        if every { Status::Pass } else { Status::Warn },
+        if every {
+            format!("every access unit carries the JOC flag (complexity index {j})")
+        } else {
+            format!("only {joc_frames} of {aus} access units carry the JOC flag")
+        },
+    );
+}
 
+/// The pass/fail checks, one line each.
+fn report_checks(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, eac3: bool) {
+    let verdict = |ok: bool, bad: Status| if ok { Status::Pass } else { bad };
     c.check(
         "Sync words",
-        if resync == 0 { Status::Pass } else { Status::Fail },
-        if resync == 0 {
+        verdict(t.resyncs == 0, Status::Fail),
+        if t.resyncs == 0 {
             "every frame starts where the previous one ends".to_string()
         } else {
-            format!("sync was lost {resync} time(s), {extra_bytes} bytes skipped")
+            format!("sync was lost {} time(s), {} bytes skipped", t.resyncs, t.skipped_bytes)
         },
     );
     c.check(
         "Frame headers",
-        if bad_hdr == 0 { Status::Pass } else { Status::Fail },
-        if bad_hdr == 0 {
+        verdict(t.bad_headers == 0, Status::Fail),
+        if t.bad_headers == 0 {
             "all headers hold legal values".to_string()
         } else {
-            format!("{bad_hdr} invalid header(s)")
+            format!("{} invalid header(s)", t.bad_headers)
         },
     );
+    let frames = t.frames;
+    let crc_detail = |bad: u64| {
+        if bad == 0 {
+            format!("{frames} of {frames} frames")
+        } else {
+            format!("{bad} of {frames} frames fail")
+        }
+    };
     if !eac3 {
         c.check(
             "CRC1 (first 5/8 of each frame)",
-            if bad_crc1 == 0 { Status::Pass } else { Status::Fail },
-            if bad_crc1 == 0 {
-                format!("{frames} of {frames} frames")
-            } else {
-                format!("{bad_crc1} of {frames} frames fail")
-            },
+            verdict(t.bad_crc1 == 0, Status::Fail),
+            crc_detail(t.bad_crc1),
         );
     }
     c.check(
         "CRC (whole frame)",
-        if bad_crc2 == 0 { Status::Pass } else { Status::Fail },
-        if bad_crc2 == 0 {
-            format!("{frames} of {frames} frames")
-        } else {
-            format!("{bad_crc2} of {frames} frames fail")
-        },
+        verdict(t.bad_crc2 == 0, Status::Fail),
+        crc_detail(t.bad_crc2),
     );
     c.check(
         "Complete file",
-        if gaps == 0 { Status::Pass } else { Status::Fail },
-        if gaps == 0 {
+        verdict(t.truncated == 0, Status::Fail),
+        if t.truncated == 0 {
             "the file ends on a frame boundary".to_string()
         } else {
             "the last frame is truncated".to_string()
         },
     );
-    let steady = changes == 0;
     c.check(
         "Stable parameters",
-        if steady { Status::Pass } else { Status::Warn },
-        if steady {
+        verdict(t.param_changes == 0, Status::Warn),
+        if t.param_changes == 0 {
             "rate, channel mode and bit rate never change".to_string()
         } else {
-            format!("parameters change {changes} time(s)")
+            format!("parameters change {} time(s)", t.param_changes)
         },
     );
     if !eac3 {
-        let cbr = size_changes == 0 || h0.rate == 44_100;
+        let cbr = t.size_changes == 0 || h0.rate == 44_100;
         c.check(
             "Constant bit rate",
-            if cbr { Status::Pass } else { Status::Warn },
+            verdict(cbr, Status::Warn),
             if cbr {
                 format!(
                     "every frame is {} bytes{}",
-                    sizes.first().copied().unwrap_or(0),
+                    p.frame_bytes.first().copied().unwrap_or(0),
                     if h0.rate == 44_100 {
                         " (44.1 kHz alternates by one word)"
                     } else {
@@ -332,18 +355,10 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
                     }
                 )
             } else {
-                format!("the frame size changes {size_changes} time(s)")
+                format!("the frame size changes {} time(s)", t.size_changes)
             },
         );
     }
-    if c.report.deep {
-        c.section("First frame header", dump);
-        if eac3 {
-            let streams: std::collections::BTreeSet<u8> = std::collections::BTreeSet::new();
-            let _ = streams;
-        }
-    }
-    p
 }
 
 fn parse_a(h: &[u8]) -> (Header, usize, bool) {
