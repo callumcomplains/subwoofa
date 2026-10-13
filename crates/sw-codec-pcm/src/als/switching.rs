@@ -37,7 +37,7 @@ fn best(
 ) -> (usize, Vec<Blocks>, Vec<usize>) {
     let whole = code(start, len);
     let whole_size = size(&whole);
-    if node > LAST_SPLITTABLE || len % 2 != 0 || len < MIN_SPLIT_LEN {
+    if node > LAST_SPLITTABLE || !len.is_multiple_of(2) || len < MIN_SPLIT_LEN {
         return (whole_size, vec![whole], Vec::new());
     }
     let half = len / 2;

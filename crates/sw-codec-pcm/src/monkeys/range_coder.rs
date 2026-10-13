@@ -67,7 +67,7 @@ impl RangeEncoder {
         if self.low < 0xFFu64 << BYTE_SHIFT || carry != 0 {
             self.out.push(self.waiting.wrapping_add(carry));
             let filler = 0xFFu8.wrapping_add(carry);
-            self.out.extend(std::iter::repeat(filler).take(self.ff_run as usize));
+            self.out.extend(std::iter::repeat_n(filler, self.ff_run as usize));
             self.ff_run = 0;
             self.waiting = (self.low >> BYTE_SHIFT) as u8;
         } else {

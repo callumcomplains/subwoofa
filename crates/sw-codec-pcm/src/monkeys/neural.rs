@@ -159,7 +159,7 @@ mod tests {
     fn filter_round_trip() {
         let spec = Spec { order: 16, shift: 11 };
         let signal: Vec<i32> = (0..30_000)
-            .map(|n| ((n as f64 * 0.02).sin() * 12_000.0) as i32 + (n * 31 % 7) as i32)
+            .map(|n| ((n as f64 * 0.02).sin() * 12_000.0) as i32 + (n * 31 % 7))
             .collect();
         let mut f = Filter::new(spec);
         let inputs: Vec<i32> = signal.iter().map(|&s| f.encode(s)).collect();

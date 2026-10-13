@@ -54,7 +54,7 @@ fn signal(kind: Kind, ch: usize, n: usize) -> Vec<i32> {
                 }
                 Kind::PureTone => {
                     let noise = (white * 2.0 * 8_388_608.0 / 40.0) / 8_388_608.0;
-                    ((2.0 * std::f64::consts::PI * (200.0 + 90.0 * ch as f64) * t).sin() * 0.2384 + noise)
+                    (2.0 * std::f64::consts::PI * (200.0 + 90.0 * ch as f64) * t).sin() * 0.2384 + noise
                 }
                 Kind::SixteenBit => {
                     let s = ((2.0 * std::f64::consts::PI * (300.0 + 40.0 * ch as f64) * t).sin() * 0.4 + lp) * 32768.0;

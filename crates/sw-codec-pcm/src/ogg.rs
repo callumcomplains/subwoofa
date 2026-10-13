@@ -88,14 +88,14 @@ impl<W: Write> PacketWriter<W> {
             let segments_needed = remaining / 255 + 1; // the last segment is shorter than 255 (maybe empty)
             let room = 255 - self.lacing.len();
             if segments_needed <= room {
-                self.lacing.extend(std::iter::repeat(255u8).take(remaining / 255));
+                self.lacing.extend(std::iter::repeat_n(255u8, remaining / 255));
                 self.lacing.push((remaining % 255) as u8);
                 self.body.extend_from_slice(&data[offset..]);
                 self.granule = Some(granule);
                 return Ok(());
             }
             // the packet does not fit: fill this page with 255-byte segments and carry on in the next one
-            self.lacing.extend(std::iter::repeat(255u8).take(room));
+            self.lacing.extend(std::iter::repeat_n(255u8, room));
             self.body.extend_from_slice(&data[offset..offset + room * 255]);
             offset += room * 255;
             self.flush(true)?;

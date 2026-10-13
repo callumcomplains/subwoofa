@@ -305,7 +305,7 @@ fn wav(w: &mut Window, c: &mut Collector) -> Facts {
                 }
                 if block_align > 0 {
                     facts.frames = Some(size.min(len - body) / block_align as u64);
-                    if size % block_align as u64 != 0 {
+                    if !size.is_multiple_of(block_align as u64) {
                         c.check(
                             "Whole frames",
                             Status::Warn,
@@ -1257,7 +1257,7 @@ fn dff(w: &mut Window, c: &mut Collector) -> Facts {
     }
     c.check(
         "Audio data",
-        if data_bytes > 0 && facts.channels > 0 && data_bytes % facts.channels as u64 == 0 {
+        if data_bytes > 0 && facts.channels > 0 && data_bytes.is_multiple_of(facts.channels as u64) {
             Status::Pass
         } else {
             Status::Fail

@@ -1104,7 +1104,7 @@ impl Encoder {
         let budget = frame_bits.saturating_sub(side + 18);
         let (mut lo, mut hi) = (0u32, 1023u32);
         while lo < hi {
-            let mid = (lo + hi + 1) / 2;
+            let mid = (lo + hi).div_ceil(2);
             if self.mantissa_bits(&chans, mid) <= budget {
                 lo = mid;
             } else {
@@ -1727,7 +1727,7 @@ mod tests {
             0,
             "crc2 over the whole frame must leave a zero residual"
         );
-        let f58 = (((f.len() >> 2) + (f.len() >> 4)) << 1) as usize;
+        let f58 = (((f.len() >> 2) + (f.len() >> 4)) << 1);
         assert_eq!(
             crc16(&f[2..f58]),
             0,

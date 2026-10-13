@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn mono_round_trip() {
         let signal: Vec<i32> = (0..20_000)
-            .map(|n| ((n as f64 * 0.05).sin() * 9000.0) as i32 + (n * 7919 % 13) as i32)
+            .map(|n| ((n as f64 * 0.05).sin() * 9000.0) as i32 + (n * 7919 % 13))
             .collect();
         let mut chain = Chain::new(&preset(false), false);
         let residuals: Vec<i32> = signal.iter().map(|&s| chain.mono(s)).collect();

@@ -192,7 +192,7 @@ pub(crate) fn encode(signal: &[i32], start: usize, joint: bool, cfg: Settings) -
     let analysis = lpc::analyse(own, cfg.max_order.min(order_limit(own.len(), cfg.max_order)));
     for order in order_candidates(&analysis, own.len(), cfg.candidates) {
         let bytes = encode_with_order(signal, start, joint, cfg, order, &analysis);
-        if best.as_ref().map_or(true, |b| bytes.len() < b.len()) {
+        if best.as_ref().is_none_or(|b| bytes.len() < b.len()) {
             best = Some(bytes);
         }
     }
@@ -278,7 +278,7 @@ fn best_partition(residual: &[i32], cfg: Settings) -> (usize, Vec<u32>) {
     let max_k = cfg.max_rice();
     let (k, whole_bits) = best_param(residual, max_k);
     let whole = (whole_bits + cfg.rice_field_bits() as u64, vec![k]);
-    if residual.len() % 4 != 0 || residual.len() < 32 {
+    if !residual.len().is_multiple_of(4) || residual.len() < 32 {
         return (1, whole.1);
     }
     let quarters: Vec<(u32, u64)> = residual

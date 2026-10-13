@@ -85,7 +85,7 @@ fn same_position(a: Channel, b: Channel) -> bool {
 /// Find the channel ID token in `stem` that equals `ch` and return (prefix, suffix) around it.
 fn split_around(stem: &str, ch: Channel) -> Option<(String, String)> {
     for (s, e) in tokens(stem) {
-        if Channel::from_id(&stem[s..e]).map_or(false, |c| same_position(c, ch)) {
+        if Channel::from_id(&stem[s..e]).is_some_and(|c| same_position(c, ch)) {
             return Some((strip_numbering(&stem[..s]), strip_numbering(&stem[e..])));
         }
     }

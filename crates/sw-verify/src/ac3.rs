@@ -182,7 +182,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
             sample_total += h.blocks as u64 * 256;
             p.frame_samples.push(h.blocks * 256);
         }
-        if sizes.last().map_or(false, |l| *l != fsize as u32) {
+        if sizes.last().is_some_and(|l| *l != fsize as u32) {
             size_changes += 1;
         }
         sizes.push(fsize as u32);

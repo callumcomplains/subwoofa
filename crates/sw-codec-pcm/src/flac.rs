@@ -29,7 +29,7 @@ struct Search {
 
 impl Search {
     fn for_effort(effort: sw_core::Effort) -> Search {
-        let search = match effort {
+        match effort {
             sw_core::Effort::Best => Search {
                 lpc_orders: &[2, 4, 8, 12],
                 fixed_max: 4,
@@ -48,8 +48,7 @@ impl Search {
                 max_partition: 5,
                 all_stereo: false,
             },
-        };
-        search
+        }
     }
 
     /// Highest order the Levinson-Durbin recursion has to reach.
@@ -117,7 +116,7 @@ fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize, max_par
     let mut finest = 0;
     for order in 1..=max_partition {
         let parts = 1usize << order;
-        if block_len % parts != 0 || block_len / parts <= predictor_order {
+        if !block_len.is_multiple_of(parts) || block_len / parts <= predictor_order {
             break;
         }
         finest = order;
@@ -178,7 +177,7 @@ fn rice_code(residual: &[i32], predictor_order: usize, block_len: usize, max_par
         }
         let wide = parameters.iter().any(|&k| k > 14);
         let bits = 2 + 4 + parts * (4 + usize::from(wide)) + payload;
-        if best.as_ref().map_or(true, |b| bits < b.bits) {
+        if best.as_ref().is_none_or(|b| bits < b.bits) {
             best = Some(RiceCoding {
                 partition_order: order,
                 parameters,
@@ -918,7 +917,7 @@ mod tests {
 
     #[test]
     fn rice_roundtrip_size() {
-        let residual: Vec<i32> = (0..256).map(|i| ((i * 37) % 11) as i32 - 5).collect();
+        let residual: Vec<i32> = (0..256).map(|i| ((i * 37) % 11) - 5).collect();
         let coding = rice_code(&residual, 0, 256, 8);
         let mut w = BitWriter::default();
         write_rice(&mut w, &residual, 0, 256, &coding);

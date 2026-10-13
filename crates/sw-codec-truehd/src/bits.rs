@@ -8,6 +8,12 @@ pub struct BitWriter {
     nacc: u32,
 }
 
+impl Default for BitWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BitWriter {
     pub fn new() -> Self {
         BitWriter {
@@ -186,7 +192,7 @@ mod tests {
     #[test]
     fn parity_and_checksums_are_stable() {
         assert_eq!(parity(&[1, 2, 4]), 7);
-        assert_eq!(checksum8(&[0x00]), 0x3c ^ 0x00 ^ 0x00 | 0); // single byte: crc over empty = init, ^ byte
+        assert_eq!(checksum8(&[0x00]), 0x3c); // single byte: crc over empty = init, ^ byte
         let h = [0u8; 26];
         let c = major_sync_checksum(&h);
         assert_eq!(c, 0);

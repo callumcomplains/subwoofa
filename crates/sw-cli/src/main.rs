@@ -780,7 +780,7 @@ fn run_command(cmd: Cmd) -> Result<(), String> {
                         start_secs: start.unwrap_or(0.0),
                         duration_secs: duration,
                         output: &output,
-                        container: output.extension().map_or(false, |e| e.eq_ignore_ascii_case("dtshd")),
+                        container: output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd")),
                         x96: core_96_24,
                         bitstream: bitstream.clone(),
                         effort,

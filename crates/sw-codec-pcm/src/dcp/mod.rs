@@ -166,7 +166,7 @@ impl DcpWriter {
         }
         let (num, den) = options.frame_rate;
         let per_frame = params.rate as u64 * den as u64;
-        if per_frame % num as u64 != 0 {
+        if !per_frame.is_multiple_of(num as u64) {
             return Err(bad(format!(
                 "{} Hz does not divide into whole samples per {}/{} fps frame",
                 params.rate, num, den
@@ -574,6 +574,8 @@ mod tests {
     #[test]
     fn a_frame_holds_one_picture_frame_of_audio() {
         assert_eq!(48_000 / 24, 2000);
-        assert!(FRAME_RATES.iter().all(|&(n, d)| (48_000u64 * d as u64) % n as u64 == 0));
+        assert!(FRAME_RATES
+            .iter()
+            .all(|&(n, d)| (48_000u64 * d as u64).is_multiple_of(n as u64)));
     }
 }

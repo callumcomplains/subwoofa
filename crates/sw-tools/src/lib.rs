@@ -994,7 +994,7 @@ pub fn timecode_position(code: u8, h: u32, m: u32, s: u32, f: u32) -> (u32, u32)
 /// Parse `hh:mm:ss:ff` (also with semicolons).
 pub fn parse_timecode(text: &str) -> Option<(u32, u32, u32, u32)> {
     let parts: Vec<u32> = text
-        .split(|c| c == ':' || c == ';')
+        .split([':', ';'])
         .map(|p| p.trim().parse().ok())
         .collect::<Option<_>>()?;
     (parts.len() == 4).then(|| (parts[0], parts[1], parts[2], parts[3]))
@@ -1135,7 +1135,7 @@ pub fn add_silence(input: &Path, out: &Path, head_secs: f64, tail_secs: f64) -> 
     }
     let mut sizes: Vec<u32> = vec![silent.len() as u32; nh];
     sizes.extend(s.frames.iter().map(|f| f.len));
-    sizes.extend(std::iter::repeat(silent.len() as u32).take(nt));
+    sizes.extend(std::iter::repeat_n(silent.len() as u32, nt));
     write_trailer(&mut w, &s.trailer, &sizes)?;
     w.flush()?;
     Ok((nh, nt))

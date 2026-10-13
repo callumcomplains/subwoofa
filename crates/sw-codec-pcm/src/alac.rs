@@ -321,7 +321,7 @@ fn best_prediction(samples: &[i32], bits: u32, orders: &[usize]) -> Predicted {
         let mut w = BitWriter::default();
         entropy_code(&mut w, &residual, bits);
         let total = w.bytes.len() * 8 + order * 16;
-        if best.as_ref().map_or(true, |b| total < b.bits) {
+        if best.as_ref().is_none_or(|b| total < b.bits) {
             best = Some(Predicted {
                 coefficients,
                 residual,
@@ -454,7 +454,7 @@ fn write_element(
             } else {
                 roughness(&l) + roughness(&r)
             };
-            if best.as_ref().map_or(true, |b| cost < b.0) {
+            if best.as_ref().is_none_or(|b| cost < b.0) {
                 best = Some((cost, s, vec![l, r]));
             }
         }
@@ -691,7 +691,7 @@ mod tests {
     fn predictor_residual_is_what_the_decoder_undoes() {
         // decode the residual with the decoder's rule and compare with the input
         let samples: Vec<i32> = (0..500)
-            .map(|i| ((i as f64 * 0.07).sin() * 9000.0) as i32 + (i * 7 % 13) as i32)
+            .map(|i| ((i as f64 * 0.07).sin() * 9000.0) as i32 + (i * 7 % 13))
             .collect();
         let coefficients = fit_coefficients(&samples, 8).unwrap();
         let residual = predict(&samples, &coefficients, 17);

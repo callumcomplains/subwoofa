@@ -516,7 +516,7 @@ impl Stats {
             );
         }
         if self.longest_zero as f64 / r > 1.0
-            && self.first_sound.map_or(false, |f| self.longest_zero_at > f)
+            && self.first_sound.is_some_and(|f| self.longest_zero_at > f)
             && self.longest_zero_at + self.longest_zero < self.last_sound
         {
             c.check(
@@ -645,7 +645,7 @@ fn core_comparison(path: &Path, ffmpeg: &Path, p: &Probe, channels: usize, c: &m
 // the commercial verifier
 
 fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &mut Collector) {
-    if !probe.map_or(false, |p| p.dts) {
+    if !probe.is_some_and(|p| p.dts) {
         return;
     }
     let tool = opt.reference_verifier.clone().or_else(crate::mas_verifier);
@@ -801,31 +801,6 @@ impl Md5 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn md5_of_known_strings() {
-        let mut m = Md5::new();
-        m.update(b"abc");
-        assert_eq!(m.finish(), "900150983cd24fb0d6963f7d28e17f72");
-        let mut m = Md5::new();
-        m.update(b"");
-        assert_eq!(m.finish(), "d41d8cd98f00b204e9800998ecf8427e");
-    }
-
-    #[test]
-    fn layout_names_give_channel_counts() {
-        assert_eq!(channels_of("5.1(side)"), Some(6));
-        assert_eq!(channels_of("stereo"), Some(2));
-        assert_eq!(channels_of("22.2"), Some(24));
-        assert_eq!(channels_of("7.1.4"), Some(12));
-        assert_eq!(channels_of("9.1.6"), Some(16));
-        assert_eq!(channels_of("7 channels"), Some(7));
-    }
-}
-
 /// Copies the stream data of a `.dtshd` file (or a bare stream with that name) to a temporary raw `.dts` file.
 fn extract_stream(path: &Path) -> Option<PathBuf> {
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -862,4 +837,29 @@ fn extract_stream(path: &Path) -> Option<PathBuf> {
         pos += 16 + size;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn md5_of_known_strings() {
+        let mut m = Md5::new();
+        m.update(b"abc");
+        assert_eq!(m.finish(), "900150983cd24fb0d6963f7d28e17f72");
+        let mut m = Md5::new();
+        m.update(b"");
+        assert_eq!(m.finish(), "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    #[test]
+    fn layout_names_give_channel_counts() {
+        assert_eq!(channels_of("5.1(side)"), Some(6));
+        assert_eq!(channels_of("stereo"), Some(2));
+        assert_eq!(channels_of("22.2"), Some(24));
+        assert_eq!(channels_of("7.1.4"), Some(12));
+        assert_eq!(channels_of("9.1.6"), Some(16));
+        assert_eq!(channels_of("7 channels"), Some(7));
+    }
 }

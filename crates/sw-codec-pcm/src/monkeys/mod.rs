@@ -192,7 +192,7 @@ fn encode_frame(channels: &[Vec<i32>], bits: u32) -> Vec<u8> {
 
     let mut bytes = ((!crc) >> 1).to_be_bytes().to_vec();
     bytes.extend(enc.finish());
-    while bytes.len() % 4 != 0 {
+    while !bytes.len().is_multiple_of(4) {
         bytes.push(0);
     }
     for word in bytes.chunks_exact_mut(4) {

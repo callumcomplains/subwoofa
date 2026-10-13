@@ -902,7 +902,7 @@ impl Encoder {
             // parity nibble: the XOR of all nibbles of the header and substream headers must be 0xF
             let mut x = parity(&head) ^ parity(&sub_headers);
             x = (x >> 4) ^ (x & 0xF);
-            head[0] |= ((x ^ 0xF) as u8) << 4;
+            head[0] |= (x ^ 0xF) << 4;
             out.extend_from_slice(&head);
             out.extend_from_slice(&body);
             out.extend_from_slice(&sub_headers);
@@ -1584,7 +1584,7 @@ fn best_coding(v: &[i32], quant: u8) -> Coding {
         }
         for cb in 1..=3u8 {
             if let Some(b) = cost_of(v, cb, l) {
-                if best.map_or(true, |c| b < c.bits) {
+                if best.is_none_or(|c| b < c.bits) {
                     best = Some(Coding {
                         codebook: cb,
                         lsb_bits: l,
@@ -2041,7 +2041,7 @@ mod tests {
     #[test]
     fn coding_choices_roundtrip_through_the_cost_model() {
         // a block of small values should prefer a Huffman codebook over raw coding
-        let v: Vec<i32> = (0..40).map(|i| ((i * 7) % 5) as i32 - 2).collect();
+        let v: Vec<i32> = (0..40).map(|i| ((i * 7) % 5) - 2).collect();
         let c = best_coding(&v, 0);
         assert!(c.bits < 40 * 4, "{c:?}");
         // digital silence costs nothing

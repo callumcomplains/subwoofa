@@ -479,7 +479,7 @@ pub fn encode_to_file(
         )
         .into());
     }
-    if req.es.map_or(false, |e| e.phase_shift || e.rear_minus_3db) {
+    if req.es.is_some_and(|e| e.phase_shift || e.rear_minus_3db) {
         return Err(Error::Unsupported(
             "the ES phase shift and the rear -3 dB trim are not available for DTS-HD High Resolution at 96 kHz".into(),
         )
@@ -554,10 +554,7 @@ pub fn encode_to_file(
         return Err(NativeError::Empty);
     }
     let n = enc.frame_samples();
-    let container = req
-        .output
-        .extension()
-        .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
     let codec_delay = 2048usize;
     // what the core carries: the 5.1 downmix of a 7.1 programme, or the core channels alone

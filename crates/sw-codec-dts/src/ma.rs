@@ -274,7 +274,7 @@ fn effective(inv: i32, code_index: usize) -> i32 {
 fn hierarchy(layout: &ChannelLayout, dm: &Downmix) -> Option<Plan> {
     use Channel::*;
     let n = layout.channels.len();
-    if n < 5 || n > 24 {
+    if !(5..=24).contains(&n) {
         return None;
     }
     let pos = |c: Channel| layout.channels.iter().position(|x| *x == c);
@@ -730,8 +730,8 @@ impl MaEncoder {
                 secondary: false,
                 extras: crate::exss::ExssExtras {
                     min_header: 0,
-                    emb_5_1: self.cfg.map.hier.as_ref().map_or(false, |h| h.extras),
-                    emb_stereo: self.cfg.map.hier.as_ref().map_or(false, |h| h.stereo),
+                    emb_5_1: self.cfg.map.hier.as_ref().is_some_and(|h| h.extras),
+                    emb_stereo: self.cfg.map.hier.as_ref().is_some_and(|h| h.stereo),
                     wide_remap: self.cfg.wide_remap,
                     repr_type: self.cfg.repr_type,
                     ..Default::default()

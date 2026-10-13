@@ -239,7 +239,7 @@ pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_lef
                         let b = (tv * uu - tu * uv) / det;
                         gain += a * tu + b * tv;
                     }
-                    if best.map_or(true, |(g, _)| gain > g) {
+                    if best.is_none_or(|(g, _)| gain > g) {
                         best = Some((gain, fp));
                     }
                 }
@@ -273,7 +273,7 @@ pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_lef
                     continue;
                 }
                 let a = tp / pp;
-                if bestp.map_or(true, |(g, _, _)| tp * tp / pp > g) {
+                if bestp.is_none_or(|(g, _, _)| tp * tp / pp > g) {
                     bestp = Some((tp * tp / pp, p, a));
                 }
             }

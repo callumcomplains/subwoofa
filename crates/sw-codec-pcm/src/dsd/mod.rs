@@ -39,9 +39,9 @@ impl ChannelChain {
     fn new(input_rate: u32, dsd_rate: u32, total_bits: usize) -> Result<ChannelChain, String> {
         let mut stages = Vec::new();
         // bring the source to the 44.1 kHz family
-        let (mut rate, edge_family) = if input_rate % BASE_RATE == 0 {
+        let (mut rate, edge_family) = if input_rate.is_multiple_of(BASE_RATE) {
             (input_rate as f64, input_rate as f64)
-        } else if input_rate % 48_000 == 0 {
+        } else if input_rate.is_multiple_of(48_000) {
             let target = input_rate as f64 * 147.0 / 160.0;
             stages.push(Resampler::new(
                 input_rate as f64,
@@ -162,7 +162,7 @@ impl DsdWriter {
     ) -> std::io::Result<DsdWriter> {
         let dsd_rate = BASE_RATE * multiplier;
         let total_bits =
-            (params.total_frames as u128 * dsd_rate as u128 + params.rate as u128 / 2) as u128 / params.rate as u128;
+            (params.total_frames as u128 * dsd_rate as u128 + params.rate as u128 / 2) / params.rate as u128;
         let total_bits = total_bits as usize;
         let chains: Result<Vec<ChannelChain>, String> = (0..params.channels())
             .map(|_| ChannelChain::new(params.rate, dsd_rate, total_bits))

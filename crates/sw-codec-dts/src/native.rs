@@ -140,7 +140,7 @@ pub fn encode_to_file(
         }
     }
     // channels that go into the core (a separate Cs is folded into the surrounds first)
-    let mix_cs = req.es.map_or(false, |e| e.mix_cs);
+    let mix_cs = req.es.is_some_and(|e| e.mix_cs);
     let core_idx: Vec<usize> = (0..req.layout.channels.len())
         .filter(|&i| !(mix_cs && req.layout.channels[i] == Channel::Cs))
         .collect();
@@ -151,7 +151,7 @@ pub fn encode_to_file(
         order: cmap.order.iter().map(|&i| core_idx[i]).collect(),
         lfe: cmap.lfe.map(|i| core_idx[i]),
     };
-    let xch = req.es.map_or(false, |e| e.xch);
+    let xch = req.es.is_some_and(|e| e.xch);
     let cs_slot = req
         .layout
         .channels
@@ -168,7 +168,7 @@ pub fn encode_to_file(
     let mix_delay = req.es.map_or(0, |e| e.delay());
     let rate = stems.sample_rate;
     let nch = map.order.len();
-    let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
+    let wav = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"));
     // A DTS CD packs the stream into 14-bit words (16-bit containers, so a player that does not know DTS plays
     // quiet noise): 1024-sample frames of 3584 bytes, 1234.8 kbit/s of stream in the 1411.2 kbit/s of the disc.
     let cd14 = wav && rate == 44_100 && matches!(req.bitrate_kbps, 1411 | 1234 | 1235);
@@ -187,7 +187,7 @@ pub fn encode_to_file(
         bitrate,
         dialnorm: req.dialnorm,
         pcm_bits: req.pcm_bits,
-        es: req.es.map_or(false, |e| e.flag),
+        es: req.es.is_some_and(|e| e.flag),
         xch,
         perfect: false,
         blocks,
@@ -213,7 +213,7 @@ pub fn encode_to_file(
             channels: nch + usize::from(map.lfe.is_some()) + usize::from(xch),
             bit_res: req.pcm_bits,
             spk_mask: crate::ma::map_layout(req.layout).exss_mask
-                & !(if req.es.map_or(false, |e| e.mix_cs && !e.xch) {
+                & !(if req.es.is_some_and(|e| e.mix_cs && !e.xch) {
                     crate::ma::exss_bit(sw_core::Channel::Cs)
                 } else {
                     0
@@ -240,11 +240,7 @@ pub fn encode_to_file(
         }
         h
     });
-    let container = hra.is_some()
-        && req
-            .output
-            .extension()
-            .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = hra.is_some() && req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
     // The decoder's filter bank delays its output. In a .dtshd file the stream starts with silence so the delay
     // comes to 1024 samples (what the commercial encoder does) and the file says so: decoders that honour the
     // field drop exactly that many samples and every source sample is kept. A raw stream has nowhere to say it,

@@ -18,7 +18,7 @@ pub fn direct(codes: &[u8; 8]) -> [f64; 8] {
     let mut c = [0f64; 8];
     for i in 0..8 {
         let rc = table(codes[i] as usize);
-        for j in 0..(i + 1) / 2 {
+        for j in 0..i.div_ceil(2) {
             let (t1, t2) = (c[j], c[i - j - 1]);
             c[j] = t1 + rc * t2;
             c[i - j - 1] = t2 + rc * t1;

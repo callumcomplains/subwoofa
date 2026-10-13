@@ -183,7 +183,7 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
     let mut pos = 0usize;
     let mut last_major_au = 0u64;
     while pos + 4 <= data.len() {
-        let words = (((data[pos] & 0x0F) as usize) << 8 | data[pos + 1] as usize) as usize;
+        let words = ((data[pos] & 0x0F) as usize) << 8 | data[pos + 1] as usize;
         let len = words * 2;
         if len < 4 || pos + len > data.len() {
             if pos + len > data.len() {

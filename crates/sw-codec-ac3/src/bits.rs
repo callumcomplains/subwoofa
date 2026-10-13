@@ -6,6 +6,12 @@ pub struct BitWriter {
     nacc: u32,
 }
 
+impl Default for BitWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BitWriter {
     pub fn new() -> Self {
         BitWriter {

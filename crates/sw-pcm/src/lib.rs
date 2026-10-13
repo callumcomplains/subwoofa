@@ -248,7 +248,7 @@ impl PcmReader {
         let (channels, frames, bits, sample_rate) = comm.ok_or_else(|| Error::Corrupt(name.clone()))?;
         let data_start = ssnd.ok_or_else(|| Error::Corrupt(name.clone()))?;
         // AIFF stores odd depths (e.g. 20) in the next whole byte count.
-        let stored = ((bits + 7) / 8) * 8;
+        let stored = bits.div_ceil(8) * 8;
         check_depth(&name, stored, false)?;
         let frame_bytes = channels as usize * (stored as usize / 8);
         let info = PcmInfo {
@@ -560,7 +560,7 @@ fn resolve_sources(
                         layout.channel_count()
                     )));
                 }
-                if !multi.contains_key(&idx) {
+                if let std::collections::hash_map::Entry::Vacant(e) = multi.entry(idx) {
                     let info = &readers[idx].info;
                     let mask = info.channel_mask.or_else(|| default_mask(n));
                     let positional = || (0..n).collect::<Vec<usize>>();
@@ -580,7 +580,7 @@ fn resolve_sources(
                             return Err(Error::Mismatch(format!("{}: has no speaker mask", path.display())))
                         }
                     };
-                    multi.insert(idx, map);
+                    e.insert(map);
                 }
                 multi[&idx][i]
             }
@@ -616,7 +616,7 @@ pub fn suggest_layout(
     let mut fits: Vec<&'static ChannelLayout> = candidates
         .iter()
         .copied()
-        .filter(|l| l.channel_count() == n && (positional || mask.map_or(false, |m| map_channel_mask(l, m).is_some())))
+        .filter(|l| l.channel_count() == n && (positional || mask.is_some_and(|m| map_channel_mask(l, m).is_some())))
         .collect();
     // the plain layouts before the ES matrix ones that list the same channels
     fits.sort_by_key(|l| l.id.contains("premixed") || l.id.contains("matrix"));

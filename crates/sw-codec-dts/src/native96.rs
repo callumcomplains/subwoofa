@@ -18,7 +18,7 @@ pub fn encode_to_file(
         return Err(crate::Error::Unsupported(format!("DTS 96/24 needs 88.2 or 96 kHz input, not {rate} Hz")).into());
     }
     // 6.x with a matrixed centre surround: the core is the 5.x downmix (Cs at -3 dB on both surrounds), flagged ES
-    let mix_cs = req.es.map_or(false, |e| e.mix_cs && !e.xch) && req.layout.channels.contains(&sw_core::Channel::Cs);
+    let mix_cs = req.es.is_some_and(|e| e.mix_cs && !e.xch) && req.layout.channels.contains(&sw_core::Channel::Cs);
     let cs_src = req
         .layout
         .channels
@@ -40,7 +40,7 @@ pub fn encode_to_file(
         map_layout(req.layout)?
     };
     let nprim = map.order.len();
-    let wav = req.output.extension().map_or(false, |e| e.eq_ignore_ascii_case("wav"));
+    let wav = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"));
     // a DTS CD: 44.1 kHz core of 1024-sample frames, the stream packed into 14-bit words of a WAV file
     let cd = wav && rate == 88_200 && matches!(req.bitrate_kbps, 1411 | 1234 | 1235);
     let (core_rate, blocks) = if rate == 88_200 {
@@ -68,7 +68,7 @@ pub fn encode_to_file(
             x96_bytes,
             core_rate,
             blocks,
-            es: req.es.map_or(false, |e| e.flag),
+            es: req.es.is_some_and(|e| e.flag),
             aux: crate::ma::core_aux(&req.bitstream.downmix, req.layout, map.amode, map.lfe.is_some(), false),
         })
     };
@@ -104,11 +104,7 @@ pub fn encode_to_file(
         };
         enc.set_hra(crate::hra::HraStage::new(kbps, rate, n, 16, ex));
     }
-    let container = req.hra_kbps.is_some()
-        && req
-            .output
-            .extension()
-            .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req.hra_kbps.is_some() && req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (bitrate * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
         let mut i = crate::dtshd::DtsHdInfo::new(

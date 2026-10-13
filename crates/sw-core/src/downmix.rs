@@ -245,73 +245,6 @@ impl SaturationCheck {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lay(id: &str) -> &'static ChannelLayout {
-        ChannelLayout::find(id).unwrap()
-    }
-
-    #[test]
-    fn stereo_downmix_of_51() {
-        let m = Matrix::lo_ro(lay("5.1"));
-        // L, R, C, LFE, Ls, Rs
-        let mut out = [0.0; 2];
-        m.apply(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &mut out);
-        assert!(
-            (out[0] - 1.0).abs() < 1e-6 && out[1] == 0.0,
-            "LFE must be dropped: {out:?}"
-        );
-        m.apply(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], &mut out);
-        assert!((out[0] - 0.7071).abs() < 1e-3 && (out[1] - 0.7071).abs() < 1e-3);
-    }
-
-    #[test]
-    fn worst_case_and_safe_trim() {
-        let m = Matrix::lo_ro(lay("5.1"));
-        // 1 + 0.707 + 0.707
-        assert!((m.worst_case_gain()[0] - 2.414).abs() < 1e-2);
-        let mut t = m.clone();
-        t.trim(m.safe_trim_db());
-        assert!(t.worst_case_gain().iter().all(|g| *g <= 1.0001));
-    }
-
-    #[test]
-    fn seven_one_to_51_folds_rears() {
-        let m = Matrix::to_51(lay("7.1-ls-rs-lsr-rsr"));
-        let ls = m.out_idx(Ls).unwrap();
-        // Lsr feeds Ls at -3 dB, Ls feeds Ls at 0 dB
-        assert_eq!(m.cells[ls][m.in_idx(Ls).unwrap()].gain_db, 0.0);
-        assert!((m.cells[ls][m.in_idx(Lsr).unwrap()].gain_db - M3).abs() < 1e-3);
-        // 5.1 passes through untouched
-        let id = Matrix::to_51(lay("5.1"));
-        assert!(id
-            .cells
-            .iter()
-            .enumerate()
-            .all(|(o, row)| row.iter().enumerate().all(|(i, c)| (c.gain_db == 0.0) == (o == i))));
-    }
-
-    #[test]
-    fn saturation_needs_three_in_a_row() {
-        let mut s = SaturationCheck::new(1);
-        s.feed(&[1.0, 1.0, 0.2, 1.0, 1.0, 1.0, 1.0, 0.0]);
-        assert_eq!(s.event_count, 1, "only the 4-run counts, once");
-        assert_eq!(s.events[0].frame, 5);
-    }
-
-    #[test]
-    fn phase_invert() {
-        let mut m = Matrix::empty(&[L], &[L]);
-        m.set(L, L, 0.0);
-        m.cells[0][0].invert = true;
-        let mut out = [0.0];
-        m.apply(&[0.5], &mut out);
-        assert_eq!(out[0], -0.5);
-    }
-}
-
 /// Nominal speaker position: azimuth in degrees (positive to the left), elevation in degrees.
 fn position(ch: Channel, wide_is_front_centre: bool) -> Option<(f32, f32)> {
     Some(match ch {
@@ -408,5 +341,72 @@ impl Matrix {
             }
         }
         m
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lay(id: &str) -> &'static ChannelLayout {
+        ChannelLayout::find(id).unwrap()
+    }
+
+    #[test]
+    fn stereo_downmix_of_51() {
+        let m = Matrix::lo_ro(lay("5.1"));
+        // L, R, C, LFE, Ls, Rs
+        let mut out = [0.0; 2];
+        m.apply(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &mut out);
+        assert!(
+            (out[0] - 1.0).abs() < 1e-6 && out[1] == 0.0,
+            "LFE must be dropped: {out:?}"
+        );
+        m.apply(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], &mut out);
+        assert!((out[0] - 0.7071).abs() < 1e-3 && (out[1] - 0.7071).abs() < 1e-3);
+    }
+
+    #[test]
+    fn worst_case_and_safe_trim() {
+        let m = Matrix::lo_ro(lay("5.1"));
+        // 1 + 0.707 + 0.707
+        assert!((m.worst_case_gain()[0] - 2.414).abs() < 1e-2);
+        let mut t = m.clone();
+        t.trim(m.safe_trim_db());
+        assert!(t.worst_case_gain().iter().all(|g| *g <= 1.0001));
+    }
+
+    #[test]
+    fn seven_one_to_51_folds_rears() {
+        let m = Matrix::to_51(lay("7.1-ls-rs-lsr-rsr"));
+        let ls = m.out_idx(Ls).unwrap();
+        // Lsr feeds Ls at -3 dB, Ls feeds Ls at 0 dB
+        assert_eq!(m.cells[ls][m.in_idx(Ls).unwrap()].gain_db, 0.0);
+        assert!((m.cells[ls][m.in_idx(Lsr).unwrap()].gain_db - M3).abs() < 1e-3);
+        // 5.1 passes through untouched
+        let id = Matrix::to_51(lay("5.1"));
+        assert!(id
+            .cells
+            .iter()
+            .enumerate()
+            .all(|(o, row)| row.iter().enumerate().all(|(i, c)| (c.gain_db == 0.0) == (o == i))));
+    }
+
+    #[test]
+    fn saturation_needs_three_in_a_row() {
+        let mut s = SaturationCheck::new(1);
+        s.feed(&[1.0, 1.0, 0.2, 1.0, 1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(s.event_count, 1, "only the 4-run counts, once");
+        assert_eq!(s.events[0].frame, 5);
+    }
+
+    #[test]
+    fn phase_invert() {
+        let mut m = Matrix::empty(&[L], &[L]);
+        m.set(L, L, 0.0);
+        m.cells[0][0].invert = true;
+        let mut out = [0.0];
+        m.apply(&[0.5], &mut out);
+        assert_eq!(out[0], -0.5);
     }
 }

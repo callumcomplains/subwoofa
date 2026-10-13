@@ -225,10 +225,7 @@ pub fn encode_to_file(
     let (bits_num, bits_den) = (total_kbps as u64 * 1000 * n as u64, rate as u64);
     let upto = |k: u64| (k * bits_num) / (bits_den * 8);
 
-    let container = req
-        .output
-        .extension()
-        .map_or(false, |e| e.eq_ignore_ascii_case("dtshd"));
+    let container = req.output.extension().is_some_and(|e| e.eq_ignore_ascii_case("dtshd"));
     let core_payload = (1509u32 * 1000 * 512 / 48_000 / 8) & !3;
     let info = container.then(|| {
         let mut i =

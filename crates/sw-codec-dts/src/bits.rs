@@ -39,7 +39,7 @@ impl BitWriter {
 
     /// Pad with zero bits up to a multiple of `bits`.
     pub fn align(&mut self, bits: usize) {
-        while self.bit_len() % bits != 0 {
+        while !self.bit_len().is_multiple_of(bits) {
             self.put(0, 1);
         }
     }

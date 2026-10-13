@@ -94,7 +94,7 @@ fn lattice_to_direct(rc: &[i32]) -> Vec<i32> {
     let mut coeff = vec![0i32; order];
     for j in 0..order {
         let r = rc[j];
-        for k in 0..(j + 1) / 2 {
+        for k in 0..j.div_ceil(2) {
             let t1 = coeff[k];
             let t2 = coeff[j - k - 1];
             coeff[k] = t1.wrapping_add(mul16(r, t2));
@@ -426,7 +426,7 @@ fn hybrid_code(u: &[u32], posbits: u32, nabits: u32) -> Option<(Code, u64)> {
         for k in 0..=24u32 {
             let taken: u64 = iso.iter().map(|&i| (u[i] >> k) as u64).sum();
             let bits = (n - c) as u64 * (k as u64 + 1) + (sums[k as usize] - taken) + fixed;
-            if best.map_or(true, |b| bits < b.1) {
+            if best.is_none_or(|b| bits < b.1) {
                 best = Some((Code::Hybrid { k, l, c: c as u32 }, bits));
             }
         }
@@ -569,7 +569,7 @@ impl XllEncoder {
         let max_order = self.max_order.min(n / 8);
         let mut best: Option<(u64, ChannelPlan)> = None;
         let mut consider = |cost: u64, plan: ChannelPlan| {
-            if best.as_ref().map_or(true, |b| cost < b.0) {
+            if best.as_ref().is_none_or(|b| cost < b.0) {
                 best = Some((cost, plan));
             }
         };
@@ -725,7 +725,7 @@ impl XllEncoder {
                 .map(|sp| (0..sp.bands.len()).map(|b| self.set_segments(sp, b, nseg)).collect())
                 .collect();
             let frame = self.assemble(&set_plans, &segs, nseg);
-            if best_frame.as_ref().map_or(true, |f| frame.len() < f.len()) {
+            if best_frame.as_ref().is_none_or(|f| frame.len() < f.len()) {
                 best_frame = Some(frame);
             }
         }

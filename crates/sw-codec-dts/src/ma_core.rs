@@ -243,8 +243,8 @@ impl MaCoreEncoder {
             secondary: false,
             extras: crate::exss::ExssExtras {
                 min_header: 32,
-                emb_5_1: xmap.hier.as_ref().map_or(false, |h| h.extras),
-                emb_stereo: xmap.hier.as_ref().map_or(false, |h| h.stereo),
+                emb_5_1: xmap.hier.as_ref().is_some_and(|h| h.extras),
+                emb_stereo: xmap.hier.as_ref().is_some_and(|h| h.stereo),
                 wide_remap: cfg.wide_remap,
                 repr_type: (cfg.layout.kind == sw_core::layout::LayoutKind::LtRt).then_some(2),
                 ..Default::default()
@@ -281,7 +281,7 @@ impl MaCoreEncoder {
             core,
             exss,
             buf: vec![Vec::new(); nch],
-            cbuf: if xmap.hier.as_ref().map_or(false, |h| h.stereo) {
+            cbuf: if xmap.hier.as_ref().is_some_and(|h| h.stereo) {
                 vec![Vec::new(); nch]
             } else {
                 Vec::new()
@@ -567,8 +567,7 @@ impl MaCoreEncoder {
             let core0: Vec<Vec<i32>> = self
                 .xll_to_core
                 .iter()
-                .enumerate()
-                .map(|(_, slot)| match *slot {
+                .map(|slot| match *slot {
                     None => vec![0; half],
                     Some(slot) => {
                         let c = &self.core.last_core_pcm[slot];

@@ -72,7 +72,7 @@ fn codes_of(table: &[(u8, u8)], symbols: usize) -> Vec<Option<(u32, u8)>> {
         }
         prev_len = len;
         let slot = &mut out[sym as usize];
-        if slot.map_or(true, |(_, l)| len < l) {
+        if slot.is_none_or(|(_, l)| len < l) {
             *slot = Some((code, len));
         }
     }
@@ -719,10 +719,10 @@ impl LbrEncoder {
         // the least error wins; on a tie the finer profile (earlier in the list)
         let mut best = None;
         for fit in fits.into_iter().flatten() {
-            if best.as_ref().map_or(
-                true,
-                |(be, _, _): &(f64, Vec<Vec<u8>>, Vec<(usize, [[f64; 8]; 3], [bool; 3])>)| fit.0 < *be,
-            ) {
+            if best
+                .as_ref()
+                .is_none_or(|(be, _, _): &(f64, Vec<Vec<u8>>, Vec<(usize, [[f64; 8]; 3], [bool; 3])>)| fit.0 < *be)
+            {
                 best = Some(fit);
             }
         }
@@ -756,7 +756,7 @@ impl LbrEncoder {
         if std::env::var_os("SW_LBR_NOLPC").is_none() {
             let only: Option<usize> = std::env::var("SW_LBR_LPC_CH").ok().and_then(|v| v.parse().ok());
             for (ch, plan) in plans.iter_mut().enumerate() {
-                if only.map_or(false, |o| o != ch) {
+                if only.is_some_and(|o| o != ch) {
                     plan.codes = [[[8; 8]; 2]; 3];
                     continue;
                 }
@@ -1042,7 +1042,7 @@ impl LbrEncoder {
                         syms.push(qi as i32);
                         dec.push(out);
                     }
-                    if best.as_ref().map_or(true, |b| e < b.0) {
+                    if best.as_ref().is_none_or(|b| e < b.0) {
                         best = Some((e, s, syms, dec[8..].to_vec()));
                     }
                 }
@@ -1397,7 +1397,7 @@ impl LbrEncoder {
                             self.put_g3(&mut w, &c2.grids, sg + 4);
                         }
                     }
-                } else if sb < 12 && sb >= 4 {
+                } else if (4..12).contains(&sb) {
                     self.put_g3(&mut w, &c2.grids, sb);
                 }
                 if !in_mono {

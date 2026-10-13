@@ -1571,10 +1571,10 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     let core_rate = core.as_ref().map(|k| k.rate).unwrap_or(0);
     let x96 = core
         .as_ref()
-        .map_or(false, |k| k.ext_present && (k.ext_id == 2 || k.ext_id == 3));
+        .is_some_and(|k| k.ext_present && (k.ext_id == 2 || k.ext_id == 3));
     let mut rate = if x96 { core_rate * 2 } else { core_rate };
     rate = rate.max(s.exss_first.as_ref().map_or(0, |e| e.max_rate));
-    if s.saw_core && aupr.map_or(false, |a| a.0 > rate && core_rate > 0 && a.0 % core_rate == 0) {
+    if s.saw_core && aupr.is_some_and(|a| a.0 > rate && core_rate > 0 && a.0 % core_rate == 0) {
         rate = aupr.unwrap().0;
     }
     if !s.saw_core {
@@ -1592,7 +1592,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     } else {
         1
     };
-    let unit_samples: Vec<u32> = if !s.saw_core && aupr.map_or(false, |a| a.2 > 0) {
+    let unit_samples: Vec<u32> = if !s.saw_core && aupr.is_some_and(|a| a.2 > 0) {
         s.frame_samples.iter().map(|_| aupr.unwrap().2).collect()
     } else if s.frame_samples.iter().all(|x| *x > 0) {
         s.frame_samples.iter().map(|x| x * ratio).collect()
@@ -1750,7 +1750,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
                 format!("{} invalid core header(s)", s.core_bad)
             },
         );
-        if s.core_hdr.as_ref().map_or(false, |k| k.crc_present) {
+        if s.core_hdr.as_ref().is_some_and(|k| k.crc_present) {
             c.check(
                 "Core header checksum",
                 if s.core_hcrc_bad == 0 {
