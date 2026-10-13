@@ -110,15 +110,40 @@ pub fn run(
                 }
             }
         }
-        done.report = {
-            let mut name = final_output.as_os_str().to_os_string();
-            name.push(".log");
-            let p = PathBuf::from(name);
-            p.is_file().then_some(p)
-        };
+        done.report = report_of(&final_output);
         done.output = final_output;
     }
     Ok(done)
+}
+
+/// The engine's own log of a finished job: the output's name with `.log` added, if it exists.
+fn report_of(output: &Path) -> Option<PathBuf> {
+    let mut name = output.as_os_str().to_os_string();
+    name.push(".log");
+    let path = PathBuf::from(name);
+    path.is_file().then_some(path)
+}
+
+/// The command line that runs the engine on a job file.
+fn engine_command(dee: &Path, profile: &Path, log: &Path) -> Command {
+    let mut cmd = Command::new(dee);
+    cmd.current_dir(dee.parent().unwrap_or(Path::new(".")))
+        .arg("--xml")
+        .arg(profile)
+        .arg("--progress")
+        .arg("--log-file")
+        .arg(log)
+        .arg("--stdout")
+        .arg("--verbose")
+        .arg("info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    cmd
 }
 
 pub(crate) fn run_inner(
@@ -134,29 +159,10 @@ pub(crate) fn run_inner(
     if let Some(d) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(d)?;
     }
-    let xml = profile_xml(job, &temp)?;
     let profile = work_dir.join("job.xml");
-    std::fs::write(&profile, xml)?;
-    let log = work_dir.join("dee.log");
-    let mut cmd = Command::new(dee);
-    cmd.current_dir(dee.parent().unwrap_or(Path::new(".")))
-        .arg("--xml")
-        .arg(&profile)
-        .arg("--progress")
-        .arg("--log-file")
-        .arg(&log)
-        .arg("--stdout")
-        .arg("--verbose")
-        .arg("info")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // no console window
-    }
+    std::fs::write(&profile, profile_xml(job, &temp)?)?;
     let started = std::time::Instant::now();
-    let mut child = cmd.spawn()?;
+    let mut child = engine_command(dee, &profile, &work_dir.join("dee.log")).spawn()?;
     let stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
     let (tx, rx) = mpsc::channel::<String>();
@@ -172,46 +178,7 @@ pub(crate) fn run_inner(
         let _ = stderr.read_to_string(&mut s);
         s
     });
-    let mut messages: Vec<String> = Vec::new();
-    let mut last = 0.0f32;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(Error::Canceled);
-        }
-        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(l) => {
-                if let Some(p) = parse_progress(&l) {
-                    if p > last {
-                        last = p;
-                        progress(p / 100.0);
-                    }
-                }
-                if let Some(m) = relevant(&l) {
-                    if l.contains("ERROR") || l.contains("WARNING") {
-                        messages.push(m.clone());
-                    }
-                    line(&m);
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Ok(Some(_)) = child.try_wait() {
-                    // drain what is left
-                    while let Ok(l) = rx.try_recv() {
-                        if let Some(m) = relevant(&l) {
-                            if l.contains("ERROR") || l.contains("WARNING") {
-                                messages.push(m.clone());
-                            }
-                            line(&m);
-                        }
-                    }
-                    break;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
+    let mut messages = follow_output(&mut child, &rx, progress, line, cancel)?;
     let status = child.wait()?;
     let _ = reader.join();
     let err = err_thread.join().unwrap_or_default();
@@ -236,18 +203,62 @@ pub(crate) fn run_inner(
             messages: "DEE reported success but wrote no output file".into(),
         });
     }
-    let report = {
-        let mut name = job.output.as_os_str().to_os_string();
-        name.push(".log");
-        let p = PathBuf::from(name);
-        p.is_file().then_some(p)
-    };
     Ok(Finished {
         output: job.output.clone(),
-        report,
+        report: report_of(&job.output),
         seconds: started.elapsed().as_secs_f64(),
         messages,
     })
+}
+
+/// Reads the engine's output lines until it ends: reports progress, passes on the lines worth showing and returns
+/// the errors and warnings among them. Kills the engine when canceled.
+fn follow_output(
+    child: &mut std::process::Child,
+    lines: &mpsc::Receiver<String>,
+    progress: &mut dyn FnMut(f32),
+    line: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<Vec<String>, Error> {
+    let mut messages: Vec<String> = Vec::new();
+    let mut note = |l: &str| {
+        if let Some(m) = relevant(l) {
+            if l.contains("ERROR") || l.contains("WARNING") {
+                messages.push(m.clone());
+            }
+            line(&m);
+        }
+    };
+    let mut last = 0.0f32;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Canceled);
+        }
+        match lines.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(l) => {
+                if let Some(p) = parse_progress(&l) {
+                    if p > last {
+                        last = p;
+                        progress(p / 100.0);
+                    }
+                }
+                note(&l);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Ok(Some(_)) = child.try_wait() {
+                    // drain what is left
+                    while let Ok(l) = lines.try_recv() {
+                        note(&l);
+                    }
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(messages)
 }
 
 /// "Overall progress: 37.5." in a framework line.
