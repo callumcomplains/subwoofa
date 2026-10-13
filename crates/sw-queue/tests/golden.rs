@@ -82,6 +82,8 @@ struct Case {
     pcm_format: &'static str,
     speed: &'static str,
     ext: &'static str,
+    /// Master Audio: carry a stereo downmix as a channel set of its own.
+    embed_stereo: bool,
 }
 
 const fn case(name: &'static str, dest: &'static str, stream: &'static str, ext: &'static str) -> Case {
@@ -95,6 +97,7 @@ const fn case(name: &'static str, dest: &'static str, stream: &'static str, ext:
         pcm_format: "",
         speed: "best",
         ext,
+        embed_stereo: false,
     }
 }
 
@@ -198,6 +201,24 @@ fn cases() -> Vec<Case> {
             rate: 88_200,
             bitrate: Some(1411),
             ..c("dts-96-cd", "dts-music-disc", "dts-96-24", "wav")
+        },
+        Case {
+            layout: "7.1-side-rear",
+            embed_stereo: true,
+            ..c("dts-ma-7.1-stereo-set", "bluray-primary", "dtshd-ma", "dtshd")
+        },
+        Case {
+            layout: "5.1",
+            embed_stereo: true,
+            ..c("dts-ma-5.1-stereo-set", "bluray-primary", "dtshd-ma", "dtshd")
+        },
+        Case {
+            layout: "7.1.4",
+            ..c("dts-ma-7.1.4", "bluray-primary", "dtshd-ma", "dtshd")
+        },
+        Case {
+            layout: "22.2",
+            ..c("dts-ma-22.2", "bluray-primary", "dtshd-ma", "dtshd")
         },
         c("dts-ma-5.1-best", "bluray-primary", "dtshd-ma", "dtshd"),
         Case {
@@ -313,13 +334,19 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-fn channels_for(layout: &str) -> &'static [&'static str] {
+fn channels_for(layout: &str) -> Vec<&'static str> {
     match layout {
-        "2.0" => &STEREO,
-        "3.0" => &THREE_ZERO,
-        "6.1-discrete" | "6.1-matrix" => &SIX_ONE,
-        "7.1-side-rear" => &SEVEN_ONE,
-        _ => &FIVE_ONE,
+        "2.0" => STEREO.to_vec(),
+        "3.0" => THREE_ZERO.to_vec(),
+        "6.1-discrete" | "6.1-matrix" => SIX_ONE.to_vec(),
+        "7.1-side-rear" => SEVEN_ONE.to_vec(),
+        "5.1" => FIVE_ONE.to_vec(),
+        other => sw_core::ChannelLayout::find(other)
+            .expect("a known layout")
+            .channels
+            .iter()
+            .map(|c| c.short())
+            .collect(),
     }
 }
 
@@ -356,7 +383,7 @@ fn run(case: &Case, dir: &Path) -> String {
         dialnorm: Some(27),
         start: None,
         duration: None,
-        inputs: stems(dir, case.rate, channels),
+        inputs: stems(dir, case.rate, &channels),
         output: output.to_string_lossy().into_owned(),
         unlocked: false,
         engine: "native".into(),
@@ -367,7 +394,11 @@ fn run(case: &Case, dir: &Path) -> String {
         source_layout: None,
         core_x96: false,
         pcm_format: case.pcm_format.into(),
-        bitstream: Default::default(),
+        bitstream: {
+            let mut bitstream = sw_core::BitstreamOptions::default();
+            bitstream.downmix.embed_stereo = case.embed_stereo;
+            bitstream
+        },
         speed: case.speed.into(),
         threads: 0,
         write_log: true,
@@ -406,6 +437,10 @@ const GOLDEN: &[(&str, &str)] = &[
     ("dts-hra-96k-7.1", "32410c495dc1903a97c4ff9839f8cdfa"),
     ("dts-cd", "4384934d5dea58aae8eb4e37d33882cc"),
     ("dts-96-cd", "8cc2ec7c8d7d4976cfb3436c9b72ac87"),
+    ("dts-ma-7.1-stereo-set", "a73e76c90d63eb1c097b276bab7a0ce2"),
+    ("dts-ma-5.1-stereo-set", "9962a26aacf0d3c9f21fb08bbeba568c"),
+    ("dts-ma-7.1.4", "64577809c48ceda094c51f1d53c3a5f1"),
+    ("dts-ma-22.2", "de4eb378c13b2feeb1abb921d6b36b5f"),
     ("dts-ma-5.1-best", "ef7cdcc2be694c909dee68a6b0c07309"),
     ("dts-ma-5.1-balanced", "1f746b56aaa1d060f1810379bf5f4e72"),
     ("dts-ma-5.1-fast", "c63299f84d2c3f44821fe8f042af4547"),
