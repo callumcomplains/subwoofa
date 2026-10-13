@@ -165,172 +165,225 @@ pub struct Search {
     pub max_tones: usize,
 }
 
+/// Energy of each coefficient line over all channels, weighted by what a tone would see.
+fn line_energy(grp: &Group, targets: &[Vec<[f64; HOP]>], line_hi: usize) -> Vec<f64> {
+    let mut spec = vec![0f64; HOP];
+    for t in targets {
+        for (r, row) in t.iter().enumerate() {
+            let w2 = grp.weights[r] * grp.weights[r];
+            for k in 0..line_hi {
+                spec[k] += w2 * row[k] * row[k];
+            }
+        }
+    }
+    spec
+}
+
+/// Median of the squares of `values`, which is the local noise floor.
+fn median(mut values: Vec<f64>) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+
+/// The strongest spectral peaks (at most five) that stand clearly above the median of their neighbourhood, with
+/// their ratio to it, best first.
+fn find_peaks(spec: &[f64], line_hi: usize) -> Vec<(usize, f64)> {
+    let floor_at = |k: usize| -> f64 {
+        let lo = k.saturating_sub(12);
+        let hi = (k + 13).min(line_hi);
+        median(spec[lo..hi].to_vec())
+    };
+    let mut peaks: Vec<(usize, f64)> = (1..line_hi.saturating_sub(1))
+        .filter(|&k| spec[k] >= spec[k - 1] && spec[k] > spec[k + 1] && spec[k] > 0.0)
+        .map(|k| (k, spec[k] / (floor_at(k) + 1e-9)))
+        .filter(|&(_, r)| r > 6.0)
+        .collect();
+    peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    peaks.truncate(5);
+    peaks
+}
+
+/// The inner products of the two basis patterns with each other.
+fn basis_gram(bu: &[[f64; HOP]], bv: &[[f64; HOP]], lo: usize, hi: usize) -> (f64, f64, f64) {
+    (dot(bu, bu, lo, hi), dot(bu, bv, lo, hi), dot(bv, bv, lo, hi))
+}
+
+/// The frequency (in the group's fine steps) near one of the `peaks` where a tone removes the most energy.
+fn best_frequency(
+    grp: &Group,
+    targets: &[Vec<[f64; HOP]>],
+    peaks: &[(usize, f64)],
+    tones: &[Tone],
+    cfg: &Search,
+    basis: (&mut [[f64; HOP]], &mut [[f64; HOP]]),
+) -> Option<u32> {
+    let (bu, bv) = basis;
+    let f = 1u32 << (5 - grp.g);
+    let cover = grp.coverage();
+    let mut best: Option<(f64, u32)> = None;
+    for &(k0, _) in peaks {
+        let lo = ((k0 as u32).saturating_sub(1) * f).max(1);
+        let hi = (((k0 as u32) + 1) * f).min(cover - 1);
+        for fp in lo..=hi {
+            if (fp >> (5 - grp.g)) as usize > cfg.max_line {
+                continue;
+            }
+            // a second tone within a line of one already chosen is the same partial refitted
+            if tones
+                .iter()
+                .any(|t| (t.fp as i64 - fp as i64).unsigned_abs() < f as u64)
+            {
+                continue;
+            }
+            let (_, lo_l, hi_l) = basis_into(grp, fp, bu, bv);
+            let (uu, uv, vv) = basis_gram(bu, bv, lo_l, hi_l);
+            let det = uu * vv - uv * uv;
+            if det.abs() > 1e-12 {
+                let mut gain = 0.0;
+                for t in targets {
+                    let (tu, tv) = (dot(t, bu, lo_l, hi_l), dot(t, bv, lo_l, hi_l));
+                    let a = (tu * vv - tv * uv) / det;
+                    let b = (tv * uu - tu * uv) / det;
+                    gain += a * tu + b * tv;
+                }
+                if best.is_none_or(|(g, _)| gain > g) {
+                    best = Some((gain, fp));
+                }
+            }
+            clear_basis(bu, bv, lo_l, hi_l);
+        }
+    }
+    best.map(|(_, fp)| fp)
+}
+
+/// Correlation of a phase angle with the target, and the energy of the tone at unit amplitude.
+fn phase_terms(theta: f64, (tu, tv): (f64, f64), (uu, uv, vv): (f64, f64, f64)) -> (f64, f64) {
+    let (c, s) = (theta.cos(), theta.sin());
+    (c * tu + s * tv, c * c * uu + 2.0 * c * s * uv + s * s * vv)
+}
+
+/// Angle of a phase code, with the rotation the group's frequency adds.
+fn phase_angle(code: u8, shift: i32) -> f64 {
+    std::f64::consts::PI * (128 - 32 * code as i32 + shift) as f64 / 128.0
+}
+
+/// Nearest amplitude index (on the log scale) to `a`.
+fn nearest_amp(a: f64) -> usize {
+    let mut idx = 1usize;
+    let mut dbest = f64::MAX;
+    for i in 1..AMP_MAX {
+        let d = (QUANT_AMP[i] as f64 / a).ln().abs();
+        if d < dbest {
+            dbest = d;
+            idx = i;
+        }
+    }
+    idx
+}
+
+/// For a tone at `fp`: each channel's best phase code and amplitude index, and the energy the tone removes in all.
+fn fit_tone(
+    grp: &Group,
+    targets: &[Vec<[f64; HOP]>],
+    fp: u32,
+    basis: (&mut [[f64; HOP]], &mut [[f64; HOP]]),
+) -> (Tone, f64) {
+    let (bu, bv) = basis;
+    let (shift, lo_l, hi_l) = basis_into(grp, fp, bu, bv);
+    let gram = basis_gram(bu, bv, lo_l, hi_l);
+    let nch = targets.len();
+    let mut tone = Tone {
+        fp,
+        amp: vec![0; nch],
+        phs: vec![0; nch],
+    };
+    let mut total_gain = 0.0;
+    for (ch, t) in targets.iter().enumerate() {
+        let target = (dot(t, bu, lo_l, hi_l), dot(t, bv, lo_l, hi_l));
+        let mut best_phase: Option<(f64, u8, f64)> = None; // (gain, phase code, amplitude)
+        for p in 0..8u8 {
+            let (tp, pp) = phase_terms(phase_angle(p, shift), target, gram);
+            if pp <= 0.0 || tp <= 0.0 {
+                continue;
+            }
+            if best_phase.is_none_or(|(g, _, _)| tp * tp / pp > g) {
+                best_phase = Some((tp * tp / pp, p, tp / pp));
+            }
+        }
+        let Some((_, p, a)) = best_phase else { continue };
+        let idx = nearest_amp(a);
+        let aq = QUANT_AMP[idx] as f64;
+        let (tp, pp) = phase_terms(phase_angle(p, shift), target, gram);
+        let g = 2.0 * aq * tp - aq * aq * pp;
+        if g > 0.0 {
+            tone.amp[ch] = idx as u8;
+            tone.phs[ch] = p;
+            total_gain += g;
+        }
+    }
+    clear_basis(bu, bv, lo_l, hi_l);
+    (tone, total_gain)
+}
+
+/// The energy floor of a tone's footprint: median line energy of the neighbourhood times the support size.
+fn footprint_floor(grp: &Group, targets: &[Vec<[f64; HOP]>], fp: u32, line_hi: usize) -> f64 {
+    let wsum2: f64 = grp.weights.iter().map(|w| w * w).sum();
+    let k0 = (fp >> (5 - grp.g)) as usize;
+    let mut floor = 0.0;
+    for t in targets {
+        let mut e: Vec<f64> = Vec::new();
+        for row in t.iter() {
+            for k in k0.saturating_sub(12)..(k0 + 13).min(line_hi) {
+                e.push(row[k] * row[k]);
+            }
+        }
+        floor += median(e) * 11.0 * wsum2;
+    }
+    floor
+}
+
+/// Subtracts from the targets what the decoder will add for the tone.
+fn subtract_tone(grp: &Group, targets: &mut [Vec<[f64; HOP]>], tone: &Tone) {
+    for (ch, t) in targets.iter_mut().enumerate() {
+        if tone.amp[ch] == 0 {
+            continue;
+        }
+        let mut rendered = vec![[0f64; HOP]; 2 * grp.steps];
+        render(grp, tone.fp, tone.amp[ch], tone.phs[ch], &mut rendered);
+        for (row, add) in t.iter_mut().zip(&rendered) {
+            for k in 0..HOP {
+                row[k] -= add[k];
+            }
+        }
+    }
+}
+
 /// Pick tones for one subframe set. `targets[ch]` holds the coefficients of the `2 * steps` steps of the set
 /// (updated: the chosen tones are subtracted).
 pub fn pick(grp: &Group, targets: &mut [Vec<[f64; HOP]>], cfg: &Search, bits_left: &mut i64) -> Vec<Tone> {
     let nch = targets.len();
-    let n = 2 * grp.steps;
-    let f = 1u32 << (5 - grp.g);
-    let cover = grp.coverage();
     let mut tones: Vec<Tone> = Vec::new();
     let line_hi = (cfg.max_line + 1).min(HOP);
-    let wsum2: f64 = grp.weights.iter().map(|w| w * w).sum();
-    let mut bu = vec![[0f64; HOP]; n];
-    let mut bv = vec![[0f64; HOP]; n];
+    let mut bu = vec![[0f64; HOP]; 2 * grp.steps];
+    let mut bv = vec![[0f64; HOP]; 2 * grp.steps];
     for _ in 0..cfg.max_tones {
         if *bits_left < 40 {
             break;
         }
-        // energy per line, weighted by what a tone would see
-        let mut spec = vec![0f64; HOP];
-        for t in targets.iter() {
-            for (r, row) in t.iter().enumerate() {
-                let w2 = grp.weights[r] * grp.weights[r];
-                for k in 0..line_hi {
-                    spec[k] += w2 * row[k] * row[k];
-                }
-            }
-        }
-        // local floor: median of the neighbourhood
-        let floor_at = |k: usize| -> f64 {
-            let lo = k.saturating_sub(12);
-            let hi = (k + 13).min(line_hi);
-            let mut v: Vec<f64> = spec[lo..hi].to_vec();
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            v[v.len() / 2]
-        };
-        let mut peaks: Vec<(usize, f64)> = (1..line_hi.saturating_sub(1))
-            .filter(|&k| spec[k] >= spec[k - 1] && spec[k] > spec[k + 1] && spec[k] > 0.0)
-            .map(|k| (k, spec[k] / (floor_at(k) + 1e-9)))
-            .filter(|&(_, r)| r > 6.0)
-            .collect();
-        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        peaks.truncate(5);
+        let peaks = find_peaks(&line_energy(grp, targets, line_hi), line_hi);
         if peaks.is_empty() {
             break;
         }
-        let mut best: Option<(f64, u32)> = None;
-        for &(k0, _) in &peaks {
-            let lo = ((k0 as u32).saturating_sub(1) * f).max(1);
-            let hi = (((k0 as u32) + 1) * f).min(cover - 1);
-            for fp in lo..=hi {
-                if (fp >> (5 - grp.g)) as usize > cfg.max_line {
-                    continue;
-                }
-                // a second tone within a line of one already chosen is the same partial refitted
-                if tones
-                    .iter()
-                    .any(|t| (t.fp as i64 - fp as i64).unsigned_abs() < f as u64)
-                {
-                    continue;
-                }
-                let (_, lo_l, hi_l) = basis_into(grp, fp, &mut bu, &mut bv);
-                let (uu, uv, vv) = (
-                    dot(&bu, &bu, lo_l, hi_l),
-                    dot(&bu, &bv, lo_l, hi_l),
-                    dot(&bv, &bv, lo_l, hi_l),
-                );
-                let det = uu * vv - uv * uv;
-                if det.abs() > 1e-12 {
-                    let mut gain = 0.0;
-                    for t in targets.iter() {
-                        let (tu, tv) = (dot(t, &bu, lo_l, hi_l), dot(t, &bv, lo_l, hi_l));
-                        let a = (tu * vv - tv * uv) / det;
-                        let b = (tv * uu - tu * uv) / det;
-                        gain += a * tu + b * tv;
-                    }
-                    if best.is_none_or(|(g, _)| gain > g) {
-                        best = Some((gain, fp));
-                    }
-                }
-                clear_basis(&mut bu, &mut bv, lo_l, hi_l);
-            }
-        }
-        let Some((_, fp)) = best else { break };
-        // per channel: best phase code and amplitude index at this frequency
-        let (shift, lo_l, hi_l) = basis_into(grp, fp, &mut bu, &mut bv);
-        let (uu, uv, vv) = (
-            dot(&bu, &bu, lo_l, hi_l),
-            dot(&bu, &bv, lo_l, hi_l),
-            dot(&bv, &bv, lo_l, hi_l),
-        );
-        let mut tone = Tone {
-            fp,
-            amp: vec![0; nch],
-            phs: vec![0; nch],
+        let Some(fp) = best_frequency(grp, targets, &peaks, &tones, cfg, (&mut bu, &mut bv)) else {
+            break;
         };
-        let mut total_gain = 0.0;
-        let mut floor = 0.0;
-        for (ch, t) in targets.iter().enumerate() {
-            let (tu, tv) = (dot(t, &bu, lo_l, hi_l), dot(t, &bv, lo_l, hi_l));
-            let mut bestp: Option<(f64, u8, f64)> = None; // (gain, phase code, amplitude)
-            for p in 0..8u8 {
-                let theta = std::f64::consts::PI * (128 - 32 * p as i32 + shift) as f64 / 128.0;
-                let (c, s) = (theta.cos(), theta.sin());
-                let tp = c * tu + s * tv;
-                let pp = c * c * uu + 2.0 * c * s * uv + s * s * vv;
-                if pp <= 0.0 || tp <= 0.0 {
-                    continue;
-                }
-                let a = tp / pp;
-                if bestp.is_none_or(|(g, _, _)| tp * tp / pp > g) {
-                    bestp = Some((tp * tp / pp, p, a));
-                }
-            }
-            let Some((_, p, a)) = bestp else { continue };
-            // nearest amplitude index on the log scale
-            let mut idx = 1usize;
-            let mut dbest = f64::MAX;
-            for i in 1..AMP_MAX {
-                let d = (QUANT_AMP[i] as f64 / a).ln().abs();
-                if d < dbest {
-                    dbest = d;
-                    idx = i;
-                }
-            }
-            let aq = QUANT_AMP[idx] as f64;
-            let theta = std::f64::consts::PI * (128 - 32 * p as i32 + shift) as f64 / 128.0;
-            let (c, s) = (theta.cos(), theta.sin());
-            let tp = c * tu + s * tv;
-            let pp = c * c * uu + 2.0 * c * s * uv + s * s * vv;
-            let g = 2.0 * aq * tp - aq * aq * pp;
-            if g > 0.0 {
-                tone.amp[ch] = idx as u8;
-                tone.phs[ch] = p;
-                total_gain += g;
-            }
-        }
-        clear_basis(&mut bu, &mut bv, lo_l, hi_l);
-        // the energy floor of the footprint: median line energy of the neighbourhood times the support size
-        let k0 = (fp >> (5 - grp.g)) as usize;
-        for t in targets.iter() {
-            let mut e: Vec<f64> = Vec::new();
-            for row in t.iter() {
-                for k in k0.saturating_sub(12)..(k0 + 13).min(line_hi) {
-                    e.push(row[k] * row[k]);
-                }
-            }
-            e.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            floor += e[e.len() / 2] * 11.0 * wsum2;
-        }
-        let _ = n;
+        let (tone, total_gain) = fit_tone(grp, targets, fp, (&mut bu, &mut bv));
+        let floor = footprint_floor(grp, targets, fp, line_hi);
         if total_gain < cfg.kappa * floor || tone.amp.iter().all(|&a| a == 0) {
             break;
         }
-        // subtract what the decoder will add
-        for (ch, t) in targets.iter_mut().enumerate() {
-            if tone.amp[ch] > 0 {
-                let mut r = vec![[0f64; HOP]; n];
-                render(grp, fp, tone.amp[ch], tone.phs[ch], &mut r);
-                for (row, add) in t.iter_mut().zip(&r) {
-                    for k in 0..HOP {
-                        row[k] -= add[k];
-                    }
-                }
-            }
-        }
-        let cost = 20 + 4 * tone.amp.iter().filter(|&&a| a > 0).count() as i64 + nch as i64;
-        *bits_left -= cost;
+        subtract_tone(grp, targets, &tone);
+        *bits_left -= 20 + 4 * tone.amp.iter().filter(|&&a| a > 0).count() as i64 + nch as i64;
         tones.push(tone);
     }
     tones.sort_by_key(|t| t.fp);
