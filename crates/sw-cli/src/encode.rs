@@ -15,6 +15,15 @@ pub(crate) fn run_encode(args: EncodeArgs) -> Result<(), String> {
         ff::set_ffmpeg_override(Some(path));
     }
     let spec = build_spec(&args)?;
+    if let Some(path) = &args.save_job {
+        crate::jobs::save_job(path, &spec)?;
+        println!(
+            "job saved to {} (run it with: subwoofa run {})",
+            path.display(),
+            path.display()
+        );
+        return Ok(());
+    }
     let mut progress = Progress::new();
     let cancel = AtomicBool::new(false);
     let out = execute(&spec, false, &cancel, &mut |p, _| progress.tick(p)).map_err(|e| match e {

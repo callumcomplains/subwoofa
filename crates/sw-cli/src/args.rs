@@ -172,6 +172,10 @@ pub(crate) enum Cmd {
     Loudness(LoudnessArgs),
     /// Encode per-channel PCM files to a multichannel stream.
     Encode(EncodeArgs),
+    /// Run the jobs in a JSON job file (as written by `encode --save-job`), one after another.
+    Run(RunArgs),
+    /// Watch a folder and encode every complete set of channel files that appears in it.
+    Watch(WatchArgs),
 }
 
 /// The Bitstream tab of the original encoder.
@@ -412,6 +416,9 @@ pub(crate) struct EncodeArgs {
     pub(crate) duration: Option<f64>,
     #[arg(short, long)]
     pub(crate) output: PathBuf,
+    /// Write the job to this JSON file instead of encoding it; `subwoofa run` and `subwoofa watch` take it from there.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) save_job: Option<PathBuf>,
     #[arg(long)]
     pub(crate) ffmpeg: Option<PathBuf>,
     /// Channel order inside a multichannel input file: auto (default), mask or file.
@@ -508,4 +515,46 @@ pub(crate) struct VerifyArgs {
     pub(crate) source_start: Option<f64>,
     #[arg(long)]
     pub(crate) source_duration: Option<f64>,
+}
+
+/// The options of `subwoofa run`.
+#[derive(Args)]
+pub(crate) struct RunArgs {
+    /// A JSON file holding one job, a list of jobs, or an object with a "jobs" list.
+    pub(crate) jobs: PathBuf,
+    /// Decode every finished file again and check it against the input (slower).
+    #[arg(long)]
+    pub(crate) verify: bool,
+    /// Carry on with the next job when one fails (the exit code still says some failed).
+    #[arg(long)]
+    pub(crate) keep_going: bool,
+    #[arg(long)]
+    pub(crate) ffmpeg: Option<PathBuf>,
+}
+
+/// The options of `subwoofa watch`.
+#[derive(Args)]
+pub(crate) struct WatchArgs {
+    /// The folder to watch for sets of per-channel files (Name_L.wav, Name_R.wav ...) or multichannel files.
+    pub(crate) folder: PathBuf,
+    /// A job file giving the format and settings (see `encode --save-job`); its inputs and output are replaced.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) job: PathBuf,
+    /// Where the encoded files go. A file that is already there is not encoded again.
+    #[arg(short, long)]
+    pub(crate) out: PathBuf,
+    /// Seconds between looks at the folder.
+    #[arg(long, default_value_t = 5)]
+    pub(crate) interval: u64,
+    /// Encode what is ready now and stop, instead of waiting for more.
+    #[arg(long)]
+    pub(crate) once: bool,
+    /// Move the source files into a "done" folder after a good encode (and into "failed" after a bad one).
+    #[arg(long)]
+    pub(crate) move_done: bool,
+    /// Decode every finished file again and check it against the input (slower).
+    #[arg(long)]
+    pub(crate) verify: bool,
+    #[arg(long)]
+    pub(crate) ffmpeg: Option<PathBuf>,
 }

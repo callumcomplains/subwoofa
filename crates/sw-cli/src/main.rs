@@ -5,11 +5,13 @@ mod args;
 mod atmos;
 mod downmix;
 mod encode;
+mod jobs;
 mod listing;
 mod loudness;
 mod progress;
 mod tools;
 mod verify;
+mod watch;
 
 use args::{Cli, Cmd};
 use clap::Parser;
@@ -42,6 +44,8 @@ fn run() -> Result<(), String> {
         Cmd::DownmixCheck(args) => downmix::run_downmix_check(args)?,
         Cmd::Loudness(args) => loudness::run_loudness(args)?,
         Cmd::Encode(args) => encode::run_encode(args)?,
+        Cmd::Run(args) => jobs::run_jobs(args)?,
+        Cmd::Watch(args) => watch::run_watch(args)?,
     }
     Ok(())
 }
