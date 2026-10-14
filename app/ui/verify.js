@@ -3,7 +3,7 @@
 /* ---------- Verify ---------- */
 
 const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "wv", "ape", "als", "mxf", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
-const verify = { path: null, text: "", html: "", running: false };
+const verify = { path: null, source: null, text: "", html: "", running: false };
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const STATUS_TAG = { pass: "OK", fail: "FAIL", warn: "WARN", skipped: "SKIP", info: "INFO" };
 
@@ -14,6 +14,8 @@ function setVerifyFile(path) {
   $("vSave").disabled = true;
   vLog("Ready. Choose Verify to start.");
 }
+
+const numberOrNull = (s) => (s.trim() !== "" && Number.isFinite(Number(s)) ? Number(s) : null);
 
 function vLog(text, cls) {
   const el = $("vLog");
@@ -41,6 +43,12 @@ function renderVerify(r) {
 }
 
 function initVerify() {
+  const setSource = (f) => { verify.source = f; $("vSource").value = f || ""; $("vSourceClear").disabled = !f; };
+  $("vSourceOpen").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: [{ name: "Audio", extensions: ["wav", "aif", "aiff", "flac", "w64", "caf"] }, { name: "All files", extensions: ["*"] }] });
+    if (f) setSource(f);
+  };
+  $("vSourceClear").onclick = () => setSource(null);
   $("vOpen").onclick = async () => {
     const f = await dialog.open({ multiple: false, filters: VERIFY_FILTERS });
     if (f) setVerifyFile(f);
@@ -51,13 +59,14 @@ function initVerify() {
     verify.running = true;
     $("vRun").disabled = true;
     $("vResult").hidden = true;
-    const deep = $("vDeep").checked;
+    const deep = $("vDeep").checked || !!verify.source;
     const t0 = Date.now();
     const what = deep ? "Verifying (deep, decoding the whole file)" : "Verifying";
     const tick = setInterval(() => vLog(`${what}… ${Math.round((Date.now() - t0) / 1000)} s`), 500);
     vLog(`${what}…`);
     try {
-      const out = await invoke("verify_file", { path: verify.path, deep });
+      const against = verify.source ? { first: verify.source, layout: $("vLayout").value, start: numberOrNull($("vStart").value), duration: numberOrNull($("vLength").value) } : null;
+      const out = await invoke("verify_file", { path: verify.path, deep, against });
       verify.text = out.text;
       verify.html = out.html;
       renderVerify(out.report);

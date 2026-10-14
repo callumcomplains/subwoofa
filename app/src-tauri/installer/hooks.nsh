@@ -82,7 +82,7 @@ Var OptFfmpegFound
     nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\fetch-ffmpeg.ps1"'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONEXCLAMATION "FFmpeg could not be downloaded (the details above say why). Subwoofa is installed and works without it; you can try again in Settings, under Engines." /SD IDOK
+      MessageBox MB_OK|MB_ICONEXCLAMATION "FFmpeg could not be downloaded. The reason is in the details list and in the file $TEMP\subwoofa-ffmpeg-log.txt (open it in Notepad to copy it). Subwoofa is installed and works without it; you can try again in Settings, under Engines." /SD IDOK
     ${EndIf}
   ${EndIf}
 !macroend

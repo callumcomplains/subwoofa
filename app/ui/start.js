@@ -11,6 +11,7 @@ async function init() {
   // Rust serialises the enum variant (Lfe); the rest of the app uses the short ID (LFE).
   cat.layouts = cat.layouts.map((l) => ({ ...l, channels: l.channels.map((c) => (c === "Lfe" ? "LFE" : c === "Lfe2" ? "LFE2" : c)) }));
 
+  fill($("vLayout"), cat.layouts.map((l) => [l.id, l.id]), "5.1");
   initBanner();
   const ver = await invoke("app_version");
   $("ver").textContent = ver;

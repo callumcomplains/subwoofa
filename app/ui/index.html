@@ -341,6 +341,14 @@ try {
     <button id="vSave" class="plain" disabled>Save report…</button>
     <small class="readout">A deep check adds loudness and spectrograms to the saved web page.</small>
   </div>
+  <div class="tools-open vsource">
+    <button id="vSourceOpen">Compare with source…</button>
+    <input id="vSource" readonly data-opens="vSourceOpen" placeholder="Optional: double-click to pick the audio this was encoded from (one channel file, or the whole multichannel file)">
+    <label class="f small"><span>Layout</span><select id="vLayout"></select></label>
+    <label class="f small"><span>From (s)</span><input id="vStart" type="number" min="0" step="any" placeholder="start" aria-label="Where in the source the encode starts, in seconds"></label>
+    <label class="f small"><span>Length (s)</span><input id="vLength" type="number" min="0" step="any" placeholder="whole" aria-label="How much of the source the encode covers, in seconds"></label>
+    <button id="vSourceClear" class="plain" disabled>Clear</button>
+  </div>
   <div id="vResult" hidden>
     <div id="vVerdict" class="verdict" role="status"></div>
     <dl id="vSummary" class="kv selectable"></dl>

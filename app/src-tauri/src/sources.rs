@@ -30,17 +30,21 @@ pub fn scan_folder(dir: String, layout: String) -> Result<Vec<FolderGroup>, Stri
         .collect())
 }
 
+/// The files for every channel of `layout`, from one of them (or from one file that holds them all).
+pub(crate) fn import_inputs(
+    first: &std::path::Path,
+    layout: &'static ChannelLayout,
+) -> HashMap<sw_core::Channel, PathBuf> {
+    match sw_pcm::multichannel_inputs(layout, first) {
+        Some(all) => all,
+        None => autoimport::auto_import(first, layout),
+    }
+}
+
 #[tauri::command]
 pub fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>, String> {
     let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;
-    // one multichannel file for every channel of the layout
-    if let Some(all) = sw_pcm::multichannel_inputs(l, std::path::Path::new(&first)) {
-        return Ok(all
-            .into_iter()
-            .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
-            .collect());
-    }
-    Ok(autoimport::auto_import(&PathBuf::from(first), l)
+    Ok(import_inputs(std::path::Path::new(&first), l)
         .into_iter()
         .map(|(c, p)| (c.short().to_string(), p.to_string_lossy().into_owned()))
         .collect())

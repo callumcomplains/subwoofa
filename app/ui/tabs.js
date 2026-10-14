@@ -62,6 +62,8 @@ const INFO = [
   ["@.op[data-op=restripe] .op-title", "Relabels the start time and frame rate in a .dtshd. The audio isn't touched, and the reference time stays put. Needs a timecode chunk, which Subwoofa and the DTS encoder both write."],
   ["@.op[data-op=silence] .op-title", "Adds whole frames of silence to the start and/or end of a .dtshd, so the length lands within one frame of what you asked. Needs a stored silent frame."],
   ["@.op[data-op=verify] .op-title", "Checks the open stream: structure and checksums. Deep mode adds a full decode and a look at every header."],
+  ["#vLayout", "The channel layout of the source. Pick one channel file and Subwoofa finds the others by name (Name_L.wav, Name_R.wav ...), or pick a single multichannel file. The result says whether the encode is bit-identical (lossless) or how close it is (lossy)."],
+  ["#vStart", "Leave From and Length empty when the encode covers the whole source. If you encoded only part of it (a preview, or a start and length), say where that part begins and how long it is."],
   ["#vDeep", "Also decodes the whole file, measures the audio, asks DTS's own verifier if it's installed, and lists every header. Slower, more suspicious."],
   ["@#atmosTitle", "Atmos is encoded by the Dolby Encoding Engine, a copy you're licensed to use; Subwoofa only drives it and checks what comes out. Masters must come from Dolby's tools (DAMF .atmos, or an ADM BWF .wav), because the engine refuses anything else. A plain channel bed (.wav, up to 7.1.4) makes Dolby Digital Plus Atmos."],
   ["#aDialnorm", "Average speech loudness, −31 to −1. Leave it at 0 and the engine measures it for you."],

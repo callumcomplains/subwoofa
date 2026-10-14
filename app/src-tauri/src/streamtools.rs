@@ -130,10 +130,22 @@ pub struct VerifyOut {
     pub(crate) html: String,
 }
 
-/// Native verification of a stream file; `deep` adds the decode, statistics and header dumps.
+/// What the encode was made from, for the comparison in a deep check.
+#[derive(serde::Deserialize)]
+pub struct Against {
+    /// One of the source files; the others are found from it (or it holds every channel).
+    first: String,
+    layout: String,
+    start: Option<f64>,
+    duration: Option<f64>,
+}
+
+/// Native verification of a stream file; `deep` adds the decode, statistics and header dumps, and `against` lines
+/// the decode up with the source it was made from (which needs the deep check).
 #[tauri::command]
-pub async fn verify_file(path: String, deep: bool) -> Result<VerifyOut, String> {
+pub async fn verify_file(path: String, deep: bool, against: Option<Against>) -> Result<VerifyOut, String> {
     blocking(move || {
+        let deep = deep || against.is_some();
         let opt = sw_verify::Options {
             deep,
             // a deep check also measures the audio, for the QC report
@@ -141,7 +153,32 @@ pub async fn verify_file(path: String, deep: bool) -> Result<VerifyOut, String> 
             ffmpeg: ff::find_ffmpeg(),
             reference_verifier: None,
         };
-        let mut report = sw_verify::verify(std::path::Path::new(&path), &opt).map_err(|e| e.to_string())?;
+        let file = std::path::Path::new(&path);
+        let mut report = sw_verify::verify(file, &opt).map_err(|e| e.to_string())?;
+        if let Some(a) = against {
+            let layout = sw_core::ChannelLayout::find(&a.layout).ok_or("unknown layout")?;
+            let inputs = crate::sources::import_inputs(std::path::Path::new(&a.first), layout);
+            if inputs.len() < layout.channels.len() {
+                return Err(format!(
+                    "Only {} of the {} channels of {} were found from that source file.",
+                    inputs.len(),
+                    layout.channels.len(),
+                    layout.id
+                ));
+            }
+            let ffmpeg = opt
+                .ffmpeg
+                .as_deref()
+                .ok_or("The comparison needs FFmpeg to decode the file.")?;
+            let source = sw_verify::Source {
+                layout,
+                inputs: &inputs,
+                order: sw_pcm::ChannelOrder::Auto,
+                start: a.start,
+                duration: a.duration,
+            };
+            sw_verify::compare_with_source(&mut report, file, ffmpeg, &source)?;
+        }
         let (text, html) = (report.to_text(), report.to_html());
         // the page shows the checks; the spectrograms only go into the saved report
         report.analysis = None;

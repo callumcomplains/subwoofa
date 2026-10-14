@@ -10,6 +10,11 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # the progress bar makes Invoke-WebRequest several times slower
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# everything said here also goes to a file, so a failure can be read (and copied) after the window is gone
+$log = Join-Path ([IO.Path]::GetTempPath()) "subwoofa-ffmpeg-log.txt"
+Set-Content -Path $log -Value ("Subwoofa FFmpeg download, " + (Get-Date -Format s))
+function Say([string]$Message) { Write-Host $Message; Add-Content -Path $log -Value $Message }
+
 $base = "https://www.gyan.dev/ffmpeg/builds"
 # a small download as text: the server labels some of them as plain binary, which PowerShell hands back as bytes
 function Get-Text([string]$Url) {
@@ -25,16 +30,16 @@ try {
     $version = (Get-Text "$base/release-version").Trim()
     if ($version -notmatch '^\d+(\.\d+)+$') { throw "Unexpected version text from the server: '$version'" }
     $zipUrl = "$base/packages/ffmpeg-$version-essentials_build.zip"
-    Write-Host "Downloading FFmpeg $version (about 115 MB)..."
+    Say "Downloading FFmpeg $version (about 115 MB)..."
     $expected = ((Get-Text "$zipUrl.sha256").Trim() -split '\s+')[0].ToLower()
     $zip = Join-Path $work "ffmpeg.zip"
     Invoke-WebRequest $zipUrl -OutFile $zip -UseBasicParsing
 
-    Write-Host "Checking the download..."
+    Say "Checking the download..."
     $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     if ($actual -ne $expected) { throw "The download is damaged (checksum $actual, expected $expected). Nothing was installed." }
 
-    Write-Host "Unpacking..."
+    Say "Unpacking..."
     Expand-Archive -Path $zip -DestinationPath (Join-Path $work "x") -Force
     $exe = Get-ChildItem (Join-Path $work "x") -Recurse -Filter ffmpeg.exe | Select-Object -First 1
     if (-not $exe) { throw "ffmpeg.exe was not in the download." }
@@ -46,11 +51,14 @@ try {
     $probe = Get-ChildItem (Join-Path $work "x") -Recurse -Filter ffprobe.exe | Select-Object -First 1
     if ($probe) { Copy-Item $probe.FullName (Join-Path $Dir "ffprobe.exe") -Force }
     Set-Content -Path (Join-Path $Dir "SOURCE.txt") -Value "FFmpeg $version essentials build from $zipUrl`r`nSHA-256 $actual"
-    Write-Host "FFmpeg $version is ready in $Dir"
+    Say "FFmpeg $version is ready in $Dir"
     exit 0
 }
 catch {
-    Write-Host "FFmpeg could not be set up: $($_.Exception.Message)"
+    Say "FFmpeg could not be set up: $($_.Exception.Message)"
+    Add-Content -Path $log -Value ($_ | Out-String)
+    Add-Content -Path $log -Value ("PowerShell " + $PSVersionTable.PSVersion + " on " + [Environment]::OSVersion.VersionString)
+    Say "A log was saved to $log"
     exit 1
 }
 finally {
