@@ -136,9 +136,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!("sw_jobs_{}_saved.json", std::process::id()));
         save_job(&path, &spec).unwrap();
         let back = load_jobs(&path).unwrap().remove(0);
+        // compared as values: a map of inputs may be written in any order
         assert_eq!(
-            serde_json::to_string(&spec).unwrap(),
-            serde_json::to_string(&back).unwrap()
+            serde_json::to_value(&spec).unwrap(),
+            serde_json::to_value(&back).unwrap()
         );
     }
 }
