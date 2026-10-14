@@ -29,7 +29,7 @@ Estimates are focused working time for the work itself (writing, testing, docume
 | 12 | Dolby Atmos Theatrical (IAB in MXF, SMPTE ST 2098-2), after item 6. Not through DEE: it can read an IAB MXF as input (useful for converting cinema Atmos to home Atmos) but has no IAB output | one real Atmos cinema track file | 2-3 days |
 | 13 | DTS:X encoding | DTS's licensed encoder (detection in Verify is done) | 1-2 days |
 | 14 | AAF import (deferred by request) | AAF files from your DAW | 1-2 days |
-| 15 | E-AC-3 enhanced coupling | a reference decoder | open |
+| 15 | E-AC-3 enhanced coupling | a reference decoder (now available through the Dolby Encoding Engine) | open |
 
 ### Deferred (planned, not scheduled)
 - **Make the code human-readable and easier to follow.** The codebase is dense: long lines, terse names, few comments on the why. A readability pass would cover, in this order: a short "how it fits together" guide per crate (what each file does, in plain language); module-level comments that explain each encoder's pipeline step by step; descriptive names for the one- and two-letter variables; splitting the very long functions in the DTS encoders and the verifier; and a line-length limit with automatic formatting. Output must stay byte-identical, so the existing tests and the regression sweep are the safety net. Estimate: 2-3 days, best done one crate at a time between feature work.

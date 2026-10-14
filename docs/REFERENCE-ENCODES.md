@@ -41,6 +41,6 @@ let Subwoofa finish features it cannot check on its own. None is urgent; each is
 | Atmos Theatrical | one Atmos cinema track file (`.mxf`, IAB) | from a DCP or from Dolby's cinema tools; a few seconds is enough |
 | DTS:X encoding | DTS's licensed encoder, plus a DTS:X `.dts` or `.dtshd` made with it | a licensed DTS:X encoder, any short 7.1.4 programme |
 | AAF import | AAF files from your editor | one with a few mono clips, one with a stereo clip, one with embedded and one with linked audio |
-| E-AC-3 enhanced coupling | a Dolby reference decoder, or a stream with enhanced coupling and the matching decode | only if one comes your way |
+| E-AC-3 enhanced coupling | a Dolby reference decoder (the Dolby Encoding Engine has one: `subwoofa dolby decode`) | can be started |
 | MA 192 kHz band 1 (my band 1 is 3.4% larger than the original's) | nothing more: the existing `NO WAY THIS WORKS.dtshd` is enough, it needs a segment-level parse | - |
 | TrueHD stereo (0.7% larger than Dolby's) | nothing more; the Deep Purple files are enough | - |

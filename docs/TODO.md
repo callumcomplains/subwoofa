@@ -54,7 +54,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 - [ ] Dolby Atmos Theatrical (IAB in MXF): one real cinema track file, after DCP audio.
 - [ ] DTS:X encoding: DTS's licensed encoder.
 - [ ] AAF import: AAF files from a DAW.
-- [ ] E-AC-3 enhanced coupling: a reference decoder.
+- [ ] E-AC-3 enhanced coupling: the reference decoder now exists (the Dolby Encoding Engine's `ddp_decode`, see `subwoofa dolby decode`), so this can be built and checked. Subwoofa's current streams decode alike in Dolby's decoder and FFmpeg (AC-3 agree to about 66 dB, E-AC-3 to about 40 dB, and both are the same distance from the source).
 
 ## Parked (no realistic route yet)
 
