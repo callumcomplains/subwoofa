@@ -21,7 +21,7 @@ mod run;
 mod task;
 mod taskrun;
 
-pub use find::find_dee;
+pub use find::{find_dee, set_dee_override};
 pub use info::master_info;
 pub use input::InputKind;
 pub use job::{AtmosJob, DdpOptions, Drc, Presentation, Target, TrueHdOptions};

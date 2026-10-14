@@ -107,6 +107,7 @@ try {
           <small id="dialnormNote" class="readout">off (−31)</small>
           <button type="button" id="dialnormMeasure" class="mini">Measure</button>
         </div>
+        <label class="chk tight" id="dnDolbyWrap" hidden><input type="checkbox" id="dnDolby" checked><span>Dolby meter (finds the dialogue)</span></label>
         <small id="loudReadout" class="readout" hidden></small>
       </div>
       <div class="f">
@@ -275,6 +276,7 @@ try {
         <button data-op="restripe" aria-pressed="false">Re-stripe</button>
         <button data-op="silence" aria-pressed="false">Add silence</button>
         <button data-op="dialnorm" aria-pressed="false">Dialnorm</button>
+        <button data-op="dolby" aria-pressed="false" hidden>Dolby engine</button>
         <button data-op="verify" aria-pressed="false">Verify</button>
       </div>
       <div class="db">
@@ -329,6 +331,28 @@ try {
             <label class="f small"><span>Tail (s)</span><input id="tSilTail" type="number" min="0" step="0.1" value="0"></label>
             <button id="tSilRun" class="go small">Write…</button>
           </div>
+        </div>
+        <div class="op" data-op="dolby" id="dolbyPanel" hidden>
+          <h3 class="op-title">Dolby Encoding Engine</h3>
+          <div class="op-row">
+            <label class="f small"><span>Job</span><select id="dxOp"><option value="decode">Decode to WAV</option><option value="transcode">Transcode to Digital Plus</option><option value="edit">Trim and join E-AC-3</option><option value="correct">Correct loudness of a WAV</option></select></label>
+            <button id="dxAdd">Add stream…</button>
+            <button id="dxClear" class="plain">Clear</button>
+          </div>
+          <ul id="dxList" class="plainlist selectable"></ul>
+          <div class="op-row">
+            <label class="f small" id="dxDrcWrap"><span>Dynamic range</span><select id="dxDrc"><option value="none">None</option><option value="line">Line</option><option value="rf">RF</option></select></label>
+            <label class="f small" id="dxRateWrap" hidden><span>Data rate (kbps)</span><input id="dxRate" type="number" min="32" max="1024" step="1" placeholder="auto"></label>
+            <label class="f small" id="dxPresetWrap" hidden><span>Loudness</span><select id="dxPreset"><option value="">Leave as is</option><option value="atsc_a85">ATSC A/85</option><option value="ebu_r128">EBU R 128</option><option value="freetv_op59">Free TV OP-59</option><option value="arib_b32">ARIB B32</option></select></label>
+            <label class="f small" id="dxPresetWrap2" hidden><span>Loudness</span><select id="dxPreset2"><option value="atsc_a85">ATSC A/85</option><option value="ebu_r128" selected>EBU R 128</option><option value="freetv_op59">Free TV OP-59</option><option value="arib_b32">ARIB B32</option></select></label>
+            <span id="dxSpanWrap" class="op-row" hidden>
+              <label class="f small"><span>Start (h:m:s)</span><input id="dxStart" value="0:0:0.0" spellcheck="false"></label>
+              <label class="f small"><span>End</span><input id="dxEnd" value="end_of_file" spellcheck="false"></label>
+              <label class="chk"><input type="checkbox" id="dxInvert"><span>Cut it out instead</span></label>
+            </span>
+            <button id="dxRun" class="go small">Run…</button>
+          </div>
+          <div id="dxBarWrap" class="bar-track" hidden><span id="dxBar" class="bar-fill" style="display:block;width:0"></span></div>
         </div>
         <div class="op" data-op="dialnorm" hidden>
           <h3 class="op-title">Dialnorm of an AC-3 or E-AC-3 stream</h3>
@@ -454,6 +478,7 @@ try {
       <label class="srow danger"><input type="checkbox" id="optUnlocked"><span><b>Unlocked mode</b> <em class="warn">FOR ADVANCED USERS ONLY</em></span></label>
       <label class="srow"><input type="checkbox" id="optVerify" checked><span><b>Verify after encoding</b></span></label>
       <label class="srow"><input type="checkbox" id="optNative"><span><b>Prefer Subwoofa's own encoders</b></span></label>
+      <label class="srow" id="dolbyEncRow" hidden><input type="checkbox" id="optDolbyEnc"><span><b>Use Dolby's encoder for Dolby Digital and Digital Plus</b></span></label>
       <label class="srow"><input type="checkbox" id="optDownmix" checked><span><b>TrueHD stereo downmix</b></span></label>
       <label class="f"><span>Multichannel file order</span><select id="optOrder"><option value="auto">Auto (film order for 7.1)</option><option value="mask">Follow speaker mask</option><option value="file">File order = layout order</option></select></label>
     </div>
@@ -584,6 +609,7 @@ try {
 <script src="presets.js"></script>
 <script src="start.js"></script>
 <script src="streamtools.js"></script>
+<script src="dolby.js"></script>
 <script src="verify.js"></script>
 <script src="settings.js"></script>
 <script src="atmos.js"></script>

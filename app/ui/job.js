@@ -17,15 +17,19 @@ async function measureLoudness() {
   btn.disabled = true;
   out.hidden = false; out.className = "readout"; out.textContent = "Measuring...";
   try {
-    const l = await invoke("measure_loudness", { layout: inLayout().id, inputs: files, channelOrder, start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value) });
+    // Dolby's meter finds the dialogue first, which is what a dialnorm should describe; ours measures the whole programme
+    const dolbyMeter = dolbyFound() && $("dnDolby").checked;
+    const l = dolbyMeter
+      ? await measureWithDolby(files, entire)
+      : await invoke("measure_loudness", { layout: inLayout().id, inputs: files, channelOrder, start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value) });
     if (l.integrated == null) { out.className = "readout bad"; out.textContent = "The input is silent."; return; }
-    const tp = l.channels.reduce((m, c) => (c.true_peak != null && c.true_peak > m ? c.true_peak : m), -Infinity);
+    const tp = dolbyMeter ? l.peak : l.channels.reduce((m, c) => (c.true_peak != null && c.true_peak > m ? c.true_peak : m), -Infinity);
     const dn = Math.min(31, Math.max(1, Math.round(-l.integrated)));
     $("dialnormOn").checked = true; $("dialnorm").disabled = false; $("dialnorm").value = -dn;
     syncDialnorm();
     const over = tp > -1;
     out.className = over ? "readout flag" : "readout";
-    out.textContent = `${l.integrated.toFixed(1)} LUFS, range ${l.range == null ? "-" : l.range.toFixed(1)} LU, true peak ${tp.toFixed(1)} dBTP${over ? " (over -1 dBTP)" : ""}`;
+    out.textContent = `${l.integrated.toFixed(1)} LUFS${dolbyMeter ? " on the " + l.how : ""}, range ${l.range == null ? "-" : l.range.toFixed(1)} LU, true peak ${tp.toFixed(1)} dBTP${over ? " (over -1 dBTP)" : ""}`;
   } catch (e) { out.className = "readout bad"; out.textContent = String(e); }
   finally { btn.disabled = false; }
 }
@@ -116,7 +120,7 @@ function jobSpec(inputsFor, name) {
     dest: $("dest").value, stream: $("stream").value, layout: curLayoutId(),
     sample_rate: curRate(),
     bitrate: coreOff() ? 0 : $("bitrate").disabled || !$("bitrate").value ? null : Number($("bitrate").value),
-    dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
+    dialnorm: dialnormValue(), unlocked, source_layout: srcLayoutId || null, engine: useDolbyEncoder() ? "dolby" : srcLayoutId || (curStream().native && (preferNative || !curStream().ffmpeg)) ? "native" : "ffmpeg", downmix: thdDownmix, channel_order: channelOrder,
     pcm_format: ["wav", "aiff", "caf", "flac", "oggflac", "alac", "tta", "wavpack", "ape", "als", "dsf", "dff"].includes($("stream").value) ? $("pcmFormat").value : "", es_phase_shift: $("esShift").checked, rear_minus_3db: $("rear3").checked, core_x96: $("x96Core").checked,
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,

@@ -28,6 +28,16 @@ choose the folder that holds `DTSHDVerify.exe` under **Settings > Engines > DTS-
 
 See [ATMOS.md](ATMOS.md).
 
+### Beyond Atmos
+
+With the engine installed, Subwoofa also uses it for these (all optional, all hidden without it):
+
+- **Dolby's meter in Measure.** The Dolby meter finds the dialogue first and measures that, which is what a dialnorm describes; Subwoofa's own meter measures the whole programme. On the excerpt I tried, the two differed by a whole dialnorm step. Command line: `subwoofa loudness --dolby`, `subwoofa encode --auto-dialnorm --dolby-meter`.
+- **Dolby's own encoder for Dolby Digital and Digital Plus** (Settings > General > "Use Dolby's encoder…", or `subwoofa encode --engine dolby`): mono, stereo, 5.1 and 7.1 (Digital Plus only). The engine measures the dialogue and writes the dialnorm from it. Useful as a reference to compare Subwoofa's encoder against (`subwoofa verify FILE --against SOURCE`).
+- **StreamTools > Dolby engine** (and `subwoofa dolby ...`): decode Dolby Digital (Plus) to WAV, transcode to Digital Plus, trim and join E-AC-3 without re-encoding, and correct the loudness of a WAV to a broadcast preset (ATSC A/85, EBU R 128, Free TV OP-59, ARIB B32).
+
+Limits of the engine as installed: channel reordering (`pcm_channel_order`) refuses content under 20 minutes, and this build has no AAC or AC-4 encoder, so Subwoofa does not offer them. Paths with spaces are handled by Subwoofa (the engine cannot read them); its work happens in a folder without spaces, in the system temporary folder or a shared one.
+
 ## Command line
 
 The CLI accepts `--ffmpeg <path>` per command and otherwise searches `PATH`.

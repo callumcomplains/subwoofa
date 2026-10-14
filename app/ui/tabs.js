@@ -71,6 +71,8 @@ const INFO = [
   ["#aDialnorm", "Average speech loudness, −31 to −1. Leave it at 0 and the engine measures it for you."],
   ["#optUnlocked", "FOR ADVANCED USERS ONLY. Switches off the spec checks. Any rate, any layout, any format to any destination. The encoder may say no, and real hardware may too."],
   ["#optVerify", "After each encode: lossless files are decoded and compared with the source (MD5); lossy ones must decode cleanly; audio files get a structure check and a full decode."],
+  ["#optDolbyEnc", "Sends Dolby Digital (AC-3) and Digital Plus (E-AC-3) jobs to Dolby's own encoder in the Dolby Encoding Engine instead of ours or FFmpeg's. It measures the dialogue itself and sets the dialnorm from that, so the dialnorm you give is not used. Needs the engine, and a mono, stereo, 5.1 or 7.1 layout."],
+  ["#dnDolby", "Uses the Dolby Encoding Engine's loudness meter, which finds the dialogue and measures that. A dialnorm describes the dialogue level, so this is the better figure when the mix has loud music or effects. Off measures the whole programme."],
   ["#optNative", "Where Subwoofa has its own encoder (AC-3, E-AC-3, TrueHD, MLP, the DTS family), use it instead of FFmpeg. Formats FFmpeg can't make always use ours."],
   ["#optDownmix", "Native TrueHD only: adds a stereo substream so stereo-only players get a proper downmix. Costs roughly 5 to 8 % more file."],
   ["#optConc", "How many encodes run at once. More is faster on a big machine and louder on a small one."],

@@ -11,6 +11,8 @@ function aLog(text, cls) {
 async function refreshEngine() {
   const found = await invoke("atmos_locate", { configured: store.get("dee") || null });
   atm.dee = found || "";
+  invoke("set_dee_path", { path: atm.dee });
+  if (typeof syncDolbyUi === "function" && $("dnDolbyWrap")) syncDolbyUi();
   $("atmos").classList.toggle("locked", !found);
   $("atmosLock").hidden = !!found;
   const el = $("aEngine");

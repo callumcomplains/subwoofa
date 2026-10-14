@@ -4,3 +4,4 @@ init().catch((e) => log(String(e), "bad"));
 initTools();
 initVerify();
 initAtmos();
+initDolby();

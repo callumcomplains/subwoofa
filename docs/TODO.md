@@ -47,6 +47,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 ## Blocked on outside files or tools
 
 - [ ] TrueHD Atmos: run on one real Dolby-authored master (built, never run on one).
+- [x] More of the Dolby Encoding Engine wired up: dialogue-aware loudness, Dolby Digital / Digital Plus encode and decode, transcode, trim and join, loudness correction. Not available in the installed build: AAC, AC-4, and channel reordering on short content.
 - [ ] Bitstream tab extras: the reference encodes in `docs/REFERENCE-ENCODES.md`.
 - [ ] HRA 6.1 at 48 kHz (XCH + XBR): needs its own reference encode.
 - [ ] DVD-Audio disc structure (AOB packs): one real DVD-Audio disc or its `.AOB` files.

@@ -1,11 +1,21 @@
 //! Finding `dee.exe`.
 
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+/// The engine the user chose in the app; `find_dee` looks there when it is given nothing else.
+static CHOSEN: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Remembers the engine chosen in the app (`None` goes back to the usual places).
+pub fn set_dee_override(path: Option<PathBuf>) {
+    *CHOSEN.write().unwrap() = path;
+}
 
 /// Where DEE is looked for when nothing is configured.
 pub fn find_dee(configured: Option<&Path>) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(p) = configured {
+    let chosen = CHOSEN.read().unwrap().clone();
+    if let Some(p) = configured.map(Path::to_path_buf).or(chosen) {
         candidates.push(if p.is_dir() {
             p.join(exe_name())
         } else {

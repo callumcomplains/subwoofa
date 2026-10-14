@@ -6,6 +6,7 @@
 
 mod atmos;
 mod catalog;
+mod dolby;
 mod downmix;
 mod jobs;
 mod loudness;
@@ -72,6 +73,7 @@ fn main() {
             app.manage(queue);
             app.manage(atmos::State::default());
             app.manage(preview::State::default());
+            app.manage(dolby::State::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -92,6 +94,10 @@ fn main() {
             jobs::queue_set_concurrency,
             jobs::read_log,
             loudness::measure_loudness,
+            dolby::set_dee_path,
+            dolby::measure_loudness_dolby,
+            dolby::dolby_run,
+            dolby::dolby_cancel,
             preview::make_preview,
             preview::preview_cancel,
             preview::read_preview_file,

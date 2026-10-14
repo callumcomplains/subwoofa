@@ -427,3 +427,6 @@ option:disabled { color: var(--dim); }
 .pv-row .readout { min-width: 78px; text-align: right; }
 #pvPlay.on { color: var(--lamp); border-color: var(--lamp); }
 #pvProgress .bar-fill { display: block; transition: width .2s linear; }
+
+/* anything hidden stays hidden, whatever display its class gives it */
+.srow[hidden], .chk[hidden], .f[hidden], .op-row[hidden] { display: none; }
