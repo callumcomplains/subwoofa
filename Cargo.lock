@@ -3229,6 +3229,7 @@ dependencies = [
  "md5",
  "rayon",
  "serde",
+ "sw-backend-dee",
  "sw-backend-ffmpeg",
  "sw-codec-ac3",
  "sw-codec-dts",

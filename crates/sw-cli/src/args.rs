@@ -182,6 +182,11 @@ pub(crate) enum Cmd {
     Loudness(LoudnessArgs),
     /// Encode per-channel PCM files to a multichannel stream.
     Encode(EncodeArgs),
+    /// Jobs for the Dolby Encoding Engine (a copy you are licensed to use): decode, transcode, trim and join, correct loudness.
+    Dolby {
+        #[command(subcommand)]
+        op: DolbyCmd,
+    },
     /// Run the jobs in a JSON job file (as written by `encode --save-job`), one after another.
     Run(RunArgs),
     /// Watch a folder and encode every complete set of channel files that appears in it.
@@ -418,6 +423,9 @@ pub(crate) struct EncodeArgs {
     /// Measure the input first and set the dialnorm from its integrated loudness (instead of --dialnorm).
     #[arg(long, conflicts_with = "dialnorm")]
     pub(crate) auto_dialnorm: bool,
+    /// With --auto-dialnorm: measure with the Dolby Encoding Engine's dialogue-aware meter.
+    #[arg(long, requires = "auto_dialnorm")]
+    pub(crate) dolby_meter: bool,
     /// Apply gain so the integrated loudness lands on this many LUFS (e.g. -23 for EBU R 128, -24 for ATSC A/85); the
     /// true peak is kept under -1 dBTP. Needs a format Subwoofa encodes itself.
     #[arg(long, value_name = "LUFS", allow_hyphen_values = true)]
@@ -492,6 +500,13 @@ pub(crate) struct LoudnessArgs {
     /// Length to measure, in seconds.
     #[arg(long)]
     pub(crate) duration: Option<f64>,
+    /// Measure with the Dolby Encoding Engine's meter instead (a copy you are licensed to use): it finds the dialogue
+    /// and measures that, which is what a dialnorm describes.
+    #[arg(long)]
+    pub(crate) dolby: bool,
+    /// With --dolby: measure the whole programme instead of finding the dialogue.
+    #[arg(long, requires = "dolby")]
+    pub(crate) no_dialogue: bool,
     /// Print the result as JSON.
     #[arg(long)]
     pub(crate) json: bool,
@@ -571,4 +586,65 @@ pub(crate) struct WatchArgs {
     pub(crate) verify: bool,
     #[arg(long)]
     pub(crate) ffmpeg: Option<PathBuf>,
+}
+
+/// `subwoofa dolby`: jobs for the Dolby Encoding Engine.
+#[derive(Subcommand)]
+pub(crate) enum DolbyCmd {
+    /// Dolby Digital / Digital Plus to a WAV file.
+    Decode {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Dynamic range control applied: none, line or rf.
+        #[arg(long, default_value = "none")]
+        drc: String,
+        /// The stream carries Dolby Atmos.
+        #[arg(long)]
+        atmos: bool,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
+    /// Dolby Digital / Digital Plus to Dolby Digital Plus (another data rate, optionally loudness-corrected).
+    Transcode {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Data rate in kbps (default: the engine chooses).
+        #[arg(long)]
+        bitrate: Option<u32>,
+        /// Correct loudness to a preset: atsc_a85, atsc_a85_agile, ebu_r128, freetv_op59 or arib_b32.
+        #[arg(long)]
+        correct: Option<String>,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
+    /// Trim and join E-AC-3 streams without re-encoding.
+    Edit {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Start time, h:m:s.f
+        #[arg(long, default_value = "0:0:0.0")]
+        start: String,
+        /// End time, h:m:s.f, or end_of_file.
+        #[arg(long, default_value = "end_of_file")]
+        end: String,
+        /// Cut the span out instead of keeping it.
+        #[arg(long)]
+        invert: bool,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
+    /// Correct the loudness of a WAV file to a preset: atsc_a85, atsc_a85_agile, ebu_r128, freetv_op59 or arib_b32.
+    Correct {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value = "ebu_r128")]
+        preset: String,
+        #[arg(long)]
+        dee: Option<PathBuf>,
+    },
 }

@@ -336,3 +336,60 @@ pub(crate) fn verify_output(
         ..Default::default()
     })
 }
+
+/// Dolby Digital or Dolby Digital Plus made by Dolby's own encoder, through the Dolby Encoding Engine. The engine
+/// measures the loudness itself and writes the dialnorm from it, so the job's dialnorm is not used.
+pub(crate) fn encode_dolby(
+    run: &Run,
+    job: &ff::Job,
+    progress: Progress,
+    cancel: &AtomicBool,
+    log: &mut String,
+) -> Result<(), Failure> {
+    use sw_backend_dee::{clock, run_task, EncodeOptions, Task, TaskJob};
+    if run
+        .spec
+        .source_layout
+        .as_deref()
+        .is_some_and(|s| !s.is_empty() && s != run.layout.id)
+    {
+        return Err("the Dolby encoder cannot mix a richer layout down; use Subwoofa's own encoder for that".into());
+    }
+    let dee = crate::dolby::find_engine()?;
+    let eac3 = run.stream == StreamType::Eac3;
+    let mode = match (eac3, run.layout.channels.len()) {
+        (false, 8) => return Err("Dolby Digital has no 7.1; use Dolby Digital Plus".into()),
+        (false, _) => "dd",
+        (true, 8) => "ddp71",
+        (true, _) => "ddp",
+    };
+    let options = EncodeOptions {
+        mode: mode.into(),
+        data_rate_kbps: run.spec.bitrate.unwrap_or(448),
+        lfe: run.layout.channels.contains(&sw_core::Channel::Lfe),
+        ..Default::default()
+    };
+    let task = TaskJob {
+        source: crate::dolby::engine_source(run.layout, &job.inputs)?,
+        output: run.output().to_path_buf(),
+        task: Task::Encode(Box::new(options)),
+        start: Some(clock(run.start)),
+        end: Some(clock(run.start + run.span)),
+    };
+    let work = crate::dolby::job_folder("encode")?;
+    log.push_str("Engine:       Dolby Encoding Engine (Dolby's own encoder)\n");
+    if let Some(d) = run.spec.dialnorm {
+        log.push_str(&format!(
+            "Dialnorm:     the engine measures it; the {d} given is not used\n"
+        ));
+    }
+    let done = run_task(&dee, &task, &work, progress, &mut |_| {}, cancel).map_err(|e| match e {
+        sw_backend_dee::Error::Canceled => Failure::Canceled,
+        other => Failure::Error(other.to_string()),
+    })?;
+    for m in done.messages {
+        log.push_str(&format!("Engine said:  {m}\n"));
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(())
+}

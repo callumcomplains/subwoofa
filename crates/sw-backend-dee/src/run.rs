@@ -146,23 +146,18 @@ fn engine_command(dee: &Path, profile: &Path, log: &Path) -> Command {
     cmd
 }
 
-pub(crate) fn run_inner(
+/// Runs the engine on a finished job file and follows it to the end. Returns what it said that matters (warnings and
+/// errors) and how long it took.
+pub(crate) fn run_profile(
     dee: &Path,
-    job: &AtmosJob,
-    work_dir: &Path,
+    profile: &Path,
+    log: &Path,
     progress: &mut dyn FnMut(f32),
     line: &mut dyn FnMut(&str),
     cancel: &AtomicBool,
-) -> Result<Finished, Error> {
-    let temp = work_dir.join("temp");
-    std::fs::create_dir_all(&temp)?;
-    if let Some(d) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(d)?;
-    }
-    let profile = work_dir.join("job.xml");
-    std::fs::write(&profile, profile_xml(job, &temp)?)?;
+) -> Result<(Vec<String>, f64), Error> {
     let started = std::time::Instant::now();
-    let mut child = engine_command(dee, &profile, &work_dir.join("dee.log")).spawn()?;
+    let mut child = engine_command(dee, profile, log).spawn()?;
     let stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
     let (tx, rx) = mpsc::channel::<String>();
@@ -197,6 +192,26 @@ pub(crate) fn run_inner(
         });
     }
     progress(1.0);
+    Ok((messages, started.elapsed().as_secs_f64()))
+}
+
+pub(crate) fn run_inner(
+    dee: &Path,
+    job: &AtmosJob,
+    work_dir: &Path,
+    progress: &mut dyn FnMut(f32),
+    line: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<Finished, Error> {
+    let temp = work_dir.join("temp");
+    std::fs::create_dir_all(&temp)?;
+    if let Some(d) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d)?;
+    }
+    let profile = work_dir.join("job.xml");
+    std::fs::write(&profile, profile_xml(job, &temp)?)?;
+    let (messages, seconds) = run_profile(dee, &profile, &work_dir.join("dee.log"), progress, line, cancel)?;
+    progress(1.0);
     if !job.output.is_file() {
         return Err(Error::Failed {
             code: 0,
@@ -206,7 +221,7 @@ pub(crate) fn run_inner(
     Ok(Finished {
         output: job.output.clone(),
         report: report_of(&job.output),
-        seconds: started.elapsed().as_secs_f64(),
+        seconds,
         messages,
     })
 }

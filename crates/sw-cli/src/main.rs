@@ -3,6 +3,7 @@
 
 mod args;
 mod atmos;
+mod dolby;
 mod downmix;
 mod encode;
 mod jobs;
@@ -44,6 +45,7 @@ fn run() -> Result<(), String> {
         Cmd::DownmixCheck(args) => downmix::run_downmix_check(args)?,
         Cmd::Loudness(args) => loudness::run_loudness(args)?,
         Cmd::Encode(args) => encode::run_encode(args)?,
+        Cmd::Dolby { op } => dolby::run_dolby(op)?,
         Cmd::Run(args) => jobs::run_jobs(args)?,
         Cmd::Watch(args) => watch::run_watch(args)?,
     }

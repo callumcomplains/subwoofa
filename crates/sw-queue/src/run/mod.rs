@@ -8,8 +8,8 @@ mod spec;
 pub use spec::{dts_dialnorm, EncodeSpec, Failure, Outcome};
 
 use encoders::{
-    encode_ac3, encode_audio_file, encode_dts_core, encode_dts_ma, encode_express, encode_truehd, is_dts_core_family,
-    verify_output, Run,
+    encode_ac3, encode_audio_file, encode_dolby, encode_dts_core, encode_dts_ma, encode_express, encode_truehd,
+    is_dts_core_family, verify_output, Run,
 };
 use log::{fmt_secs, log_header, peak_bit_rate_note};
 pub(crate) use sources::{open_sources, Sources};
@@ -209,6 +209,17 @@ fn normalise(
 
 /// Whether Subwoofa's own encoder does the job (otherwise FFmpeg does).
 fn use_native_engine(spec: &EncodeSpec, stream: StreamType, have_ffmpeg: bool) -> Result<bool, Failure> {
+    if spec.engine == "dolby" {
+        // Dolby's own encoder, run through the Dolby Encoding Engine: neither of ours
+        if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
+            return Err(format!(
+                "the Dolby Encoding Engine encodes Dolby Digital and Digital Plus here, not {}",
+                stream.display_name()
+            )
+            .into());
+        }
+        return Ok(false);
+    }
     // audio files only have a native writer; with no FFmpeg, a format Subwoofa can encode itself simply uses its own
     let native = spec.engine == "native" || stream.is_audio_file() || (!have_ffmpeg && stream.is_native());
     if native && !stream.is_native() {
@@ -231,7 +242,9 @@ fn run_encoder(
     log: &mut String,
 ) -> Result<(), Failure> {
     let stream = ctx.stream;
-    if stream.is_audio_file() {
+    if ctx.spec.engine == "dolby" {
+        encode_dolby(ctx, job, progress, cancel, log)
+    } else if stream.is_audio_file() {
         encode_audio_file(ctx, stems, progress, cancel, log)
     } else if native && matches!(stream, StreamType::TrueHd | StreamType::Mlp) {
         encode_truehd(ctx, stems, progress, cancel, log)

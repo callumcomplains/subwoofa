@@ -145,6 +145,19 @@ fn measured_dialnorm(
     inputs: &HashMap<Channel, PathBuf>,
     args: &EncodeArgs,
 ) -> Result<u8, String> {
+    if args.dolby_meter {
+        let m = crate::loudness::measure_with_engine(layout, inputs, args.start, args.duration, true)?;
+        let dialnorm = m
+            .dialnorm()
+            .ok_or("cannot set the dialnorm from the input: it is silent")?;
+        eprintln!(
+            "Dolby's meter: {:.1} LUFS on the {} ({:.0}% speech): dialnorm -{dialnorm} dBFS",
+            m.integrated.unwrap_or_default(),
+            if m.gating == "speech" { "dialogue" } else { "programme" },
+            m.speech_percent.unwrap_or(0.0)
+        );
+        return Ok(dialnorm);
+    }
     let order = sw_pcm::ChannelOrder::parse(&args.channel_order).ok_or("--channel-order must be auto, mask or file")?;
     let loudness = crate::loudness::measure_inputs(layout, inputs, order, args.start, args.duration)?;
     let dialnorm = loudness

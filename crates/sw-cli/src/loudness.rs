@@ -15,6 +15,15 @@ pub(crate) fn run_loudness(args: LoudnessArgs) -> Result<(), String> {
     let layout = find_layout(&args.layout)?;
     let order = ChannelOrder::parse(&args.channel_order).ok_or("--channel-order must be auto, mask or file")?;
     let inputs = collect_inputs(layout, args.auto_import, &args.inputs)?;
+    if args.dolby {
+        let m = measure_with_engine(layout, &inputs, args.start, args.duration, !args.no_dialogue)?;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?);
+        } else {
+            print!("{}", describe_engine(&m));
+        }
+        return Ok(());
+    }
     let loudness = measure_inputs(layout, &inputs, order, args.start, args.duration)?;
     if args.json {
         println!(
@@ -25,6 +34,74 @@ pub(crate) fn run_loudness(args: LoudnessArgs) -> Result<(), String> {
         print!("{}", describe(&loudness));
     }
     Ok(())
+}
+
+/// Measures with the Dolby Encoding Engine's meter, with a progress line on a terminal.
+pub(crate) fn measure_with_engine(
+    layout: &'static ChannelLayout,
+    inputs: &HashMap<Channel, PathBuf>,
+    start: Option<f64>,
+    duration: Option<f64>,
+    dialogue: bool,
+) -> Result<sw_backend_dee::Measured, String> {
+    let mut progress = Progress::new();
+    sw_queue::dolby::measure(
+        layout,
+        inputs,
+        (start, duration),
+        dialogue,
+        &AtomicBool::new(false),
+        &mut |p| progress.tick(p),
+    )
+}
+
+/// The engine's measurement as text.
+fn describe_engine(m: &sw_backend_dee::Measured) -> String {
+    let mut text = format!(
+        "Integrated loudness  {}   ({})
+",
+        level(m.integrated, "LUFS"),
+        if m.gating == "speech" {
+            format!(
+                "measured on the dialogue, {:.0}% of the programme",
+                m.speech_percent.unwrap_or(0.0)
+            )
+        } else {
+            "whole programme".to_string()
+        }
+    );
+    text.push_str(&format!(
+        "Loudness range       {}
+",
+        level(m.range, "LU")
+    ));
+    text.push_str(&format!(
+        "Short-term maximum   {}
+",
+        level(m.max_short_term, "LUFS")
+    ));
+    text.push_str(&format!(
+        "Momentary maximum    {}
+",
+        level(m.max_momentary, "LUFS")
+    ));
+    text.push_str(&format!(
+        "True peak            {}
+",
+        level(m.highest_true_peak(), "dBTP")
+    ));
+    match m.dialnorm() {
+        Some(d) => text.push_str(&format!(
+            "Matching dialnorm    {:>7} dBFS
+",
+            -(d as i32)
+        )),
+        None => text.push_str(
+            "Matching dialnorm    (the programme is silent)
+",
+        ),
+    }
+    text
 }
 
 /// Reads the input files and measures them, with a progress line on a terminal.

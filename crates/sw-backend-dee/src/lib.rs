@@ -7,6 +7,8 @@
 //! * **TrueHD Atmos** (`encode_to_dthd`) and **Dolby Digital Plus Atmos** (`encode_to_atmos_ddp`,
 //!   `atmos_mezz_to_atmos_ddp`) from an Atmos master written by Dolby's tools (DAMF `.atmos`, ADM BWF `.wav`).
 //!   DEE refuses masters that were not authored with Dolby tools, and so does Subwoofa.
+//! * **Everyday audio jobs** (`task`): loudness measured with dialogue detection, Dolby Digital and Digital Plus encoding
+//!   and decoding, transcoding, trimming and joining E-AC-3, loudness correction and channel reordering.
 //! * **Dolby Digital Plus Atmos from channel audio** (`pcm_to_atmos_ddp`): a multichannel WAV bed (up to 7.1.4).
 
 mod alias;
@@ -16,6 +18,8 @@ mod input;
 mod job;
 mod profile;
 mod run;
+mod task;
+mod taskrun;
 
 pub use find::find_dee;
 pub use info::master_info;
@@ -23,6 +27,8 @@ pub use input::InputKind;
 pub use job::{AtmosJob, DdpOptions, Drc, Presentation, Target, TrueHdOptions};
 pub use profile::profile_xml;
 pub use run::{run, Finished};
+pub use task::{clock, profile, EncodeOptions, Loudness, Measured, Source, Task, TaskJob};
+pub use taskrun::{run_task, work_folder, TaskDone};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
