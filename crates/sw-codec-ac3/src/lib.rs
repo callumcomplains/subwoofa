@@ -23,6 +23,7 @@ pub mod bits;
 pub mod blocksw;
 mod coupling;
 mod coupling_plan;
+pub mod edit;
 mod exponents;
 mod frame_plan;
 mod layout;

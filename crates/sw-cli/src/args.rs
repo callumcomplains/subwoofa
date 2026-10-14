@@ -98,6 +98,16 @@ pub(crate) enum ToolsCmd {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Show or change the dialnorm (dialogue level) of an AC-3 / E-AC-3 stream without re-encoding it.
+    Dialnorm {
+        file: PathBuf,
+        /// The new dialnorm, 1 to 31 (the level is -N dBFS). Without it the current level is shown.
+        #[arg(long, value_name = "N")]
+        set: Option<u8>,
+        /// Write here instead of changing the file in place
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Same as `subwoofa verify`.
     Verify(VerifyArgs),
 }

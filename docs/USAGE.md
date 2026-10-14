@@ -76,6 +76,46 @@ subwoofa encode --stream flac --layout 7.1-side-rear --sample-rate 96000 --pcm-f
 
 `--start` and `--duration` (seconds) encode an excerpt, which is the quickest way to try settings.
 
+### Normalising the loudness
+
+`--normalize -23` (or the Normalise row in the app) applies gain so the whole programme lands on that many LUFS: -23 for EBU R 128, -24 for ATSC A/85. The true peak is kept under -1 dBTP, so a very peaky mix can come out a little quieter than asked. It works with every format Subwoofa encodes itself.
+
+### Job files and a hot folder
+
+Any encode can be saved instead of run, and run again later (or from a script):
+
+```
+subwoofa encode --stream dtshd-ma --dest bluray-primary --layout 5.1 --auto-import Mix_L.wav -o Mix.dtshd --save-job mix.json
+subwoofa run mix.json                  # one job, or a list of jobs; --keep-going carries on past a failure; --verify checks each
+```
+
+A job file is plain JSON: one job, a list of jobs, or `{"jobs": [...]}`. It holds exactly what the app builds for a
+job, so it is easy to edit by hand or generate from another tool.
+
+`subwoofa watch` turns a folder into a hot folder. It takes the format and settings from a job file and encodes every
+complete set of channel files that appears in the folder (`Name_L.wav`, `Name_R.wav` ... or one multichannel file):
+
+```
+subwoofa watch D:\Incoming --job mix.json --out D:\Encoded                 # waits for more until you stop it (Ctrl+C)
+subwoofa watch D:\Incoming --job mix.json --out D:\Encoded --once          # encode what is there and stop
+```
+
+A set is only picked up once its files have stopped changing, so a copy in progress is not read half-written. The
+encode is written under a hidden temporary name and renamed when it is whole, so a stopped run never leaves a half
+file that looks finished. A set whose encode already exists in `--out` is skipped, so the watch can be stopped and
+started freely. `--move-done` moves the source files into `done` (or `failed`) folders beside them, `--interval`
+sets the seconds between looks, and `--verify` decodes each result and checks it. A set that fails is reported and
+not tried again until the watch is restarted.
+
+### Changing the dialnorm of a finished stream
+
+```
+subwoofa tools dialnorm film.ac3                           # shows the level
+subwoofa tools dialnorm film.ac3 --set 24 -o film_24.ac3   # -24 dBFS, nothing re-encoded
+```
+
+Works on AC-3 and E-AC-3 (also in the app: StreamTools > Dialnorm). Only the level and the stream's checksums are rewritten, so the decoded audio is identical; putting the old value back gives the original file.
+
 ## What the formats need
 
 | Format | Notes |

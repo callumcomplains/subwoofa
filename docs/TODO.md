@@ -40,7 +40,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 3. [x] **Preview before committing.** A Preview button beside Encode: encodes 20 seconds from the middle of the programme with the job's exact settings, decodes it, and plays the source, the encode and the difference between them in sync with an instant switch (keys 1, 2, 3, space). Reports the bit rate and signal to noise of the excerpt. Left: choose the excerpt, a blind (X/Y) mode, a multichannel monitor instead of the stereo fold-down, a command-line `subwoofa preview` that writes the three WAV files.
 4. [ ] **Pipeline and automation.** Done: JSON job files (`encode --save-job`, `run`) and a watch folder (`watch`). Left: DAW stem-naming conventions in auto-import, a headless encode server, a Watch tab in the app.
 5. [ ] **More inputs.** A video file or an existing DTS / AC-3 / TrueHD stream as input (with a warning for lossy to lossy), frame-rate conversion (23.976, 24, 25 fps, with and without pitch change), an audio delay control.
-6. [ ] **Metadata edits without re-encoding.** Dialnorm, DRC profile and DTS header fields changed in a finished stream (StreamTools).
+6. [ ] **Metadata edits without re-encoding.** Done: dialnorm of AC-3 / E-AC-3 streams (`tools dialnorm`, StreamTools > Dialnorm). Left: DRC profile, DTS and TrueHD header fields.
 7. [ ] **Better downmix design.** Presets from ITU-R BS.775 and the Lo/Ro, Lt/Rt conventions, loudness-matched stereo, a picture of what each speaker feeds.
 8. [ ] **Reach.** macOS and Linux builds, winget / scoop packages, a "first disc in ten minutes" tutorial.
 

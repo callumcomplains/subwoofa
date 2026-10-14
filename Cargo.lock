@@ -3105,6 +3105,7 @@ dependencies = [
  "serde_json",
  "sw-backend-dee",
  "sw-backend-ffmpeg",
+ "sw-codec-ac3",
  "sw-core",
  "sw-loudness",
  "sw-pcm",

@@ -212,6 +212,30 @@ function initTools() {
     try { toolsLog(await invoke("tools_add_silence", { path: tools.path, output: out, head, tail }), "ok"); }
     catch (e) { toolsLog(String(e), "bad"); }
   };
+  const DN_FILTERS = [{ name: "AC-3 / E-AC-3", extensions: ["ac3", "eac3", "ec3"] }];
+  let dnPath = null;
+  $("tDnOpen").onclick = async () => {
+    const f = await dialog.open({ multiple: false, filters: DN_FILTERS });
+    if (!f) return;
+    dnPath = null; $("tDnPath").value = f; $("tDnNow").value = "";
+    try {
+      const i = await invoke("ac3_dialnorm_info", { path: f });
+      dnPath = f;
+      $("tDnNow").value = `-${i.level} dBFS`;
+      $("tDnNew").value = -i.level;
+      toolsLog(`${i.eac3 ? "E-AC-3" : "AC-3"} stream, ${i.frames.toLocaleString()} frames.`);
+    } catch (e) { toolsLog(String(e), "bad"); }
+  };
+  $("tDnRun").onclick = async () => {
+    if (!dnPath) { toolsLog("Open an AC-3 or E-AC-3 stream first.", "bad"); return; }
+    const level = Math.abs(Math.round(Number($("tDnNew").value)));
+    if (!(level >= 1 && level <= 31)) { toolsLog("Enter a dialnorm from -1 to -31.", "bad"); return; }
+    const dot = dnPath.lastIndexOf(".");
+    const out = await dialog.save({ defaultPath: dnPath.slice(0, dot) + "_dn" + level + dnPath.slice(dot), filters: DN_FILTERS });
+    if (!out) return;
+    try { toolsLog(await invoke("ac3_set_dialnorm", { path: dnPath, output: out, level }), "ok"); }
+    catch (e) { toolsLog(String(e), "bad"); }
+  };
   $("tVerify").onclick = () => {
     if (tools.path) setVerifyFile(tools.path);
     setMode("verify");

@@ -110,6 +110,8 @@ fn main() {
             streamtools::tools_stripe,
             streamtools::tools_restripe,
             streamtools::tools_add_silence,
+            streamtools::ac3_dialnorm_info,
+            streamtools::ac3_set_dialnorm,
             streamtools::verify_file,
             atmos::atmos_locate,
             atmos::atmos_inspect,

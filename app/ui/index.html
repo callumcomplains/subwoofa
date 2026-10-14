@@ -274,6 +274,7 @@ try {
         <button data-op="replace" aria-pressed="false">Replace</button>
         <button data-op="restripe" aria-pressed="false">Re-stripe</button>
         <button data-op="silence" aria-pressed="false">Add silence</button>
+        <button data-op="dialnorm" aria-pressed="false">Dialnorm</button>
         <button data-op="verify" aria-pressed="false">Verify</button>
       </div>
       <div class="db">
@@ -327,6 +328,18 @@ try {
             <label class="f small"><span>Head (s)</span><input id="tSilHead" type="number" min="0" step="0.1" value="0"></label>
             <label class="f small"><span>Tail (s)</span><input id="tSilTail" type="number" min="0" step="0.1" value="0"></label>
             <button id="tSilRun" class="go small">Write…</button>
+          </div>
+        </div>
+        <div class="op" data-op="dialnorm" hidden>
+          <h3 class="op-title">Dialnorm of an AC-3 or E-AC-3 stream</h3>
+          <div class="op-row">
+            <button id="tDnOpen">Open stream…</button>
+            <label class="f grow"><span>Stream</span><input id="tDnPath" readonly data-opens="tDnOpen" placeholder="Double-click to open an .ac3 or .eac3 file"></label>
+          </div>
+          <div class="op-row">
+            <label class="f small"><span>Now</span><input id="tDnNow" readonly></label>
+            <label class="f small"><span>New (-1 to -31)</span><input id="tDnNew" type="number" min="-31" max="-1" step="1" value="-27"></label>
+            <button id="tDnRun" class="go small">Write…</button>
           </div>
         </div>
         <div class="op" data-op="verify" hidden>

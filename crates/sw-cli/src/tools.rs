@@ -97,6 +97,34 @@ pub(crate) fn run_tools(op: ToolsCmd) -> Result<(), String> {
                 t
             );
         }
+        ToolsCmd::Dialnorm { file, set, output } => {
+            let mut data = std::fs::read(&file).map_err(|err| format!("{}: {err}", file.display()))?;
+            match set {
+                None => {
+                    let found = sw_codec_ac3::edit::inspect(&data)?;
+                    println!(
+                        "{}: {} stream, {} frames, dialnorm -{} dBFS",
+                        file.display(),
+                        if found.eac3 { "E-AC-3" } else { "AC-3" },
+                        found.frames,
+                        found.previous
+                    );
+                }
+                Some(level) => {
+                    let done = sw_codec_ac3::edit::set_dialnorm(&mut data, level)?;
+                    let out = output.unwrap_or_else(|| file.clone());
+                    std::fs::write(&out, data).map_err(|err| format!("{}: {err}", out.display()))?;
+                    println!(
+                        "wrote {}: dialnorm -{} dBFS (was -{}), {} of {} frames rewritten",
+                        out.display(),
+                        level,
+                        done.previous,
+                        done.changed,
+                        done.frames
+                    );
+                }
+            }
+        }
         ToolsCmd::Verify(args) => return verify_cmd(args),
     }
     Ok(())

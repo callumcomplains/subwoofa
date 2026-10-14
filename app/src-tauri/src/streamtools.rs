@@ -122,6 +122,44 @@ pub async fn tools_add_silence(path: String, output: String, head: f64, tail: f6
     .await
 }
 
+/// What an AC-3 / E-AC-3 stream says about its dialogue level.
+#[derive(serde::Serialize)]
+pub struct DialnormInfo {
+    eac3: bool,
+    frames: usize,
+    level: u8,
+}
+
+#[tauri::command]
+pub async fn ac3_dialnorm_info(path: String) -> Result<DialnormInfo, String> {
+    blocking(move || {
+        let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+        let found = sw_codec_ac3::edit::inspect(&data)?;
+        Ok(DialnormInfo {
+            eac3: found.eac3,
+            frames: found.frames,
+            level: found.previous,
+        })
+    })
+    .await
+}
+
+/// Writes a copy of an AC-3 / E-AC-3 stream with a new dialnorm; the audio is not touched.
+#[tauri::command]
+pub async fn ac3_set_dialnorm(path: String, output: String, level: u8) -> Result<String, String> {
+    blocking(move || {
+        let mut data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+        let done = sw_codec_ac3::edit::set_dialnorm(&mut data, level)?;
+        std::fs::write(&output, data).map_err(|e| format!("{output}: {e}"))?;
+        Ok(format!(
+            "Wrote {output}
+Dialnorm -{level} dBFS (was -{}); {} of {} frames rewritten",
+            done.previous, done.changed, done.frames
+        ))
+    })
+    .await
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct VerifyOut {
     pub(crate) report: sw_verify::Report,
