@@ -57,6 +57,10 @@ fn atmos_encode(
         presentation_8ch,
         presentation_6ch,
         metering,
+        no_dialogue,
+        speech_threshold,
+        surround_trim,
+        height_trim,
         dee: path,
     } = args;
     let d = find(path)?;
@@ -81,6 +85,8 @@ fn atmos_encode(
             data_rate_kbps: bitrate,
             drc_line: drc,
             drc_rf: drc,
+            surround_trim_5_1: surround_trim,
+            height_trim_5_1: height_trim,
             ..Default::default()
         }),
         other => return Err(format!("unknown format '{other}': use truehd or ddp")),
@@ -91,6 +97,8 @@ fn atmos_encode(
     job.start = start;
     job.end = end;
     job.metering = metering;
+    job.dialogue_intelligence = no_dialogue.then_some(false);
+    job.speech_threshold = speech_threshold;
     let work = std::env::temp_dir().join(format!("subwoofa_dee_{}", std::process::id()));
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let mut shown = -1i32;

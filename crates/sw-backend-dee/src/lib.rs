@@ -108,6 +108,34 @@ mod tests {
     }
 
     #[test]
+    fn trims_and_dialogue_settings_reach_the_profile() {
+        let mut j = ddp_job(InputKind::Damf);
+        if let Target::Ddp(o) = &mut j.target {
+            o.surround_trim_5_1 = "-3".into();
+            o.height_trim_5_1 = "-9".into();
+        }
+        j.metering = Some("1770-3".into());
+        j.dialogue_intelligence = Some(false);
+        j.speech_threshold = Some(40);
+        let x = profile_xml(&j, Path::new("D:/tmp")).unwrap();
+        for want in [
+            "<custom_trims><surround_trim_5_1>-3</surround_trim_5_1><height_trim_5_1>-9</height_trim_5_1></custom_trims>",
+            "<loudness><measure_only><metering_mode>1770-3</metering_mode><dialogue_intelligence>false</dialogue_intelligence><speech_threshold>40</speech_threshold></measure_only></loudness>",
+        ] {
+            assert!(x.contains(want), "missing {want} in {x}");
+        }
+        // left on auto, the trims are not written at all
+        let plain = profile_xml(&ddp_job(InputKind::Damf), Path::new("D:/tmp")).unwrap();
+        assert!(!plain.contains("custom_trims"));
+        if let Target::Ddp(o) = &mut j.target {
+            o.surround_trim_5_1 = "-2".into();
+        }
+        assert!(profile_xml(&j, Path::new("D:/tmp")).is_err());
+        j.speech_threshold = Some(101);
+        assert!(profile_xml(&j, Path::new("D:/tmp")).is_err());
+    }
+
+    #[test]
     fn bad_settings_are_refused_before_dee_runs() {
         let mut j = ddp_job(InputKind::Wav);
         if let Target::Ddp(o) = &mut j.target {

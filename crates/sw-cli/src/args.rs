@@ -366,6 +366,18 @@ pub(crate) struct AtmosEncodeArgs {
     /// Measure loudness (1770-4, 1770-3, 1770-2, 1770-1, LeqA)
     #[arg(long)]
     pub(crate) metering: Option<String>,
+    /// With --metering: measure the whole programme instead of finding the dialogue first.
+    #[arg(long, requires = "metering")]
+    pub(crate) no_dialogue: bool,
+    /// With --metering: how sure the speech detector must be, 0 to 100 (default 15).
+    #[arg(long, requires = "metering")]
+    pub(crate) speech_threshold: Option<u8>,
+    /// Dolby Digital Plus: 5.1 downmix trim of the surround channels in dB (0, -3, -6, -9 or auto).
+    #[arg(long, default_value = "auto", allow_hyphen_values = true)]
+    pub(crate) surround_trim: String,
+    /// Dolby Digital Plus: 5.1 downmix trim of the height channels in dB (-3, -6, -9, -12 or auto).
+    #[arg(long, default_value = "auto", allow_hyphen_values = true)]
+    pub(crate) height_trim: String,
     #[arg(long)]
     pub(crate) dee: Option<PathBuf>,
 }

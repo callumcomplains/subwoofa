@@ -50,6 +50,14 @@ pub struct Req {
     pub start: Option<String>,
     pub end: Option<String>,
     pub metering: Option<String>,
+    #[serde(default)]
+    pub dialogue: Option<bool>,
+    #[serde(default)]
+    pub speech_threshold: Option<u8>,
+    #[serde(default)]
+    pub surround_trim: Option<String>,
+    #[serde(default)]
+    pub height_trim: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -139,6 +147,8 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
             data_rate_kbps: req.bitrate,
             drc_line: drc,
             drc_rf: drc,
+            surround_trim_5_1: req.surround_trim.clone().unwrap_or_else(|| "auto".into()),
+            height_trim_5_1: req.height_trim.clone().unwrap_or_else(|| "auto".into()),
             ..Default::default()
         }),
         other => return Err(format!("unknown format '{other}'")),
@@ -149,6 +159,8 @@ pub fn atmos_start(state: tauri::State<State>, req: Req) -> Result<(), String> {
     job.start = req.start.filter(|s| !s.trim().is_empty());
     job.end = req.end.filter(|s| !s.trim().is_empty());
     job.metering = req.metering.filter(|s| !s.is_empty());
+    job.dialogue_intelligence = req.dialogue;
+    job.speech_threshold = req.speech_threshold;
     // fail fast on settings DEE would reject
     dee::profile_xml(&job, std::path::Path::new("temp")).map_err(|e| e.to_string())?;
 

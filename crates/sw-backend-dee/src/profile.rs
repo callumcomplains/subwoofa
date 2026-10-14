@@ -142,6 +142,23 @@ fn common_fields(job: &AtmosJob) -> String {
     common
 }
 
+/// The metering mode with the dialogue settings that go with it, as the engine's `measure_only` fields.
+fn metering_fields(job: &AtmosJob, mode: &str) -> Result<String, Error> {
+    if let Some(t) = job.speech_threshold {
+        if t > 100 {
+            return Err(Error::Invalid("the speech threshold is 0 to 100".into()));
+        }
+    }
+    let mut f = el("metering_mode", mode);
+    if let Some(d) = job.dialogue_intelligence {
+        f.push_str(&el("dialogue_intelligence", on_off(d)));
+    }
+    if let Some(t) = job.speech_threshold {
+        f.push_str(&el("speech_threshold", &t.to_string()));
+    }
+    Ok(f)
+}
+
 fn on_off(flag: bool) -> &'static str {
     if flag {
         "true"
@@ -171,7 +188,7 @@ fn truehd_filter(job: &AtmosJob, o: &TrueHdOptions) -> Result<String, Error> {
     if let Some(m) = &job.metering {
         f.push_str(&format!(
             "<loudness_measurement>{}</loudness_measurement>",
-            el("metering_mode", m)
+            metering_fields(job, m)?
         ));
     }
     f.push_str(&common_fields(job));
@@ -225,7 +242,7 @@ fn ddp_filter(job: &AtmosJob, kind: InputKind, o: &DdpOptions) -> Result<String,
     if let Some(m) = &job.metering {
         f.push_str(&format!(
             "<loudness><measure_only>{}</measure_only></loudness>",
-            el("metering_mode", m)
+            metering_fields(job, m)?
         ));
     }
     f.push_str(&el("data_rate", &o.data_rate_kbps.to_string()));
@@ -243,6 +260,26 @@ fn ddp_filter(job: &AtmosJob, kind: InputKind, o: &DdpOptions) -> Result<String,
         el("ltrt_surround_mix_level", &o.ltrt_surround),
         el("preferred_downmix_mode", &o.preferred_downmix)
     ));
+    if o.surround_trim_5_1 != "auto" || o.height_trim_5_1 != "auto" {
+        let pick = |what: &str, v: &str, allowed: &[&str]| -> Result<String, Error> {
+            if allowed.contains(&v) {
+                Ok(v.to_string())
+            } else {
+                Err(Error::Invalid(format!("{what} '{v}': use {}", allowed.join(", "))))
+            }
+        };
+        f.push_str(&format!(
+            "<custom_trims>{}{}</custom_trims>",
+            el(
+                "surround_trim_5_1",
+                &pick("surround trim", &o.surround_trim_5_1, &["0", "-3", "-6", "-9", "auto"])?
+            ),
+            el(
+                "height_trim_5_1",
+                &pick("height trim", &o.height_trim_5_1, &["-3", "-6", "-9", "-12", "auto"])?
+            )
+        ));
+    }
     if let Some(d) = job.custom_dialnorm {
         f.push_str(&el("custom_dialnorm", &d.clamp(-31, 0).to_string()));
     }

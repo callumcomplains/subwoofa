@@ -440,6 +440,10 @@ try {
     <label class="f small"><span>Dialogue level</span><input id="aDialnorm" type="number" min="-31" max="0" step="1" value="0"></label>
     <label class="f small"><span>Loudness metering</span>
       <select id="aMeter"><option value="">none</option><option>1770-4</option><option>1770-3</option><option>1770-2</option><option>1770-1</option><option>LeqA</option></select></label>
+    <label class="f small" id="aDialogueWrap"><span>Dialogue detection</span><select id="aDialogue"><option value="">Engine default (on)</option><option value="on">On: measure the dialogue</option><option value="off">Off: whole programme</option></select></label>
+    <label class="f small"><span>Speech threshold (0-100)</span><input id="aSpeech" type="number" min="0" max="100" step="1" placeholder="15"></label>
+    <label class="f small" id="aTrimWrap" hidden><span>5.1 surround trim (dB)</span><select id="aSurTrim"><option value="auto" selected>Auto</option><option>0</option><option>-3</option><option>-6</option><option>-9</option></select></label>
+    <label class="f small" id="aHtTrimWrap" hidden><span>5.1 height trim (dB)</span><select id="aHtTrim"><option value="auto" selected>Auto</option><option>-3</option><option>-6</option><option>-9</option><option>-12</option></select></label>
     <label class="f small"><span>Timecode frame rate</span>
       <select id="aFps"><option value="">not given</option><option>23.976</option><option>24</option><option>25</option><option>29.97</option><option>30</option><option>48</option><option>50</option><option>59.94</option><option>60</option></select></label>
     <label class="f"><span>Start (HH:MM:SS:FF)</span><input id="aStart" type="text" placeholder="first frame of action" spellcheck="false"></label>

@@ -27,6 +27,8 @@ function atmosFormat(f) {
   $("aThdOpts").hidden = f !== "truehd";
   $("aClWrap").hidden = f !== "truehd";
   $("aBrWrap").hidden = f !== "ddp";
+  $("aTrimWrap").hidden = f !== "ddp";
+  $("aHtTrimWrap").hidden = f !== "ddp";
 }
 
 async function setAtmosFile(path) {
@@ -80,6 +82,9 @@ function initAtmos() {
       p8: $("aP8").checked, p6: $("aP6").checked, p2: $("aP2").checked, p2Format: "stereo", p2_format: "stereo",
       optimize: $("aOpt").checked, bitrate: num("aBr"), dialnorm: num("aDialnorm") || null,
       frame_rate: $("aFps").value || null, start: $("aStart").value || null, end: $("aEnd").value || null, metering: $("aMeter").value || null,
+      dialogue: $("aDialogue").value === "" ? null : $("aDialogue").value === "on",
+      speech_threshold: $("aSpeech").value === "" ? null : num("aSpeech"),
+      surround_trim: $("aSurTrim").value, height_trim: $("aHtTrim").value,
     };
     $("aVerdict").hidden = true;
     $("aToVerify").hidden = true;

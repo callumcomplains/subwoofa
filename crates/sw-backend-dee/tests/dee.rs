@@ -42,7 +42,16 @@ fn channel_bed_becomes_dolby_digital_plus_atmos() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("bed.wav");
     bed_wav(&wav, 4);
-    let job = AtmosJob::new(&wav, dir.join("bed.ec3"), Target::Ddp(DdpOptions::default()));
+    // the optional settings go in too, so the engine itself checks that it accepts them
+    let options = DdpOptions {
+        surround_trim_5_1: "-3".into(),
+        height_trim_5_1: "-9".into(),
+        ..Default::default()
+    };
+    let mut job = AtmosJob::new(&wav, dir.join("bed.ec3"), Target::Ddp(options));
+    job.metering = Some("1770-3".into());
+    job.dialogue_intelligence = Some(true);
+    job.speech_threshold = Some(30);
     let mut last = 0.0;
     let done = run(
         &dee,

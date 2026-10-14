@@ -97,6 +97,10 @@ pub struct DdpOptions {
     pub ltrt_surround: String,
     /// `loro`, `ltrt`, `ltrt-pl2` or `not_indicated`.
     pub preferred_downmix: String,
+    /// Trims for the 5.1 downmix of the Atmos mix, in dB: the surround channels (`0`, `-3`, `-6`, `-9`) and the height
+    /// channels (`-3`, `-6`, `-9`, `-12`), or `auto` to let the engine choose.
+    pub surround_trim_5_1: String,
+    pub height_trim_5_1: String,
 }
 
 impl Default for DdpOptions {
@@ -110,6 +114,8 @@ impl Default for DdpOptions {
             ltrt_center: "-3".into(),
             ltrt_surround: "-3".into(),
             preferred_downmix: "loro".into(),
+            surround_trim_5_1: "auto".into(),
+            height_trim_5_1: "auto".into(),
         }
     }
 }
@@ -139,6 +145,12 @@ pub struct AtmosJob {
     pub end: Option<String>,
     /// Measure loudness with this standard (`1770-4`...) so the dialogue level is set from it.
     pub metering: Option<String>,
+    /// With metering: find the dialogue and measure that (the engine's default) or measure the whole programme.
+    #[serde(default)]
+    pub dialogue_intelligence: Option<bool>,
+    /// With dialogue detection: how sure the speech detector must be, 0 to 100 (the engine's default is 15).
+    #[serde(default)]
+    pub speech_threshold: Option<u8>,
     /// Dialogue level override, -31 to 0 (0 keeps the measured one).
     pub custom_dialnorm: Option<i32>,
     pub prepend_silence: Option<String>,
@@ -156,6 +168,8 @@ impl AtmosJob {
             start: None,
             end: None,
             metering: None,
+            dialogue_intelligence: None,
+            speech_threshold: None,
             custom_dialnorm: None,
             prepend_silence: None,
             append_silence: None,
