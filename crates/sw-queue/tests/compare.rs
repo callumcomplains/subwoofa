@@ -65,6 +65,7 @@ fn spec_for(
         bitstream: Default::default(),
         speed: "fast".into(),
         threads: 0,
+        normalize_lufs: None,
         write_log: false,
     }
 }
@@ -171,4 +172,43 @@ fn a_preview_lines_the_encode_up_with_the_source() {
     let snr = ac3.snr_db.expect("a lossy encode differs");
     assert!(snr > 15.0 && snr < 90.0, "{snr}");
     assert!(ac3.kbps > 150.0 && ac3.kbps < 230.0, "{}", ac3.kbps);
+}
+
+#[test]
+fn normalising_brings_the_loudness_to_the_target() {
+    let dir = std::env::temp_dir().join(format!("sw_normalise_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut inputs = HashMap::new();
+    for (i, ch) in ["L", "R"].iter().enumerate() {
+        let path = dir.join(format!("{ch}.wav"));
+        write_wav(&path, i as u32 + 1);
+        inputs.insert(ch.to_string(), path.to_string_lossy().into_owned());
+    }
+    let mut spec = spec_for(&dir, &inputs, "wav", "files", None, "wav");
+    spec.pcm_format = "s24".into();
+    spec.normalize_lufs = Some(-30.0);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    execute(&spec, false, &cancel, &mut |_, _| {}).unwrap_or_else(|_| panic!("normalised encode failed"));
+
+    // the stereo output file, read as left and right
+    let out: HashMap<Channel, PathBuf> = [
+        (Channel::L, PathBuf::from(&spec.output)),
+        (Channel::R, PathBuf::from(&spec.output)),
+    ]
+    .into();
+    let measure = |files: &HashMap<Channel, PathBuf>| {
+        let request = sw_queue::measure::Measure {
+            layout: ChannelLayout::find("2.0").unwrap(),
+            inputs: files,
+            order: sw_pcm::ChannelOrder::Auto,
+            start: None,
+            duration: None,
+        };
+        sw_queue::measure::loudness(&request, &cancel, &mut |_| {})
+            .unwrap()
+            .integrated
+            .unwrap()
+    };
+    let loudness = measure(&out);
+    assert!((loudness + 30.0).abs() < 0.2, "{loudness} LUFS");
 }

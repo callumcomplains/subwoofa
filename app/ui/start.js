@@ -24,6 +24,8 @@ async function init() {
   $("dialnormOn").onchange = () => { $("dialnorm").disabled = !$("dialnormOn").checked; syncDialnorm(); };
   $("dialnorm").oninput = syncDialnorm;
   $("dialnormMeasure").onclick = measureLoudness;
+  $("normOn").onchange = update;
+  $("normTarget").oninput = update;
   syncDialnorm();
   setUnlocked(store.get("unlocked") === "1");
   await cascade("dest");

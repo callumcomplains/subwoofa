@@ -109,6 +109,15 @@ try {
         </div>
         <small id="loudReadout" class="readout" hidden></small>
       </div>
+      <div class="f">
+        <label for="normOn"><span>Normalise</span></label>
+        <div class="combo">
+          <label class="chk tight"><input type="checkbox" id="normOn"><span>On</span></label>
+          <input id="normTarget" type="number" min="-50" max="-5" step="0.5" value="-23" disabled aria-label="Target loudness in LUFS">
+          <span class="unit">LUFS</span>
+          <small id="normNote" class="readout"></small>
+        </div>
+      </div>
       <div class="f dtsopts" id="dtsOpts" hidden>
         <label><span>DTS options</span></label>
         <div class="stack">

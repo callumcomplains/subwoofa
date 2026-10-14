@@ -45,11 +45,24 @@ impl std::fmt::Display for MeasureError {
 /// Reads the inputs once and measures them. `on_progress` gets the fraction done.
 pub fn loudness(m: &Measure, cancel: &AtomicBool, on_progress: &mut dyn FnMut(f32)) -> Result<Loudness, MeasureError> {
     let mut stems = StemSet::open_ordered(m.layout, m.inputs, m.order)?;
-    let total = stems.select_span(m.start.unwrap_or(0.0), m.duration)?;
+    measure_stems(&mut stems, m.layout.channels, m.start, m.duration, cancel, on_progress)
+}
+
+/// Measures a span of an open set of stems, as the set reads (so after any downmix and gain it has), with `channels`
+/// naming what it reads. The set is left at the end of the span.
+pub fn measure_stems(
+    stems: &mut StemSet,
+    channels: &[Channel],
+    start: Option<f64>,
+    duration: Option<f64>,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(f32),
+) -> Result<Loudness, MeasureError> {
+    let total = stems.select_span(start.unwrap_or(0.0), duration)?;
     if total == 0 {
         return Err(MeasureError::Empty);
     }
-    let mut meter = Meter::new(stems.sample_rate, m.layout.channels);
+    let mut meter = Meter::new(stems.sample_rate, channels);
     let mut done = 0u64;
     stems.read_ahead(1 << 16, total, |planar, frames| {
         if cancel.load(Ordering::Relaxed) {

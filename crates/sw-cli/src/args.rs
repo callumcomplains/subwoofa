@@ -408,6 +408,10 @@ pub(crate) struct EncodeArgs {
     /// Measure the input first and set the dialnorm from its integrated loudness (instead of --dialnorm).
     #[arg(long, conflicts_with = "dialnorm")]
     pub(crate) auto_dialnorm: bool,
+    /// Apply gain so the integrated loudness lands on this many LUFS (e.g. -23 for EBU R 128, -24 for ATSC A/85); the
+    /// true peak is kept under -1 dBTP. Needs a format Subwoofa encodes itself.
+    #[arg(long, value_name = "LUFS", allow_hyphen_values = true)]
+    pub(crate) normalize: Option<f64>,
     /// Start offset into the source, in seconds.
     #[arg(long)]
     pub(crate) start: Option<f64>,

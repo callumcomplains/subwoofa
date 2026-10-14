@@ -53,6 +53,10 @@ pub struct EncodeSpec {
     /// How many threads the encode may use; 0 means every core.
     #[serde(default)]
     pub threads: u32,
+    /// Apply gain so the integrated loudness of the encoded span lands on this many LUFS (the true peak is kept under
+    /// -1 dBTP, which can leave the result quieter). Needs a format Subwoofa encodes itself.
+    #[serde(default)]
+    pub normalize_lufs: Option<f64>,
     /// Leave a log of the run next to the output (the app does; the command line does not).
     #[serde(default = "yes")]
     pub write_log: bool,

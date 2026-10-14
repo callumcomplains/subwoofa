@@ -98,6 +98,7 @@ fn build_spec(args: &EncodeArgs) -> Result<EncodeSpec, String> {
         bitstream: args.bitstream.options()?,
         speed: args.speed.clone(),
         threads: args.threads,
+        normalize_lufs: args.normalize,
         write_log: false,
     })
 }

@@ -101,7 +101,19 @@ fn execute_inner(
         (start, span),
     );
     let ffmpeg = ff::find_ffmpeg();
-    let native = use_native_engine(spec, stream, ffmpeg.is_some())?;
+    let mut native = use_native_engine(spec, stream, ffmpeg.is_some())?;
+    if let Some(target) = spec.normalize_lufs {
+        // the gain is applied as the samples are read, which only Subwoofa's own encoders do
+        if !native && !stream.is_native() {
+            return Err(format!(
+                "normalising needs a format Subwoofa encodes itself; {} goes through FFmpeg",
+                stream.display_name()
+            )
+            .into());
+        }
+        native = true;
+        normalise(&mut stems, layout, (start, span), target, cancel, log)?;
+    }
     let slots = if downmixed {
         Vec::new()
     } else {
@@ -159,6 +171,40 @@ fn execute_inner(
     }
     on_progress(1.0, true);
     verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
+}
+
+/// Measures the span and sets the gain that brings its integrated loudness to `target` LUFS, less if that would push the
+/// true peak above -1 dBTP.
+fn normalise(
+    stems: &mut StemSet,
+    layout: &'static ChannelLayout,
+    (start, span): (f64, f64),
+    target: f64,
+    cancel: &AtomicBool,
+    log: &mut String,
+) -> Result<(), Failure> {
+    let measured = crate::measure::measure_stems(stems, layout.channels, Some(start), Some(span), cancel, &mut |_| {})
+        .map_err(|e| match e {
+            crate::measure::MeasureError::Canceled => Failure::Canceled,
+            other => Failure::Error(other.to_string()),
+        })?;
+    let integrated = measured
+        .integrated
+        .ok_or("the input is silent, so there is nothing to normalise")?;
+    let mut gain = target - integrated;
+    let mut note = String::new();
+    if let Some(peak) = measured.true_peak() {
+        if peak + gain > -1.0 {
+            gain = -1.0 - peak;
+            note = format!(" (limited by the true peak: {peak:.1} dBTP before, -1.0 dBTP after)");
+        }
+    }
+    stems.set_gain_db(gain);
+    log.push_str(&format!(
+        "Normalise:    {integrated:.1} LUFS measured, {gain:+.1} dB applied, aiming for {target:.1} LUFS{note}
+"
+    ));
+    Ok(())
 }
 
 /// Whether Subwoofa's own encoder does the job (otherwise FFmpeg does).

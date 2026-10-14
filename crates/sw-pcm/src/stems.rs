@@ -19,6 +19,8 @@ pub struct StemSet {
     pub time_reference: Option<u64>,
     pub(crate) scratch: Vec<Vec<f32>>,
     pub(crate) mix: Option<sw_core::downmix::Matrix>,
+    /// Linear gain applied to everything read (1.0 leaves the samples as they are).
+    pub(crate) gain: f32,
 }
 
 impl StemSet {
@@ -64,6 +66,7 @@ impl StemSet {
             time_reference,
             scratch: vec![Vec::new(); nfiles],
             mix: None,
+            gain: 1.0,
         })
     }
 
@@ -71,6 +74,11 @@ impl StemSet {
     /// the set reads as the matrix's output channels.
     pub fn set_downmix(&mut self, matrix: sw_core::downmix::Matrix) {
         self.mix = Some(matrix);
+    }
+
+    /// Scales everything read from now on by `db` decibels (after any downmix).
+    pub fn set_gain_db(&mut self, db: f64) {
+        self.gain = 10f64.powf(db / 20.0) as f32;
     }
 
     pub fn layout(&self) -> &'static ChannelLayout {
@@ -181,6 +189,13 @@ impl StemSet {
                 }
             }
             *planar = mixed;
+        }
+        if self.gain != 1.0 {
+            for plane in planar.iter_mut() {
+                for x in plane.iter_mut() {
+                    *x *= self.gain;
+                }
+            }
         }
         Ok(n)
     }
