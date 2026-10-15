@@ -321,17 +321,58 @@ fn db(x: f64) -> Option<f64> {
 
 /// Compares the decode of `path` with `src` and adds the result to `report`: a check or two, and the figures.
 pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src: &Source) -> Result<(), String> {
+    let total = open_span(src)?.1;
+    let alignment = line_up(path, ffmpeg, src, total)?;
+    let run = tally_all(path, ffmpeg, src, total, &alignment)?;
+    let comparison = Comparison {
+        lag_samples: alignment.lag,
+        compared_frames: run.compared,
+        source_frames: total,
+        decoded_frames: run.decoded_frames.saturating_sub(alignment.lag.max(0) as u64) + run.skipped_source,
+        exact: run.tallies.iter().all(|t| t.mismatches == 0),
+        reordered: alignment.mapping != decoded_order(src.layout),
+        channels: run
+            .tallies
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ChannelMatch {
+                name: src.layout.channels[i].short().to_string(),
+                decoded_index: alignment.mapping[i],
+                rms_dbfs: db(t.signal / t.count.max(1) as f64),
+                snr_db: if t.error > 0.0 { db(t.signal / t.error) } else { None },
+                peak_error_dbfs: (t.peak > 0.0).then(|| 20.0 * t.peak.log10()),
+                mismatches: t.mismatches,
+            })
+            .collect(),
+    };
+    add_checks(report, &comparison);
+    report.comparison = Some(comparison);
+    Ok(())
+}
+
+/// The source's files opened at the start of its span, and how many frames the span holds.
+fn open_span(src: &Source) -> Result<(StemSet, u64), String> {
     let mut stems = StemSet::open_ordered(src.layout, src.inputs, src.order).map_err(|e| e.to_string())?;
-    let rate = stems.sample_rate as f64;
     let total = stems
         .select_span(src.start.unwrap_or(0.0), src.duration)
         .map_err(|e| e.to_string())?;
     if total == 0 {
         return Err("the source is empty".into());
     }
-    let channels = src.layout.channels.len();
+    Ok((stems, total))
+}
 
-    // 1. line the decode up with the source, on the start of the programme
+/// How the decode sits against the source: how late it starts, and which decoded channel carries each source channel.
+struct Alignment {
+    lag: i64,
+    mapping: Vec<usize>,
+}
+
+/// Lines the decode up with the source on the start of the programme.
+fn line_up(path: &Path, ffmpeg: &Path, src: &Source, total: u64) -> Result<Alignment, String> {
+    let (mut stems, _) = open_span(src)?;
+    let rate = stems.sample_rate as f64;
+    let channels = src.layout.channels.len();
     let first = (LAG_SECONDS * rate) as usize;
     let mut source_head = Vec::new();
     stems
@@ -349,19 +390,31 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
         ));
     }
     let (lag, best_window) = find_lag(&source_head, &head, rate)?;
-    let mapping = match_channels(&source_head, &head, lag, best_window);
+    Ok(Alignment {
+        lag,
+        mapping: match_channels(&source_head, &head, lag, best_window),
+    })
+}
 
-    // 2. compare everything
-    let mut stems = StemSet::open_ordered(src.layout, src.inputs, src.order).map_err(|e| e.to_string())?;
-    stems
-        .select_span(src.start.unwrap_or(0.0), src.duration)
-        .map_err(|e| e.to_string())?;
+/// What reading the whole decode against the whole source found.
+struct Run {
+    tallies: Vec<Tally>,
+    compared: u64,
+    decoded_frames: u64,
+    /// Frames of the source before the decode starts (it started early), which have nothing to compare with.
+    skipped_source: u64,
+}
+
+/// Compares the whole decode with the whole source, block by block.
+fn tally_all(path: &Path, ffmpeg: &Path, src: &Source, total: u64, alignment: &Alignment) -> Result<Run, String> {
+    let (mut stems, _) = open_span(src)?;
+    let channels = src.layout.channels.len();
     let mut child = spawn_decoder(path, ffmpeg, None)?;
     let mut out = child.stdout.take().unwrap();
     let mut planar = Vec::new();
     // a positive lag means the decode starts late: its first frames have no source
-    let (mut skip_decoded, mut skip_source) = (lag.max(0) as usize, (-lag).max(0) as usize);
-    let skip_source_total = skip_source as u64;
+    let (mut skip_decoded, mut skip_source) = (alignment.lag.max(0) as usize, (-alignment.lag).max(0) as usize);
+    let skipped_source = skip_source as u64;
     let mut tallies = vec![Tally::default(); channels];
     let (mut compared, mut decoded_frames) = (0u64, 0u64);
     // frames of the span not yet read
@@ -393,7 +446,7 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
         decoded_frames += got_decoded as u64;
         let n = got_source.min(got_decoded);
         for (s, tally) in tallies.iter_mut().enumerate() {
-            tally.add(&planar[s][..n], &decoded[mapping[s]][..n]);
+            tally.add(&planar[s][..n], &decoded[alignment.mapping[s]][..n]);
         }
         compared += n as u64;
         if got_source < BLOCK || left == 0 || got_decoded < got_source {
@@ -402,31 +455,12 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
     }
     let _ = child.kill();
     let _ = child.wait();
-
-    let expected = decoded_order(src.layout);
-    let comparison = Comparison {
-        lag_samples: lag,
-        compared_frames: compared,
-        source_frames: total,
-        decoded_frames: decoded_frames.saturating_sub(lag.max(0) as u64) + skip_source_total,
-        exact: tallies.iter().all(|t| t.mismatches == 0),
-        reordered: mapping != expected,
-        channels: tallies
-            .iter()
-            .enumerate()
-            .map(|(i, t)| ChannelMatch {
-                name: src.layout.channels[i].short().to_string(),
-                decoded_index: mapping[i],
-                rms_dbfs: db(t.signal / t.count.max(1) as f64),
-                snr_db: if t.error > 0.0 { db(t.signal / t.error) } else { None },
-                peak_error_dbfs: (t.peak > 0.0).then(|| 20.0 * t.peak.log10()),
-                mismatches: t.mismatches,
-            })
-            .collect(),
-    };
-    add_checks(report, &comparison);
-    report.comparison = Some(comparison);
-    Ok(())
+    Ok(Run {
+        tallies,
+        compared,
+        decoded_frames,
+        skipped_source,
+    })
 }
 
 /// How many channels the file decodes to.

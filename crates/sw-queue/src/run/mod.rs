@@ -84,13 +84,7 @@ fn execute_inner(
     }
     let effort = sw_core::Effort::from_id(&spec.speed)
         .ok_or_else(|| format!("unknown speed '{}' (use fast, balanced or best)", spec.speed))?;
-    let start = spec.start.unwrap_or(0.0);
-    let total_src = stems.frames as f64 / stems.sample_rate as f64;
-    let span = spec
-        .duration
-        .unwrap_or(total_src - start)
-        .min(total_src - start)
-        .max(0.0);
+    let (start, span) = span_of(spec, &stems);
     *span_secs = span;
     if span <= 0.0 {
         return Err("nothing to encode: the start time is at or past the end of the input".into());
@@ -105,21 +99,7 @@ fn execute_inner(
         (start, span),
     );
     let ffmpeg = ff::find_ffmpeg();
-    let mut native = use_native_engine(spec, stream, ffmpeg.is_some())?;
-    // a delay and a gain are applied as the samples are read, which only Subwoofa's own encoders do
-    if spec.normalize_lufs.is_some() || spec.delay_ms != 0 {
-        if spec.engine == "dolby" {
-            return Err("a delay or normalising is not available with the Dolby Encoding Engine".into());
-        }
-        if !native && !stream.is_native() {
-            return Err(format!(
-                "a delay or normalising needs a format Subwoofa encodes itself; {} goes through FFmpeg",
-                stream.display_name()
-            )
-            .into());
-        }
-        native = true;
-    }
+    let native = choose_engine(spec, stream, ffmpeg.is_some())?;
     if let Some(target) = spec.normalize_lufs {
         normalise(&mut stems, layout, (start, span), target, cancel, log)?;
     }
@@ -161,25 +141,53 @@ fn execute_inner(
     let size = log_result(log, spec, stream, span, t0.elapsed().as_secs_f64());
 
     if !verify || downmixed {
-        return Ok(Outcome {
-            message: format!("encoded {:.1} MB", size as f64 / 1e6),
-            verified: false,
-            ..Default::default()
-        });
+        return Ok(not_verified(format!("encoded {:.1} MB", size as f64 / 1e6)));
     }
     if ffmpeg.is_none() && !stream.is_audio_file() {
         log.push_str("Verify: skipped (ffmpeg not available to decode the result)\n");
-        return Ok(Outcome {
-            message: format!(
-                "encoded {:.1} MB (not verified: no decoder available)",
-                size as f64 / 1e6
-            ),
-            verified: false,
-            ..Default::default()
-        });
+        return Ok(not_verified(format!(
+            "encoded {:.1} MB (not verified: no decoder available)",
+            size as f64 / 1e6
+        )));
     }
     on_progress(1.0, true);
     verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
+}
+
+fn not_verified(message: String) -> Outcome {
+    Outcome {
+        message,
+        verified: false,
+        ..Default::default()
+    }
+}
+
+/// Where the encode starts and how many seconds it covers: the job's span, kept inside the audio.
+fn span_of(spec: &EncodeSpec, stems: &StemSet) -> (f64, f64) {
+    let start = spec.start.unwrap_or(0.0);
+    let total = stems.frames as f64 / stems.sample_rate as f64;
+    let span = spec.duration.unwrap_or(total - start).min(total - start).max(0.0);
+    (start, span)
+}
+
+/// Whether Subwoofa's own encoder does the job, for a job that may need it. A delay and a gain are applied as the
+/// samples are read, which only Subwoofa's own encoders do.
+fn choose_engine(spec: &EncodeSpec, stream: StreamType, have_ffmpeg: bool) -> Result<bool, Failure> {
+    let native = use_native_engine(spec, stream, have_ffmpeg)?;
+    if spec.normalize_lufs.is_none() && spec.delay_ms == 0 {
+        return Ok(native);
+    }
+    if spec.engine == "dolby" {
+        return Err("a delay or normalising is not available with the Dolby Encoding Engine".into());
+    }
+    if !native && !stream.is_native() {
+        return Err(format!(
+            "a delay or normalising needs a format Subwoofa encodes itself; {} goes through FFmpeg",
+            stream.display_name()
+        )
+        .into());
+    }
+    Ok(true)
 }
 
 /// Measures the span and sets the gain that brings its integrated loudness to `target` LUFS, less if that would push the

@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use sw_core::{Channel, ChannelLayout};
+use sw_pcm::StemSet;
 
 /// The longest excerpt a preview makes, in seconds (it is held in memory).
 pub const MAX_SECONDS: f64 = 60.0;
@@ -41,22 +42,9 @@ pub fn build(
     on_progress: &mut dyn FnMut(f32),
 ) -> Result<Preview, Failure> {
     let layout: &'static ChannelLayout = ChannelLayout::find(&spec.layout).ok_or("unknown layout")?;
-    let want = seconds.clamp(2.0, MAX_SECONDS).min(spec.duration.unwrap_or(f64::MAX));
-
-    // where the excerpt is
     let mut sources = open_sources(spec, layout)?;
     let rate = sources.stems.sample_rate;
-    let all = sources.stems.select_span(0.0, None).map_err(|e| e.to_string())?;
-    let length = all as f64 / rate as f64;
-    if length < 2.0 {
-        return Err("the input is too short to preview".to_string().into());
-    }
-    let want = want.min(length);
-    let start = spec
-        .start
-        .unwrap_or(((length - want) / 2.0).max(0.0))
-        .min(length - want)
-        .max(0.0);
+    let (start, want) = choose_excerpt(spec, &mut sources.stems, seconds)?;
 
     // encode it
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -72,7 +60,7 @@ pub fn build(
     excerpt.write_log = false;
     let outcome = execute(&excerpt, false, cancel, &mut |p, _| on_progress(p * 0.8))?;
 
-    // the source excerpt
+    // the source excerpt and the decoded encode, mixed down the same way and lined up
     sources
         .stems
         .select_span(start, Some(want))
@@ -83,42 +71,11 @@ pub fn build(
         .read_planar(&mut source, (want * rate as f64) as usize)
         .map_err(|e| e.to_string())?;
     on_progress(0.85);
-
-    // the encoded excerpt, in the order of the source's channels
     let decoded = sw_verify::decode_planar(Path::new(&excerpt.output), ffmpeg)?;
-    if decoded.len() != layout.channels.len() {
-        return Err(format!(
-            "the encode decodes to {} channels but the layout has {}: the preview cannot match them up",
-            decoded.len(),
-            layout.channels.len()
-        )
-        .into());
-    }
-    let order = sw_verify::decoded_order(layout);
-    let decoded: Vec<Vec<f32>> = order.iter().map(|&i| decoded[i].clone()).collect();
-    let lag = sw_verify::align(&source, &decoded, rate)?;
+    let (a, b) = aligned_stereo(layout, &source[..], frames, decoded, rate)?;
     on_progress(0.95);
 
-    // both mixed down the same way, from the lined-up stretch
-    let (skip_decoded, skip_source) = (lag.max(0) as usize, (-lag).max(0) as usize);
-    let n = frames
-        .saturating_sub(skip_source)
-        .min(decoded[0].len().saturating_sub(skip_decoded));
-    if n < rate as usize {
-        return Err("the encode is too short to compare with the source".to_string().into());
-    }
-    let a = fold(layout.channels, &source, skip_source, n);
-    let b = fold(layout.channels, &decoded, skip_decoded, n);
-    let (mut signal, mut error, mut peak) = (0.0f64, 0.0f64, 0.0f32);
-    for ch in 0..2 {
-        for (x, y) in a[ch].iter().zip(&b[ch]) {
-            signal += (*x as f64).powi(2);
-            error += ((*x - *y) as f64).powi(2);
-            peak = peak.max(x.abs()).max(y.abs());
-        }
-    }
-    // one scale for all three so their levels stay comparable and nothing clips
-    let scale = if peak > 0.98 { 0.98 / peak } else { 1.0 };
+    let (snr_db, scale) = compare(&a, &b);
     let difference: Vec<Vec<f32>> = (0..2)
         .map(|ch| a[ch].iter().zip(&b[ch]).map(|(x, y)| x - y).collect())
         .collect();
@@ -130,13 +87,13 @@ pub fn build(
     let preview = Preview {
         rate,
         start,
-        seconds: n as f64 / rate as f64,
+        seconds: a[0].len() as f64 / rate as f64,
         source: write("source.wav", &a)?,
         encoded: write("encoded.wav", &b)?,
         difference: write("difference.wav", &difference)?,
         bytes: outcome.bytes,
         kbps: outcome.bytes as f64 * 8.0 / want / 1000.0,
-        snr_db: (error > 0.0 && signal > 0.0).then(|| 10.0 * (signal / error).log10()),
+        snr_db,
         note: if layout.channels.contains(&Channel::Lfe) {
             "The stereo mix leaves out the LFE channel.".to_string()
         } else {
@@ -145,6 +102,75 @@ pub fn build(
     };
     on_progress(1.0);
     Ok(preview)
+}
+
+/// Where the excerpt starts and how long it is (in seconds): the job's start or the middle of the programme, inside the
+/// audio.
+fn choose_excerpt(spec: &EncodeSpec, stems: &mut StemSet, seconds: f64) -> Result<(f64, f64), Failure> {
+    let rate = stems.sample_rate;
+    let all = stems.select_span(0.0, None).map_err(|e| e.to_string())?;
+    let length = all as f64 / rate as f64;
+    if length < 2.0 {
+        return Err("the input is too short to preview".to_string().into());
+    }
+    let want = seconds
+        .clamp(2.0, MAX_SECONDS)
+        .min(spec.duration.unwrap_or(f64::MAX))
+        .min(length);
+    let start = spec
+        .start
+        .unwrap_or(((length - want) / 2.0).max(0.0))
+        .min(length - want)
+        .max(0.0);
+    Ok((start, want))
+}
+
+/// The source and the decoded encode (one vector of samples per channel, `decoded` in FFmpeg's order) lined up and
+/// mixed down to stereo the same way. Both have the same length.
+fn aligned_stereo(
+    layout: &ChannelLayout,
+    source: &[Vec<f32>],
+    frames: usize,
+    decoded: Vec<Vec<f32>>,
+    rate: u32,
+) -> Result<(Vec<Vec<f32>>, Vec<Vec<f32>>), Failure> {
+    if decoded.len() != layout.channels.len() {
+        return Err(format!(
+            "the encode decodes to {} channels but the layout has {}: the preview cannot match them up",
+            decoded.len(),
+            layout.channels.len()
+        )
+        .into());
+    }
+    let order = sw_verify::decoded_order(layout);
+    let decoded: Vec<Vec<f32>> = order.iter().map(|&i| decoded[i].clone()).collect();
+    let lag = sw_verify::align(source, &decoded, rate)?;
+    let (skip_decoded, skip_source) = (lag.max(0) as usize, (-lag).max(0) as usize);
+    let n = frames
+        .saturating_sub(skip_source)
+        .min(decoded[0].len().saturating_sub(skip_decoded));
+    if n < rate as usize {
+        return Err("the encode is too short to compare with the source".to_string().into());
+    }
+    Ok((
+        fold(layout.channels, source, skip_source, n),
+        fold(layout.channels, &decoded, skip_decoded, n),
+    ))
+}
+
+/// The signal to noise of `b` against `a` in dB (`None` when they are identical), and the one scale for all three
+/// files so their levels stay comparable and nothing clips.
+fn compare(a: &[Vec<f32>], b: &[Vec<f32>]) -> (Option<f64>, f32) {
+    let (mut signal, mut error, mut peak) = (0.0f64, 0.0f64, 0.0f32);
+    for ch in 0..2 {
+        for (x, y) in a[ch].iter().zip(&b[ch]) {
+            signal += (*x as f64).powi(2);
+            error += ((*x - *y) as f64).powi(2);
+            peak = peak.max(x.abs()).max(y.abs());
+        }
+    }
+    let snr = (error > 0.0 && signal > 0.0).then(|| 10.0 * (signal / error).log10());
+    (snr, if peak > 0.98 { 0.98 / peak } else { 1.0 })
 }
 
 /// A channel's share of the left and right ears in the stereo mix: the usual fold-down, with the centre and the
