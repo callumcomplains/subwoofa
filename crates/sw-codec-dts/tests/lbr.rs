@@ -173,7 +173,7 @@ fn check_lfe(bitrate: u32) {
         stream.len() as u64,
     );
     file.extend_from_slice(&stream);
-    let dir = std::env::temp_dir().join(format!("sw_dts_lbr_lfe_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("sw_dts_lbr_lfe_{bitrate}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.dtshd");
     std::fs::write(&path, &file).unwrap();
