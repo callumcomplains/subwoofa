@@ -200,7 +200,7 @@ input.bad { border-color: var(--bad); color: var(--bad); }
 .variants button:hover { background: var(--hi); }
 .variants button[aria-selected=true] { background: color-mix(in srgb, var(--lamp) 11%, var(--panel)); border-color: color-mix(in srgb, var(--lamp) 40%, var(--rule)); }
 .variants button[aria-selected=true]::before { background: var(--lamp); }
-.variants .vn { font: 12px var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variants .vn { font: 12px var(--label); }   /* a long name wraps rather than being cut off */
 .variants .vc { font: 11px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .variants button[aria-selected=true] .vc { color: var(--lamp); }
 
