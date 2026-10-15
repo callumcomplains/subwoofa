@@ -402,6 +402,7 @@ fn run(case: &Case, dir: &Path) -> String {
         speed: case.speed.into(),
         threads: 0,
         normalize_lufs: None,
+        delay_ms: 0,
         write_log: true,
     };
     let cancel = std::sync::atomic::AtomicBool::new(false);

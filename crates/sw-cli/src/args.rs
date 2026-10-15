@@ -442,6 +442,10 @@ pub(crate) struct EncodeArgs {
     /// true peak is kept under -1 dBTP. Needs a format Subwoofa encodes itself.
     #[arg(long, value_name = "LUFS", allow_hyphen_values = true)]
     pub(crate) normalize: Option<f64>,
+    /// Delay the audio by this many milliseconds (negative leaves the start out). Needs a format Subwoofa encodes
+    /// itself.
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub(crate) delay_ms: i32,
     /// Start offset into the source, in seconds.
     #[arg(long)]
     pub(crate) start: Option<f64>,

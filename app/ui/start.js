@@ -25,6 +25,7 @@ async function init() {
   $("dialnorm").oninput = syncDialnorm;
   $("dialnormMeasure").onclick = measureLoudness;
   $("normOn").onchange = update;
+  $("delay").oninput = update;
   $("normTarget").oninput = update;
   syncDialnorm();
   setUnlocked(store.get("unlocked") === "1");

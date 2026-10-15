@@ -21,6 +21,12 @@ pub struct StemSet {
     pub(crate) mix: Option<sw_core::downmix::Matrix>,
     /// Linear gain applied to everything read (1.0 leaves the samples as they are).
     pub(crate) gain: f32,
+    /// Length of the files before any delay, and the delay: `lead` frames of silence in front of the audio, or
+    /// `skip` frames of its start left out. `pos` is where the next read starts, counting the silence.
+    pub(crate) file_frames: u64,
+    pub(crate) lead: u64,
+    pub(crate) skip: u64,
+    pub(crate) pos: u64,
 }
 
 impl StemSet {
@@ -67,6 +73,10 @@ impl StemSet {
             scratch: vec![Vec::new(); nfiles],
             mix: None,
             gain: 1.0,
+            file_frames: frames,
+            lead: 0,
+            skip: 0,
+            pos: 0,
         })
     }
 
@@ -85,9 +95,19 @@ impl StemSet {
         self.layout
     }
 
+    /// Delays the audio by `frames` (positive: that much silence first) or advances it (negative: that much of the
+    /// start is left out). Everything after reads as if the files were that much longer or shorter.
+    pub fn set_delay_frames(&mut self, frames: i64) {
+        self.lead = frames.max(0) as u64;
+        self.skip = (-frames).max(0) as u64;
+        self.frames = (self.file_frames + self.lead).saturating_sub(self.skip);
+    }
+
     pub fn seek_frame(&mut self, frame: u64) -> Result<(), Error> {
+        self.pos = frame;
+        let in_files = (frame + self.skip).saturating_sub(self.lead);
         for r in &mut self.readers {
-            r.seek_frame(frame)?;
+            r.seek_frame(in_files)?;
         }
         Ok(())
     }
@@ -149,8 +169,7 @@ impl StemSet {
     /// Read up to `max_frames` into `planar` (one Vec per layout channel, replaced).
     /// Returns frames produced; shorter files are padded with zeros up to the longest.
     pub fn read_planar(&mut self, planar: &mut Vec<Vec<f32>>, max_frames: usize) -> Result<usize, Error> {
-        let pos = self.readers[0].position();
-        let n = (max_frames as u64).min(self.frames.saturating_sub(pos)) as usize;
+        let n = (max_frames as u64).min(self.frames.saturating_sub(self.pos)) as usize;
         planar.resize(self.slots.len(), Vec::new());
         for p in planar.iter_mut() {
             p.clear();
@@ -158,23 +177,32 @@ impl StemSet {
         if n == 0 {
             return Ok(0);
         }
+        // a delay puts silence first; the files are read for the rest
+        let silent = self.lead.saturating_sub(self.pos).min(n as u64) as usize;
+        let data = n - silent;
         let mut got = Vec::with_capacity(self.readers.len());
         for (i, r) in self.readers.iter_mut().enumerate() {
             self.scratch[i].clear();
-            got.push(r.read_f32(&mut self.scratch[i], n)?);
+            got.push(if data > 0 {
+                r.read_f32(&mut self.scratch[i], data)?
+            } else {
+                0
+            });
         }
         for (s, out) in self.slots.iter().zip(planar.iter_mut()) {
             let nch = self.readers[s.file].info.channels as usize;
             let have = got[s.file];
+            out.resize(silent, 0.0);
             out.extend((0..have).map(|f| self.scratch[s.file][f * nch + s.ch]));
             out.resize(n, 0.0);
         }
         // Readers of shorter files stop advancing; keep all positions aligned for the next call.
         for (r, g) in self.readers.iter_mut().zip(&got) {
-            if *g < n {
+            if *g < data {
                 r.pos = r.info.frames;
             }
         }
+        self.pos += n as u64;
         if let Some(m) = &self.mix {
             let nin = planar.len();
             let mut mixed: Vec<Vec<f32>> = vec![vec![0.0; n]; m.outputs.len()];

@@ -99,6 +99,7 @@ fn build_spec(args: &EncodeArgs) -> Result<EncodeSpec, String> {
         speed: args.speed.clone(),
         threads: args.threads,
         normalize_lufs: args.normalize,
+        delay_ms: args.delay_ms,
         write_log: false,
     })
 }

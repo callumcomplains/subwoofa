@@ -57,6 +57,10 @@ pub struct EncodeSpec {
     /// -1 dBTP, which can leave the result quieter). Needs a format Subwoofa encodes itself.
     #[serde(default)]
     pub normalize_lufs: Option<f64>,
+    /// Delay the audio by this many milliseconds: positive puts silence in front of it, negative leaves the start out.
+    /// Needs a format Subwoofa encodes itself.
+    #[serde(default)]
+    pub delay_ms: i32,
     /// Leave a log of the run next to the output (the app does; the command line does not).
     #[serde(default = "yes")]
     pub write_log: bool,

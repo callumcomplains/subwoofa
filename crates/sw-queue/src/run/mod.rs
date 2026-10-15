@@ -78,6 +78,10 @@ fn execute_inner(
         src_layout,
         downmixed,
     } = open_sources(spec, layout)?;
+    if spec.delay_ms != 0 {
+        let frames = (spec.delay_ms as f64 * stems.sample_rate as f64 / 1000.0).round() as i64;
+        stems.set_delay_frames(frames);
+    }
     let effort = sw_core::Effort::from_id(&spec.speed)
         .ok_or_else(|| format!("unknown speed '{}' (use fast, balanced or best)", spec.speed))?;
     let start = spec.start.unwrap_or(0.0);
@@ -102,16 +106,21 @@ fn execute_inner(
     );
     let ffmpeg = ff::find_ffmpeg();
     let mut native = use_native_engine(spec, stream, ffmpeg.is_some())?;
-    if let Some(target) = spec.normalize_lufs {
-        // the gain is applied as the samples are read, which only Subwoofa's own encoders do
+    // a delay and a gain are applied as the samples are read, which only Subwoofa's own encoders do
+    if spec.normalize_lufs.is_some() || spec.delay_ms != 0 {
+        if spec.engine == "dolby" {
+            return Err("a delay or normalising is not available with the Dolby Encoding Engine".into());
+        }
         if !native && !stream.is_native() {
             return Err(format!(
-                "normalising needs a format Subwoofa encodes itself; {} goes through FFmpeg",
+                "a delay or normalising needs a format Subwoofa encodes itself; {} goes through FFmpeg",
                 stream.display_name()
             )
             .into());
         }
         native = true;
+    }
+    if let Some(target) = spec.normalize_lufs {
         normalise(&mut stems, layout, (start, span), target, cancel, log)?;
     }
     let slots = if downmixed {

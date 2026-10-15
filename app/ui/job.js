@@ -35,11 +35,15 @@ async function measureLoudness() {
 }
 
 /** The Normalise row: the target field follows the checkbox, and a format that goes through FFmpeg cannot use it. */
+/** Normalising and a delay are applied as the samples are read, which only Subwoofa's own encoders do. */
+function needsOwnEncoder() { return $("normOn").checked || Math.round(Number($("delay").value)) !== 0; }
+function blockedByEngine() { return needsOwnEncoder() && !!curStream() && (!curStream().native || useDolbyEncoder()); }
+
 function syncNormalise() {
   const on = $("normOn").checked;
   $("normTarget").disabled = !on;
-  const unsupported = on && curStream() && !curStream().native;
-  $("normNote").textContent = unsupported ? "this format needs the native encoder" : on ? "peaks stay under -1 dBTP" : "";
+  const unsupported = blockedByEngine();
+  $("normNote").textContent = unsupported ? useDolbyEncoder() ? "a delay or normalising is not available with the Dolby encoder" : "a delay or normalising needs a format Subwoofa encodes itself" : on ? "peaks stay under -1 dBTP" : "";
   $("normNote").className = "readout" + (unsupported ? " bad" : "");
 }
 
@@ -88,7 +92,7 @@ function update() {
   const dnOk = !$("dialnorm").classList.contains("bad");
   const ready = need.every((c) => inputs[c]) && outDir && $("outname").value.trim() && !rateMismatch().length && bitrateOk() && dnOk && (cat.has_ffmpeg || curStream().native) && curRate() > 0;
   const available = curStream().available && (!srcLayoutId || curStream().native);
-  $("go").disabled = !ready || !available || ($("normOn").checked && !curStream().native);
+  $("go").disabled = !ready || !available || blockedByEngine();
   $("previewBtn").disabled = !pv.busy && !previewReady();
   if (!available && srcLayoutId) log("Mixing 22.2 down needs a format with a native Subwoofa encoder.");
   else if (!available) log(`${curStream().name} has no encoder yet. It is on the roadmap; for now this format is listed so you can see what is coming.`);
@@ -125,6 +129,7 @@ function jobSpec(inputsFor, name) {
     start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value),
     inputs: inputsFor, output: outDir + "\\" + name + $("ext").textContent,
     bitstream: bitstreamSpec(),
+    delay_ms: Math.round(Number($("delay").value)) || 0,
     normalize_lufs: $("normOn").checked && Number.isFinite(Number($("normTarget").value)) ? Number($("normTarget").value) : null,
     speed, threads,
   };

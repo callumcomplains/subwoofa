@@ -66,6 +66,7 @@ fn spec_for(
         speed: "fast".into(),
         threads: 0,
         normalize_lufs: None,
+        delay_ms: 0,
         write_log: false,
     }
 }
@@ -211,4 +212,51 @@ fn normalising_brings_the_loudness_to_the_target() {
     };
     let loudness = measure(&out);
     assert!((loudness + 30.0).abs() < 0.2, "{loudness} LUFS");
+}
+
+/// The 24-bit samples of the data chunk of a stereo WAV: left, right, one pair per frame.
+fn read_pairs(path: &Path) -> Vec<(i32, i32)> {
+    let bytes = std::fs::read(path).unwrap();
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+        if &bytes[at..at + 4] == b"data" {
+            let data = &bytes[at + 8..(at + 8 + size).min(bytes.len())];
+            let s = |b: &[u8]| i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8;
+            return data.chunks_exact(6).map(|f| (s(&f[..3]), s(&f[3..]))).collect();
+        }
+        at += 8 + size + (size & 1);
+    }
+    Vec::new()
+}
+
+#[test]
+fn a_delay_puts_silence_in_front_or_leaves_the_start_out() {
+    let dir = std::env::temp_dir().join(format!("sw_delay_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut inputs = HashMap::new();
+    for (i, ch) in ["L", "R"].iter().enumerate() {
+        let path = dir.join(format!("{ch}.wav"));
+        write_wav(&path, i as u32 + 1);
+        inputs.insert(ch.to_string(), path.to_string_lossy().into_owned());
+    }
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let make = |delay_ms: i32| {
+        let mut spec = spec_for(&dir, &inputs, "wav", "files", None, "wav");
+        spec.pcm_format = "s24".into();
+        spec.delay_ms = delay_ms;
+        spec.output = dir.join(format!("delay_{delay_ms}.wav")).to_string_lossy().into_owned();
+        execute(&spec, false, &cancel, &mut |_, _| {}).unwrap_or_else(|_| panic!("{delay_ms} ms failed"));
+        read_pairs(Path::new(&spec.output))
+    };
+    let plain = make(0);
+    // 100 ms at 48 kHz is 4800 frames of silence, then the same audio
+    let later = make(100);
+    assert_eq!(later.len(), plain.len() + 4800);
+    assert!(later[..4800].iter().all(|&p| p == (0, 0)));
+    assert_eq!(&later[4800..], &plain[..]);
+    // -50 ms leaves out the first 2400 frames
+    let earlier = make(-50);
+    assert_eq!(earlier.len(), plain.len() - 2400);
+    assert_eq!(&earlier[..], &plain[2400..]);
 }
