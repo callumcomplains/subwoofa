@@ -1,7 +1,6 @@
 // The listening preview: encodes a short excerpt with the current settings, then plays the source, the encode and
 // the difference between them in sync, so switching between them is instant and the only thing that changes is the format.
 
-const PREVIEW_SECONDS = 20;
 const DIFFERENCE_BOOST = 4;   // the difference is quiet by nature; +12 dB makes it audible
 const pv = { ctx: null, buffers: {}, nodes: {}, gains: {}, which: "encoded", playing: false, offset: 0, began: 0, length: 0, busy: false, raf: 0 };
 
@@ -24,7 +23,11 @@ async function startPreview() {
   pvInfo("Encoding a taste...");
   const unlisten = await window.__TAURI__.event.listen("preview", (e) => { $("pvBar").style.width = Math.round(e.payload * 100) + "%"; });
   try {
-    const p = await invoke("make_preview", { spec: jobSpec(inputs, "preview"), seconds: PREVIEW_SECONDS });
+    // the excerpt: where it starts (the middle of the programme when empty) and how long it is
+    const spec = jobSpec(inputs, "preview");
+    spec.start = $("pvFrom").value === "" ? null : Math.max(0, Number($("pvFrom").value));
+    spec.duration = null;
+    const p = await invoke("make_preview", { spec, seconds: Number($("pvLen").value) || 20 });
     pv.ctx = pv.ctx || new AudioContext({ sampleRate: p.rate });
     if (pv.ctx.sampleRate !== p.rate) { await pv.ctx.close(); pv.ctx = new AudioContext({ sampleRate: p.rate }); }
     for (const key of ["source", "encoded", "difference"]) {
@@ -37,7 +40,7 @@ async function startPreview() {
     paintPosition();
     const closeness = p.snr_db == null ? "identical to the source" : `${p.snr_db.toFixed(1)} dB signal to noise`;
     pvInfo(`${fmtClock(p.start)}, ${Math.round(p.seconds)} s: ${Math.round(p.kbps)} kbps, ${closeness}.${p.note ? " " + p.note : ""}`);
-    selectWhich(pv.which);
+    setBlind($("pvBlind").checked);
   } catch (e) {
     $("pvPlayer").hidden = true;
     pvInfo(String(e) === "canceled" ? "Canceled." : String(e), String(e) === "canceled" ? "" : "bad");
@@ -47,6 +50,36 @@ async function startPreview() {
     $("pvProgress").hidden = true;
     $("previewBtn").textContent = "Preview";
   }
+}
+
+/** Blind mode: the buttons read A and B, which are the source and the encode in a random order, and the difference is out of reach. */
+function setBlind(on) {
+  const buttons = [...$("pvSeg").children];
+  if (on) {
+    const flip = Math.random() < 0.5;
+    pv.blind = { A: flip ? "source" : "encoded", B: flip ? "encoded" : "source" };
+    buttons[0].textContent = "A"; buttons[0].dataset.which = pv.blind.A;
+    buttons[1].textContent = "B"; buttons[1].dataset.which = pv.blind.B;
+    buttons[2].hidden = true;
+    $("pvQuiz").hidden = false; $("pvAnswer").textContent = "";
+    for (const id of ["pvGuessA", "pvGuessB"]) $(id).disabled = false;
+    selectWhich(pv.blind.A);
+  } else {
+    pv.blind = null;
+    buttons[0].textContent = "Source"; buttons[0].dataset.which = "source";
+    buttons[1].textContent = "Encoded"; buttons[1].dataset.which = "encoded";
+    buttons[2].hidden = false;
+    $("pvQuiz").hidden = true;
+    selectWhich("encoded");
+  }
+}
+
+function guess(letter) {
+  const right = pv.blind[letter] === "encoded";
+  $("pvAnswer").textContent = right
+    ? `Right: ${letter} is the encode. You can hear the format.`
+    : `Not this time: ${letter} was the source, and the encode was ${letter === "A" ? "B" : "A"}. It passes for the original.`;
+  for (const id of ["pvGuessA", "pvGuessB"]) $(id).disabled = true;
 }
 
 function selectWhich(which) {
@@ -114,6 +147,9 @@ function initPreview() {
   $("pvClose").onclick = () => { stopPlayback(); if (pv.busy) invoke("preview_cancel"); $("previewPanel").hidden = true; };
   $("pvPlay").onclick = () => (pv.playing ? stopPlayback() : startPlayback());
   $("pvSeg").onclick = (e) => { const b = e.target.closest("button"); if (b) selectWhich(b.dataset.which); };
+  $("pvBlind").onchange = () => { if (pv.buffers.source) setBlind($("pvBlind").checked); };
+  $("pvGuessA").onclick = () => guess("A");
+  $("pvGuessB").onclick = () => guess("B");
   $("pvLoop").onchange = () => { for (const n of Object.values(pv.nodes)) n.loop = $("pvLoop").checked; };
   $("pvSeek").oninput = () => {
     const was = pv.playing;
@@ -124,7 +160,7 @@ function initPreview() {
   };
   document.addEventListener("keydown", (e) => {
     if ($("previewPanel").hidden || $("pvPlayer").hidden || e.target.closest?.("input:not([type=range]):not([type=checkbox]), select, textarea")) return;
-    const which = { 1: "source", 2: "encoded", 3: "difference" }[e.key];
+    const which = pv.blind ? { 1: pv.blind.A, 2: pv.blind.B }[e.key] : { 1: "source", 2: "encoded", 3: "difference" }[e.key];
     if (which) selectWhich(which);
     else if (e.key === " " && !e.target.closest?.("button")) { e.preventDefault(); $("pvPlay").click(); }
   });

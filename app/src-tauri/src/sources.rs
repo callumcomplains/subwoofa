@@ -41,6 +41,33 @@ pub(crate) fn import_inputs(
     }
 }
 
+/// Size and modification time of a file, for noticing that a copy into a watched folder has finished.
+#[derive(Serialize)]
+pub struct Stat {
+    size: u64,
+    modified: u64,
+}
+
+/// The size and modification time of each path (`None` for one that does not exist).
+#[tauri::command]
+pub fn path_stats(paths: Vec<String>) -> Vec<Option<Stat>> {
+    paths
+        .iter()
+        .map(|p| {
+            let meta = std::fs::metadata(p).ok()?;
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            Some(Stat {
+                size: meta.len(),
+                modified,
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn auto_import(first: String, layout: String) -> Result<HashMap<String, String>, String> {
     let l = ChannelLayout::find(&layout).ok_or("unknown layout")?;

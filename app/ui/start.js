@@ -52,6 +52,7 @@ async function init() {
     if (p) await autoImport(p);
   };
   $("batch").onclick = batchFromFolder;
+  $("watchBtn").onclick = toggleWatch;
   $("clear").onclick = () => { inputs = {}; meta = {}; renderFiles(); update(); };
   $("srcLayout").onchange = () => { srcLayoutId = $("srcLayout").value; inputs = {}; meta = {}; renderFiles(); update(); };
   $("browse").onclick = async () => { const d = await dialog.open({ directory: true }); if (d) { outDir = d; $("outdir").value = d; update(); } };

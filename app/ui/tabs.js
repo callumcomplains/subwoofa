@@ -22,7 +22,7 @@ function syncTabs() {
 // goes after its label. Anything that changes with the choices (what a stream type contains, for one) is added
 // to the end with setTip.
 const INFO = [
-  ["@#pvTitle", "Encodes about 20 seconds from the middle of your programme with these exact settings, decodes it again, and lets you flip between the source, the result, and what the encoder took away. Everything is mixed to stereo the same way, so the only difference you hear is the format. 1, 2 and 3 switch, space plays."],
+  ["@#pvTitle", "Encodes a short excerpt (the middle of your programme unless you give a start, 20 seconds unless you pick another length) with these exact settings, decodes it again, and lets you flip between the source, the result, and what the encoder took away. Everything is mixed to stereo the same way, so the only difference you hear is the format. 1, 2 and 3 switch, space plays."],
   ["@.format .dh", "Everything about the stream itself: format, rate, bit rate and the loudness tag."],
   ["#dest", "Where this file is going. It sets the rules: which formats, rates and layouts are allowed. Blu-ray and DVD are strict, Generic is relaxed, and Audio files will take nearly anything."],
   ["#stream", "The audio format. Lossless keeps every bit; lossy keeps what you probably won't miss. Pick whatever your disc or player asks for."],
@@ -67,6 +67,7 @@ const INFO = [
   ["#aSurTrim", "How much the surround channels are turned down in the 5.1 downmix the stream carries for 5.1 decoders. Auto lets the engine choose from the mix. The height trim does the same for the overhead channels."],
   ["#aDialogue", "With loudness metering on, the engine finds the speech and measures that, which is what the dialogue level describes. Off measures everything. The threshold is how sure the speech detector must be (15 is the engine's default)."],
   ["#delay", "Shifts the audio against everything else: a positive number puts that much silence in front of it, a negative one leaves that much of the start out. Useful to line a mix up with a picture. Needs a format Subwoofa encodes itself, and the Dolby Encoding Engine cannot do it."],
+  ["#watchBtn", "Watches a folder and queues an encode with the current settings for every complete set of channel files (Name_L.wav, Name_R.wav ...) that lands in it, once the files have stopped growing. Sets whose encode is already in the output folder are skipped. It runs while this window is open; the command line has `subwoofa watch` for a window-less version."],
   ["#vLayout", "The channel layout of the source. Pick one channel file and Subwoofa finds the others by name (Name_L.wav, Name_R.wav ...), or pick a single multichannel file. The result says whether the encode is bit-identical (lossless) or how close it is (lossy)."],
   ["#vStart", "Leave From and Length empty when the encode covers the whole source. If you encoded only part of it (a preview, or a start and length), say where that part begins and how long it is."],
   ["#vDeep", "Also decodes the whole file, measures the audio, asks DTS's own verifier if it's installed, and lists every header. Slower, more suspicious."],

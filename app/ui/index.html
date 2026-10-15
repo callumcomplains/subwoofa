@@ -151,6 +151,7 @@ try {
         <label class="f small"><span>Input layout</span><select id="srcLayout"><option value="">Same as output</option><option value="22.2">NHK 22.2 (24 ch), mixed down</option></select></label>
         <button id="importMc">Import file…</button>
         <button id="batch">Batch from folder…</button>
+        <button id="watchBtn">Watch folder…</button>
         <button id="clear" class="plain">Clear all</button>
       </div>
       <table id="files">
@@ -565,7 +566,15 @@ try {
     <div class="pv-head">
       <span class="cap" id="pvTitle">Preview</span>
       <small id="pvInfo" class="readout"></small>
+      <label class="f small pv-pick"><span>From (s)</span><input id="pvFrom" type="number" min="0" step="1" placeholder="middle" aria-label="Where in the programme the excerpt starts, in seconds"></label>
+      <label class="f small pv-pick"><span>Length</span><select id="pvLen" aria-label="Length of the excerpt in seconds"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
       <button type="button" id="pvClose" class="plain mini" aria-label="Close the preview">Close</button>
+    </div>
+    <div id="pvQuiz" class="pv-row" hidden>
+      <small class="readout">Which one is the encode?</small>
+      <button type="button" id="pvGuessA" class="plain">A</button>
+      <button type="button" id="pvGuessB" class="plain">B</button>
+      <small id="pvAnswer" class="readout"></small>
     </div>
     <div id="pvProgress" class="bar-track" hidden><span id="pvBar" class="bar-fill"></span></div>
     <div id="pvPlayer" class="pv-row" hidden>
@@ -578,6 +587,7 @@ try {
         <button type="button" data-which="difference" aria-pressed="false">Difference</button>
       </div>
       <label class="chk tight"><input type="checkbox" id="pvLoop" checked><span>Loop</span></label>
+      <label class="chk tight"><input type="checkbox" id="pvBlind"><span>Blind</span></label>
     </div>
   </div>
   <div class="out-row">
@@ -608,6 +618,7 @@ try {
 <script src="downmix.js"></script>
 <script src="job.js"></script>
 <script src="preview.js"></script>
+<script src="watch.js"></script>
 <script src="bitstream.js"></script>
 <script src="themes.js"></script>
 <script src="tabs.js"></script>

@@ -82,6 +82,7 @@ fn main() {
             sources::auto_import,
             sources::multichannel_pick,
             sources::scan_folder,
+            sources::path_stats,
             sources::probe,
             downmix::downmix_default,
             downmix::downmix_safe,
