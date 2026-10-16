@@ -34,6 +34,9 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - DTS-HD High Resolution is faster for 7.1 (9 s to 4 s for a minute) and at 96 kHz (10.7 s to 5.1 s for 5.1), and DTS Express a little faster; the files are byte for byte what they were.
 - Fixed: **Verify (deep)** of an E-AC-3 stream with dependent substreams (such as 7.1) stopped with an error while building the bit rate chart.
 - **Code reorganised for reading** (no change to any output file: a checksum test covers every format, and the files before and after were compared byte for byte). Large files are split along the stages of each format, long functions are cut into named steps, `clippy` runs clean in CI, and `docs/ARCHITECTURE.md` maps the new layout. The command line's `encode` now goes through the same job runner as the app, so both give the same result for the same settings.
+- Fixed: a lossless encode (TrueHD, MLP, DTS-HD Master Audio) with **Normalise** or a **Delay** was reported as failing verification although the file was fine, because the check compared it with the untouched source. It is now checked against the source with the gain and delay applied, and still proven identical sample for sample.
+- Fixed: two Dolby engine encodes running at the same time in the queue shared one work folder, so one could delete the other's files halfway through. Each job now gets a folder of its own.
+- Fixed: an internal error (a crash inside an encoder) left its queue job stuck on Encoding and its queue slot taken until the app was restarted; with one job at a time the whole queue stopped. The job now fails with a message asking for a report, and the queue carries on.
 
 ## b0.1.0 — first public beta
 

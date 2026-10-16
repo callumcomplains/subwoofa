@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use sw_backend_dee::{clock, run_task, work_folder, Measured, Source, Task, TaskJob};
 use sw_core::{Channel, ChannelLayout};
 
@@ -75,11 +75,9 @@ pub fn measure(
 ) -> Result<Measured, String> {
     let dee = find_engine()?;
     let source = engine_source(layout, inputs)?;
-    let work = work_folder()
-        .map_err(|e| e.to_string())?
-        .join(format!("measure{}", std::process::id()));
+    let work = job_folder("measure")?;
     let start = span.0.filter(|s| *s > 0.0);
-    let output = work.with_file_name(format!("measure{}.xml", std::process::id()));
+    let output = work.with_extension("xml");
     let job = TaskJob {
         source,
         output,
@@ -98,9 +96,25 @@ pub fn measure(
         .ok_or_else(|| "the engine gave no measurement".to_string())
 }
 
-/// A folder for the engine to work in, named for a job.
+/// Folders handed out so far by this process, so no two jobs ever get the same one.
+static FOLDERS: AtomicU64 = AtomicU64::new(0);
+
+/// A folder of its own for one engine job, named for it. Jobs running side by side in the queue each get a different
+/// one: the engine's staging empties its folder at the start and end, which would wipe another job's files.
 pub fn job_folder(tag: &str) -> Result<PathBuf, String> {
+    let n = FOLDERS.fetch_add(1, Ordering::Relaxed);
     Ok(work_folder()
         .map_err(|e| e.to_string())?
-        .join(format!("{tag}{}", std::process::id())))
+        .join(format!("{tag}{}_{n}", std::process::id())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folders_differ() {
+        let (a, b) = (job_folder("encode").unwrap(), job_folder("encode").unwrap());
+        assert_ne!(a, b);
+    }
 }

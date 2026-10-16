@@ -103,6 +103,15 @@ fn lossless_frames(e: &mut MaEncoder, pcm: &[Vec<i32>], got: usize, n: usize) ->
     out
 }
 
+/// The sample resolution the lossless stage codes a source of `source_bits` at: 16 and 20 bits stay as they are,
+/// anything else is coded at 24. Samples are rounded to this grid on the way in.
+pub fn coded_bits(source_bits: u16) -> u32 {
+    match (source_bits as u32).clamp(16, 24) {
+        bits @ (16 | 20) => bits,
+        _ => 24,
+    }
+}
+
 /// What the request and the source fix before encoding starts.
 struct Plan {
     rate: u32,
@@ -122,8 +131,7 @@ impl Plan {
                 "{rate} Hz: only 44.1 to 192 kHz are implemented so far"
             )));
         }
-        let bit_res = (stems.bits as u32).clamp(16, 24);
-        let bit_res = if bit_res == 16 || bit_res == 20 { bit_res } else { 24 };
+        let bit_res = coded_bits(stems.bits);
         // the stereo set rides under the core, which stops at 96 kHz
         let mut downmix = req.bitstream.downmix.clone();
         if rate > 96_000 {

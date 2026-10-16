@@ -280,7 +280,7 @@ fn worker(inner: Arc<Inner>) {
             (progress_inner.notify)(snap);
         };
 
-        let result = run::execute(&spec, verify, &cancel, &mut on_progress);
+        let result = guarded(|| run::execute(&spec, verify, &cancel, &mut on_progress));
 
         let snap = {
             let mut s = inner.shared.lock().unwrap();
@@ -306,5 +306,34 @@ fn worker(inner: Arc<Inner>) {
         };
         (inner.notify)(snap);
         inner.wake.notify_all();
+    }
+}
+
+/// Runs one job, turning a panic inside it into a failure. Without this the worker thread would die with the job still
+/// marked as running, and its queue slot would never come free.
+fn guarded(job: impl FnOnce() -> Result<run::Outcome, run::Failure>) -> Result<run::Outcome, run::Failure> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|panic| {
+        let what = panic
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no details".into());
+        Err(run::Failure::Error(format!(
+            "internal error in Subwoofa, please report it: {what}"
+        )))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_becomes_failure() {
+        let result = guarded(|| panic!("index out of range"));
+        match result {
+            Err(run::Failure::Error(m)) => assert!(m.contains("index out of range"), "{m}"),
+            _ => panic!("a panic should come back as a failure"),
+        }
     }
 }

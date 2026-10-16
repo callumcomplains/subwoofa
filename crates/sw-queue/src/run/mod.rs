@@ -2,6 +2,7 @@
 
 mod encoders;
 mod log;
+mod processed;
 mod sources;
 mod spec;
 
@@ -78,9 +79,12 @@ fn execute_inner(
         src_layout,
         downmixed,
     } = open_sources(spec, layout)?;
-    if spec.delay_ms != 0 {
-        let frames = (spec.delay_ms as f64 * stems.sample_rate as f64 / 1000.0).round() as i64;
-        stems.set_delay_frames(frames);
+    let mut edit = processed::Edit {
+        delay_frames: (spec.delay_ms as f64 * stems.sample_rate as f64 / 1000.0).round() as i64,
+        gain_db: None,
+    };
+    if edit.delay_frames != 0 {
+        stems.set_delay_frames(edit.delay_frames);
     }
     let effort = sw_core::Effort::from_id(&spec.speed)
         .ok_or_else(|| format!("unknown speed '{}' (use fast, balanced or best)", spec.speed))?;
@@ -101,7 +105,7 @@ fn execute_inner(
     let ffmpeg = ff::find_ffmpeg();
     let native = choose_engine(spec, stream, ffmpeg.is_some())?;
     if let Some(target) = spec.normalize_lufs {
-        normalise(&mut stems, layout, (start, span), target, cancel, log)?;
+        edit.gain_db = Some(normalise(&mut stems, layout, (start, span), target, cancel, log)?);
     }
     let slots = if downmixed {
         Vec::new()
@@ -157,6 +161,10 @@ fn execute_inner(
         )));
     }
     on_progress(1.0, true);
+    if edit.changes_audio() && stream.is_lossless() && !stream.is_audio_file() {
+        // the usual check reads the files as they are, without the gain or delay
+        return processed::verify(spec, stream, layout, &job, (start, span), edit, log);
+    }
     verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
 }
 
@@ -197,7 +205,7 @@ fn choose_engine(spec: &EncodeSpec, stream: StreamType, have_ffmpeg: bool) -> Re
 }
 
 /// Measures the span and sets the gain that brings its integrated loudness to `target` LUFS, less if that would push the
-/// true peak above -1 dBTP.
+/// true peak above -1 dBTP. Returns the gain in dB.
 fn normalise(
     stems: &mut StemSet,
     layout: &'static ChannelLayout,
@@ -205,7 +213,7 @@ fn normalise(
     target: f64,
     cancel: &AtomicBool,
     log: &mut String,
-) -> Result<(), Failure> {
+) -> Result<f64, Failure> {
     let measured = crate::measure::measure_stems(stems, layout.channels, Some(start), Some(span), cancel, &mut |_| {})
         .map_err(|e| match e {
             crate::measure::MeasureError::Canceled => Failure::Canceled,
@@ -227,7 +235,7 @@ fn normalise(
         "Normalise:    {integrated:.1} LUFS measured, {gain:+.1} dB applied, aiming for {target:.1} LUFS{note}
 "
     ));
-    Ok(())
+    Ok(gain)
 }
 
 /// Whether Subwoofa's own encoder does the job (otherwise FFmpeg does).

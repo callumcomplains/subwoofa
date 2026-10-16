@@ -260,3 +260,41 @@ fn a_delay_puts_silence_in_front_or_leaves_the_start_out() {
     assert_eq!(earlier.len(), plain.len() - 2400);
     assert_eq!(&earlier[..], &plain[2400..]);
 }
+
+/// Lossless encodes with Normalise's gain or a delay, verified: the check must allow for what was changed.
+#[test]
+fn verify_after_edits() {
+    if sw_backend_ffmpeg::find_ffmpeg().is_none() {
+        eprintln!("FFmpeg not found: skipping");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("sw_edit_verify_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for layout in ["5.1", "7.1-side-rear"] {
+        let channels = ChannelLayout::find(layout).unwrap().channels;
+        let mut inputs = HashMap::new();
+        for (i, ch) in channels.iter().enumerate() {
+            let path = dir.join(format!("{}.wav", ch.short()));
+            write_wav(&path, i as u32 + 1);
+            inputs.insert(ch.short().to_string(), path.to_string_lossy().into_owned());
+        }
+        let streams = [("truehd", "generic", "thd"), ("dtshd-ma", "bluray-primary", "dtshd")];
+        for (stream, dest, ext) in streams {
+            for (normalize, delay_ms) in [(Some(-31.0), 0), (None, 20), (None, -15), (Some(-28.0), 10)] {
+                let mut spec = spec_for(&dir, &inputs, stream, dest, None, ext);
+                spec.layout = layout.into();
+                spec.normalize_lufs = normalize;
+                spec.delay_ms = delay_ms;
+                let name = format!("edit_{layout}_{stream}_{normalize:?}_{delay_ms}.{ext}");
+                spec.output = dir.join(name).to_string_lossy().into_owned();
+                let cancel = std::sync::atomic::AtomicBool::new(false);
+                let case = format!("{layout} {stream} normalise {normalize:?} delay {delay_ms}");
+                match execute(&spec, true, &cancel, &mut |_, _| {}) {
+                    Ok(o) => assert!(o.verified, "{case}: not verified: {}", o.message),
+                    Err(sw_queue::run::Failure::Error(m)) => panic!("{case}: {m}"),
+                    Err(_) => panic!("{case}: canceled"),
+                }
+            }
+        }
+    }
+}

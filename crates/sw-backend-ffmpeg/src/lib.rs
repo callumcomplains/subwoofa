@@ -86,6 +86,50 @@ pub(crate) fn ff_name(c: Channel) -> Option<&'static str> {
     })
 }
 
+/// FFmpeg's number for each channel name (`enum AVChannel` in libavutil/channel_layout.h). Its decoders give the
+/// channels of a stream in this order, lowest first: a 7.1 decode is FL FR FC LFE BL BR SL SR.
+const POSITIONS: [(&str, u8); 28] = [
+    ("FL", 0),
+    ("FR", 1),
+    ("FC", 2),
+    ("LFE", 3),
+    ("BL", 4),
+    ("BR", 5),
+    ("FLC", 6),
+    ("FRC", 7),
+    ("BC", 8),
+    ("SL", 9),
+    ("SR", 10),
+    ("TC", 11),
+    ("TFL", 12),
+    ("TFC", 13),
+    ("TFR", 14),
+    ("TBL", 15),
+    ("TBC", 16),
+    ("TBR", 17),
+    ("WL", 31),
+    ("WR", 32),
+    ("SDL", 33),
+    ("SDR", 34),
+    ("LFE2", 35),
+    ("TSL", 36),
+    ("TSR", 37),
+    ("BFC", 38),
+    ("BFL", 39),
+    ("BFR", 40),
+];
+
+/// The channels of `layout` (as indices into `layout.channels`) in the order an FFmpeg decode gives them.
+pub fn decode_order(layout: &ChannelLayout) -> Vec<usize> {
+    let position = |c: Channel| {
+        let name = ff_name(c).unwrap_or("");
+        POSITIONS.iter().find(|(n, _)| *n == name).map_or(u8::MAX, |(_, p)| *p)
+    };
+    let mut order: Vec<usize> = (0..layout.channels.len()).collect();
+    order.sort_by_key(|&i| position(layout.channels[i]));
+    order
+}
+
 /// FFmpeg encoder name and extra args for a stream type.
 fn codec_args(stream: StreamType) -> Result<(&'static str, Vec<&'static str>), Error> {
     Ok(match stream {
@@ -351,6 +395,13 @@ fn md5_of(
         .ok_or_else(|| Error::Verify(format!("unexpected md5 output: {s}")))
 }
 
+/// MD5 of the decoded output of `job` as `fmt` (e.g. `pcm_s24le`), interleaved in the decoder's channel order and
+/// cut to the job's length. For checks whose source side is not a plain read of the input files.
+pub fn decoded_md5(job: &Job, fmt: &str) -> Result<String, Error> {
+    let out = job.output.to_string_lossy().into_owned();
+    md5_of(&job.ffmpeg, &["-i".to_string(), out], None, job.frames, fmt)
+}
+
 /// Verify an encode. Lossless streams must decode to exactly the source PCM (MD5 compared);
 /// lossy streams must decode cleanly to roughly the expected length. Returns a one-line report.
 pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
@@ -474,5 +525,13 @@ mod tests {
             build_args(&job(StreamType::DtsHdMa)),
             Err(Error::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn rears_before_sides() {
+        // 7.1 as L R C LFE Lss Rss Lsr Rsr decodes as FL FR FC LFE BL BR SL SR
+        let layout = ChannelLayout::find("7.1-side-rear").unwrap();
+        assert_eq!(decode_order(layout), [0, 1, 2, 3, 6, 7, 4, 5]);
+        assert_eq!(decode_order(ChannelLayout::find("5.1").unwrap()), [0, 1, 2, 3, 4, 5]);
     }
 }

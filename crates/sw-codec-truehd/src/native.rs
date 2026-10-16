@@ -47,6 +47,9 @@ pub struct Stats {
 /// Restart intervals coded together.
 const BATCH: usize = 8;
 
+/// Every source is coded at 24 bits, whatever its own depth: samples are rounded to this grid by `to_i24`.
+pub const CODED_BITS: u32 = 24;
+
 #[inline]
 fn to_i24(v: f32) -> i32 {
     ((v * 8_388_608.0).round() as i32).clamp(-8_388_608, 8_388_607)
