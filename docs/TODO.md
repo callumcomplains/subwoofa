@@ -46,7 +46,7 @@ format options), verify support, round-trip tests, docs table row, changelog lin
 
 ## Blocked on outside files or tools
 
-- [ ] TrueHD Atmos: run on one real Dolby-authored master (built, never run on one).
+- [x] TrueHD Atmos run on real Dolby-authored masters (a DAMF set and a DaVinci ADM BWF); verified with four substreams and the spatial flag. Left: our TrueHD substream analysis cannot follow substream 2 of Dolby's Atmos output ("bad Huffman code", a warning only; FFmpeg decodes the stream strictly), which points at a coding tool our analyser does not know.
 - [x] More of the Dolby Encoding Engine wired up: dialogue-aware loudness, Dolby Digital / Digital Plus encode and decode, transcode, trim and join, loudness correction. Not available in the installed build: AAC, AC-4, and channel reordering on short content.
 - [ ] Bitstream tab extras: the reference encodes in `docs/REFERENCE-ENCODES.md`.
 - [ ] HRA 6.1 at 48 kHz (XCH + XBR): needs its own reference encode.

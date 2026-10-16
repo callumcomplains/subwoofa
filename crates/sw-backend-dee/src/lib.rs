@@ -190,6 +190,49 @@ mod tests {
     }
 
     #[test]
+    fn a_damf_listing_is_pointed_at_the_renamed_companions() {
+        let text = "version: 0.5.1\r\npresentations:\r\n  - type: home\r\n    metadata: Film.atmos.metadata\r\n    audio: Film.atmos.audio\r\n    fps: 24\r\n";
+        let out = crate::alias::retarget_damf(text, "a.atmos.metadata", "a.atmos.audio");
+        assert_eq!(
+            out,
+            "version: 0.5.1\r\npresentations:\r\n  - type: home\r\n    metadata: a.atmos.metadata\r\n    audio: a.atmos.audio\r\n    fps: 24\r\n"
+        );
+        // lines that only mention the words are left alone
+        assert_eq!(
+            crate::alias::retarget_damf("creationTool: audio: x\n", "m", "a"),
+            "creationTool: audio: x\n"
+        );
+    }
+
+    #[test]
+    fn an_aliased_damf_master_names_its_companions_by_their_new_names() {
+        // the real failure: the listing still said "Film.atmos.audio", which the alias folder does not hold
+        let dir = std::env::temp_dir().join(format!("sw_dee_damf_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        let master = dir.join("My Film.atmos");
+        std::fs::write(
+            &master,
+            "version: 0.5.1\npresentations:\n  - type: home\n    metadata: My Film.atmos.metadata\n    audio: My Film.atmos.audio\n    fps: 24\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("My Film.atmos.metadata"), b"m").unwrap();
+        std::fs::write(dir.join("My Film.atmos.audio"), b"x").unwrap();
+        let a = make_alias(&master, &dir.join("out").join("o.thd"), &dir).unwrap();
+        let listing = std::fs::read_to_string(&a.input).unwrap();
+        let name = a.input.file_name().unwrap().to_str().unwrap();
+        assert!(
+            listing.contains(&format!("metadata: {name}.metadata"))
+                && listing.contains(&format!("audio: {name}.audio")),
+            "{listing}"
+        );
+        assert!(!listing.contains("My Film"), "{listing}");
+        assert!(a.input.with_file_name(format!("{name}.audio")).is_file());
+        assert!(a.input.with_file_name(format!("{name}.metadata")).is_file());
+        a.remove();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn paths_with_spaces_and_markup_are_escaped() {
         let mut j = AtmosJob::new(
             "D:/My Masters/a&b.atmos",

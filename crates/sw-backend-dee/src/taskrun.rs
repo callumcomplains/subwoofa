@@ -123,10 +123,12 @@ pub fn run_task(
         let profile_path = work.join("job.xml");
         std::fs::write(&profile_path, profile(&staged, &temp)?)?;
         let (messages, seconds) = run_profile(dee, &profile_path, &work.join("dee.log"), progress, line, cancel)?;
-        if !staged.output.is_file() {
+        if std::fs::metadata(&staged.output).map_or(true, |m| m.len() == 0) {
             return Err(Error::Failed {
                 code: 0,
-                messages: "the engine reported success but wrote no output file".into(),
+                messages:
+                    "the engine reported success but wrote an empty or no output file (is the programme too short?)"
+                        .into(),
             });
         }
         let measured = match job.task {

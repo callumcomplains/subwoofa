@@ -212,10 +212,14 @@ pub(crate) fn run_inner(
     std::fs::write(&profile, profile_xml(job, &temp)?)?;
     let (messages, seconds) = run_profile(dee, &profile, &work_dir.join("dee.log"), progress, line, cancel)?;
     progress(1.0);
-    if !job.output.is_file() {
+    // the engine can succeed and leave nothing: a programme shorter than one frame of the output has nothing to write
+    if std::fs::metadata(&job.output).map_or(true, |m| m.len() == 0) {
+        let _ = std::fs::remove_file(&job.output);
         return Err(Error::Failed {
             code: 0,
-            messages: "DEE reported success but wrote no output file".into(),
+            messages:
+                "DEE reported success but wrote an empty or no output file (is the programme shorter than one frame?)"
+                    .into(),
         });
     }
     Ok(Finished {
