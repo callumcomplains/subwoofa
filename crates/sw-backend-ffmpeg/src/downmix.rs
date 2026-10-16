@@ -2,8 +2,9 @@
 
 use crate::{ff_name, join_inputs, Error, Job};
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use sw_core::downmix::{Matrix, SatEvent, SaturationCheck, OFF};
+use sw_core::process::command;
 use sw_core::Channel;
 
 /// FFmpeg `pan` filter that applies `m` to a stream whose channels are named by the layout.
@@ -49,7 +50,7 @@ pub struct SatReport {
 pub fn saturation_check(job: &Job, m: &Matrix) -> Result<SatReport, Error> {
     let (input_args, join) = join_inputs(job, "j")?;
     let filter = format!("{join};[j]{}[out]", pan_filter(m)?);
-    let mut cmd = Command::new(&job.ffmpeg);
+    let mut cmd = command(&job.ffmpeg);
     cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"])
         .args(&input_args);
     cmd.args([

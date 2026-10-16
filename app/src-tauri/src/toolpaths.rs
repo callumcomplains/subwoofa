@@ -25,13 +25,8 @@ pub async fn tool_status() -> ToolStatus {
     blocking(move || {
         let ffmpeg = ff::find_ffmpeg();
         let version = ffmpeg.as_ref().and_then(|p| {
-            let mut c = std::process::Command::new(p);
+            let mut c = sw_core::process::command(p);
             c.arg("-version").stdin(std::process::Stdio::null());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                c.creation_flags(0x0800_0000);
-            }
             c.output()
                 .ok()
                 .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string))
@@ -75,14 +70,9 @@ fn fetch_script() -> Option<std::path::PathBuf> {
 pub async fn fetch_ffmpeg() -> Result<String, String> {
     crate::blocking(|| {
         let script = fetch_script().ok_or("The download script was not found next to the program.")?;
-        let mut cmd = std::process::Command::new("powershell");
+        let mut cmd = sw_core::process::command("powershell");
         cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&script);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // no console window
-        }
         let out = cmd
             .output()
             .map_err(|e| format!("PowerShell could not be started: {e}"))?;

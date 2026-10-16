@@ -37,6 +37,10 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - Fixed: a lossless encode (TrueHD, MLP, DTS-HD Master Audio) with **Normalise** or a **Delay** was reported as failing verification although the file was fine, because the check compared it with the untouched source. It is now checked against the source with the gain and delay applied, and still proven identical sample for sample.
 - Fixed: two Dolby engine encodes running at the same time in the queue shared one work folder, so one could delete the other's files halfway through. Each job now gets a folder of its own.
 - Fixed: an internal error (a crash inside an encoder) left its queue job stuck on Encoding and its queue slot taken until the app was restarted; with one job at a time the whole queue stopped. The job now fails with a message asking for a report, and the queue carries on.
+- Fixed: the installed app opened a black console window for a moment each time it ran FFmpeg, ffprobe or the DTS verifier (verify, preview, file info, FFmpeg-engine encodes). Every helper program now starts hidden.
+- **Verification of lossy formats** (AC-3, E-AC-3, DTS core, ES, 96/24, High Resolution, Express) now compares the decode with the source, channel by channel, instead of only checking that it decodes. A file that is short, or has a silent, missing or swapped channel, fails; the log and the queue show the worst channel's signal to noise.
+- Fixed: compare with source assumed the wrong FFmpeg channel order for 7.1 (FFmpeg puts the rear pair before the side pair), which made its "channel order" note wrong for 7.1 files.
+- Fixed: the Preview of a job with Normalise or a Delay applied them to the encode only, so the difference and signal-to-noise showed a level change rather than the codec, Normalise measured just the excerpt, and a long delay stopped the preview from lining up. The preview now leaves both out and says so.
 
 ## b0.1.0 — first public beta
 

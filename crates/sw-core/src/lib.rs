@@ -11,6 +11,7 @@ pub mod downmix;
 pub mod effort;
 pub mod formats;
 pub mod layout;
+pub mod process;
 pub mod version;
 
 pub use bitstream::{BitstreamOptions, Downmix};

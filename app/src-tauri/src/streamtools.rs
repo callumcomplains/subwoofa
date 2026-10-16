@@ -214,6 +214,9 @@ pub async fn verify_file(path: String, deep: bool, against: Option<Against>) -> 
                 order: sw_pcm::ChannelOrder::Auto,
                 start: a.start,
                 duration: a.duration,
+                delay_frames: 0,
+                gain_db: None,
+                order_known: false,
             };
             sw_verify::compare_with_source(&mut report, file, ffmpeg, &source)?;
         }

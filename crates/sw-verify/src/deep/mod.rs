@@ -11,7 +11,8 @@ pub(crate) use decode::probe_channels;
 use decode::{decode, Decoded};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use sw_core::process::command;
 
 pub(crate) fn run(path: &Path, opt: &Options, c: &mut Collector, probe: Option<&Probe>) {
     if let Some(p) = probe {
@@ -62,7 +63,7 @@ fn flac_md5_check(path: &Path, ffmpeg: &Path, c: &mut Collector) {
         return;
     }
     let codec = if bits <= 16 { "pcm_s16le" } else { "pcm_s24le" };
-    let out = Command::new(ffmpeg)
+    let out = command(ffmpeg)
         .args(["-hide_banner", "-v", "error", "-i"])
         .arg(path)
         .args(["-vn", "-c:a", codec, "-f", "md5", "-"])

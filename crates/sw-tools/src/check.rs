@@ -18,7 +18,7 @@ pub struct VerifyReport {
 /// Structural check plus a full decode with FFmpeg (errors on stderr fail the check).
 pub fn verify(path: &Path, ffmpeg: &Path) -> Result<VerifyReport> {
     let s = Stream::open(path)?;
-    let out = std::process::Command::new(ffmpeg)
+    let out = sw_core::process::command(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
         .args(["-c:a", "pcm_s24le", "-f", "md5", "-"])

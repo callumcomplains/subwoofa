@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use sw_core::process::command;
 
 /// What a finished job leaves behind.
 #[derive(Debug, Clone, Serialize)]
@@ -126,7 +127,7 @@ fn report_of(output: &Path) -> Option<PathBuf> {
 
 /// The command line that runs the engine on a job file.
 fn engine_command(dee: &Path, profile: &Path, log: &Path) -> Command {
-    let mut cmd = Command::new(dee);
+    let mut cmd = command(dee);
     cmd.current_dir(dee.parent().unwrap_or(Path::new(".")))
         .arg("--xml")
         .arg(profile)
@@ -138,11 +139,6 @@ fn engine_command(dee: &Path, profile: &Path, log: &Path) -> Command {
         .arg("info")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // no console window
-    }
     cmd
 }
 

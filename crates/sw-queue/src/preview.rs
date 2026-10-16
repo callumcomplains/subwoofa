@@ -58,6 +58,10 @@ pub fn build(
     excerpt.duration = Some(want);
     excerpt.output = dir.join(format!("preview.{extension}")).to_string_lossy().into_owned();
     excerpt.write_log = false;
+    // a gain or delay would show up as a difference from the source, and Normalise would measure only the excerpt
+    // (so not the gain the real job gets): the preview is about what the format does to the sound, so both stay out
+    excerpt.normalize_lufs = None;
+    excerpt.delay_ms = 0;
     let outcome = execute(&excerpt, false, cancel, &mut |p, _| on_progress(p * 0.8))?;
 
     // the source excerpt and the decoded encode, mixed down the same way and lined up
@@ -94,14 +98,22 @@ pub fn build(
         bytes: outcome.bytes,
         kbps: outcome.bytes as f64 * 8.0 / want / 1000.0,
         snr_db,
-        note: if layout.channels.contains(&Channel::Lfe) {
-            "The stereo mix leaves out the LFE channel.".to_string()
-        } else {
-            String::new()
-        },
+        note: note(layout, spec),
     };
     on_progress(1.0);
     Ok(preview)
+}
+
+/// What the preview leaves out, for the page to show.
+fn note(layout: &ChannelLayout, spec: &EncodeSpec) -> String {
+    let mut parts = Vec::new();
+    if layout.channels.contains(&Channel::Lfe) {
+        parts.push("The stereo mix leaves out the LFE channel.");
+    }
+    if spec.normalize_lufs.is_some() || spec.delay_ms != 0 {
+        parts.push("Normalise and Delay are left out (level and timing only).");
+    }
+    parts.join(" ")
 }
 
 /// Where the excerpt starts and how long it is (in seconds): the job's start or the middle of the programme, inside the

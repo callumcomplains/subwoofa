@@ -4,7 +4,7 @@
 use crate::deep::decode::{extract_stream, read_pcm};
 use crate::{Collector, Options, Probe, Status};
 use std::path::Path;
-use std::process::Command;
+use sw_core::process::command;
 
 pub(crate) fn bitrate_section(c: &mut Collector, p: &Probe) {
     if p.frame_bytes.is_empty() || p.sample_rate == 0 {
@@ -144,11 +144,7 @@ pub(crate) fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &m
         );
         return;
     };
-    let out = match Command::new(&tool)
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .output()
-    {
+    let out = match command(&tool).arg(path).stdin(std::process::Stdio::null()).output() {
         Ok(o) => o,
         Err(e) => {
             c.check(
@@ -164,11 +160,7 @@ pub(crate) fn reference(path: &Path, opt: &Options, probe: Option<&Probe>, c: &m
     // the bare stream instead
     if text.contains("number of audio presentations (0)") {
         if let Some(raw) = extract_stream(path) {
-            if let Ok(o) = Command::new(&tool)
-                .arg(&raw)
-                .stdin(std::process::Stdio::null())
-                .output()
-            {
+            if let Ok(o) = command(&tool).arg(&raw).stdin(std::process::Stdio::null()).output() {
                 text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
             }
             let _ = std::fs::remove_file(&raw);

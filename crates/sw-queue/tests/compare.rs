@@ -108,6 +108,9 @@ fn lossless_comes_back_identical_and_lossy_gets_a_figure() {
         order: sw_pcm::ChannelOrder::Auto,
         start: None,
         duration: None,
+        delay_frames: 0,
+        gain_db: None,
+        order_known: false,
     };
     let check = |path: &Path| {
         let mut report = sw_verify::verify(path, &sw_verify::Options::default()).unwrap();
@@ -173,6 +176,15 @@ fn a_preview_lines_the_encode_up_with_the_source() {
     let snr = ac3.snr_db.expect("a lossy encode differs");
     assert!(snr > 15.0 && snr < 90.0, "{snr}");
     assert!(ac3.kbps > 150.0 && ac3.kbps < 230.0, "{}", ac3.kbps);
+
+    // Normalise and a long delay stay out of the preview: lossless still comes back identical, and the note says so
+    let mut spec = spec_for(&dir, &inputs, "flac", "files", None, "flac");
+    spec.normalize_lufs = Some(-31.0);
+    spec.delay_ms = 800;
+    let edited = sw_queue::preview::build(&spec, &ffmpeg, 3.0, &dir.join("edited"), &cancel, &mut |_| {})
+        .unwrap_or_else(|_| panic!("preview with normalise and delay failed"));
+    assert!(edited.snr_db.is_none(), "{:?}", edited.snr_db);
+    assert!(edited.note.contains("Normalise and Delay"), "{}", edited.note);
 }
 
 #[test]

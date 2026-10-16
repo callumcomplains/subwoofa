@@ -37,6 +37,9 @@ pub(crate) fn verify_cmd(args: VerifyArgs) -> Result<(), String> {
             order: sw_pcm::ChannelOrder::Auto,
             start: source_start,
             duration: source_duration,
+            delay_frames: 0,
+            gain_db: None,
+            order_known: false,
         };
         let ffmpeg = opt.ffmpeg.as_deref().ok_or("ffmpeg not found on PATH (use --ffmpeg)")?;
         sw_verify::compare_with_source(&mut reports[0], &files[0], ffmpeg, &source)?;

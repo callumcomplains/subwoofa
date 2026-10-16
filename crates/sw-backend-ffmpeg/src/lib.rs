@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use sw_core::process::command;
 use sw_core::{Channel, ChannelLayout, StreamType};
 
 pub mod downmix;
@@ -295,7 +296,7 @@ pub fn build_args(job: &Job) -> Result<Vec<String>, Error> {
 /// Run the encode. Returns ffmpeg's stderr log on success.
 pub fn run(job: &Job) -> Result<String, Error> {
     let args = build_args(job)?;
-    let out = Command::new(&job.ffmpeg).args(&args).output()?;
+    let out = command(&job.ffmpeg).args(&args).output()?;
     let log = String::from_utf8_lossy(&out.stderr).into_owned();
     if out.status.success() {
         Ok(log)
@@ -324,7 +325,7 @@ pub fn run_progress(
     use std::sync::atomic::Ordering;
     let mut args = build_args(job)?;
     args.splice(2..2, ["-progress".to_string(), "pipe:1".into(), "-nostats".into()]);
-    let mut child = Command::new(&job.ffmpeg)
+    let mut child = command(&job.ffmpeg)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -372,7 +373,7 @@ fn md5_of(
     trim_to: Option<u64>,
     fmt: &str,
 ) -> Result<String, Error> {
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = command(ffmpeg);
     cmd.args(["-hide_banner", "-nostats", "-loglevel", "error"]).args(pre);
     if let Some(f) = filter {
         cmd.args(["-filter_complex", f, "-map", "[v]"]);
@@ -425,7 +426,7 @@ pub fn verify(job: &Job, bits: u16, expect_secs: f64) -> Result<String, Error> {
             )))
         }
     } else {
-        let o = Command::new(&job.ffmpeg)
+        let o = command(&job.ffmpeg)
             .args([
                 "-hide_banner",
                 "-nostats",

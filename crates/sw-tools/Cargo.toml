@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+sw-core = { path = "../sw-core" }
 serde.workspace = true
 thiserror.workspace = true
 

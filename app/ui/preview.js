@@ -10,7 +10,7 @@ function previewReady() {
     && (cat.has_ffmpeg || curStream().native) && curRate() > 0 && curStream().available && (!srcLayoutId || curStream().native);
 }
 
-function pvInfo(text, cls = "") { $("pvInfo").textContent = text; $("pvInfo").className = `readout ${cls}`; }
+function pvInfo(text, cls = "") { $("pvInfo").textContent = text; $("pvInfo").title = text; $("pvInfo").className = `readout ${cls}`; }
 
 async function startPreview() {
   if (pv.busy) { invoke("preview_cancel"); return; }

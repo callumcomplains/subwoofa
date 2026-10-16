@@ -7,7 +7,8 @@ use crate::deep::stats::Stats;
 use crate::{Collector, Probe, Status};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use sw_core::process::command;
 
 pub(crate) struct Done {
     pub(crate) channels: usize,
@@ -37,7 +38,7 @@ pub(crate) fn channels_of(layout: &str) -> Option<usize> {
 }
 
 pub(crate) fn probe_channels(path: &Path, ffmpeg: &Path) -> Option<(usize, u32)> {
-    let out = Command::new(ffmpeg)
+    let out = command(ffmpeg)
         .args(["-hide_banner", "-i"])
         .arg(path)
         .args(["-t", "0", "-f", "null", "-"])
@@ -70,7 +71,7 @@ pub(crate) fn decode(path: &Path, ffmpeg: &Path, probe: Option<&Probe>, c: &mut 
     }
     let Some((channels, rate)) = probe_channels(path, ffmpeg) else {
         // either FFmpeg is missing or it cannot read the file at all
-        if Command::new(ffmpeg).arg("-version").output().is_err() {
+        if command(ffmpeg).arg("-version").output().is_err() {
             return Decoded::Missing;
         }
         c.check("Full decode", Status::Fail, "FFmpeg could not open the file as audio");
@@ -176,7 +177,7 @@ struct DecodeRun {
 
 /// Decodes the whole file to 24-bit PCM, gathering statistics and a checksum as the samples arrive.
 fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize, mut tap: Option<&mut AudioTap>) -> Option<DecodeRun> {
-    let mut child = Command::new(ffmpeg)
+    let mut child = command(ffmpeg)
         .args([
             "-hide_banner",
             "-v",
@@ -230,7 +231,7 @@ fn run_decoder(path: &Path, ffmpeg: &Path, channels: usize, mut tap: Option<&mut
 }
 
 pub(crate) fn read_pcm(path: &Path, ffmpeg: &Path, core_only: bool, seconds: u32) -> Option<Vec<i32>> {
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = command(ffmpeg);
     cmd.args(["-hide_banner", "-v", "error"]);
     if core_only {
         cmd.args(["-core_only", "1"]);

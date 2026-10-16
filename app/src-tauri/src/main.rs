@@ -45,7 +45,7 @@ fn open_docs(page: String) -> Result<(), String> {
         return Err("unknown page".into());
     }
     let url = format!("https://github.com/callumcomplains/subwoofa/blob/main/docs/{page}");
-    std::process::Command::new("cmd")
+    sw_core::process::command("cmd")
         .args(["/C", "start", "", &url])
         .spawn()
         .map(|_| ())

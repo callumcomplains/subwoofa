@@ -20,5 +20,8 @@ serde.workspace = true
 rayon = "1.12.0"
 md5 = "0.8"
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

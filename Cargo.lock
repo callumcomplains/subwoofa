@@ -3122,6 +3122,7 @@ name = "sw-backend-dee"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sw-core",
  "sw-verify",
  "thiserror 2.0.21",
 ]
@@ -3229,6 +3230,7 @@ dependencies = [
  "md5",
  "rayon",
  "serde",
+ "serde_json",
  "sw-backend-dee",
  "sw-backend-ffmpeg",
  "sw-codec-ac3",
@@ -3247,6 +3249,7 @@ name = "sw-tools"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sw-core",
  "thiserror 2.0.21",
 ]
 
@@ -3256,6 +3259,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sw-backend-ffmpeg",
  "sw-codec-ac3",
  "sw-codec-pcm",
  "sw-codec-truehd",

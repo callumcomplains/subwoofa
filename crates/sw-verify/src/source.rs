@@ -2,13 +2,14 @@
 //! delays the audio by a known but format-dependent amount), then every channel is measured against its source
 //! channel. A lossless stream must come back bit for bit; a lossy one gets a signal-to-noise figure per channel.
 
-use crate::analysis::{decoded_channels, fft::fft};
+use crate::analysis::fft::fft;
 use crate::{Check, Report, Status};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use sw_core::process::command;
 use sw_core::{Channel, ChannelLayout};
 use sw_pcm::{ChannelOrder, StemSet};
 
@@ -19,6 +20,14 @@ pub struct Source<'a> {
     pub order: ChannelOrder,
     pub start: Option<f64>,
     pub duration: Option<f64>,
+    /// A delay (frames of silence in front, or of the start left out when negative) and a gain (dB) the encoder
+    /// applied as it read the files, so the comparison sees the audio the encoder saw.
+    pub delay_frames: i64,
+    pub gain_db: Option<f64>,
+    /// The decode is known to hold the layout's channels in FFmpeg's order: compare each channel with the decoded
+    /// channel that order names, instead of matching them by content (which cannot tell apart two channels that carry
+    /// nearly the same audio, and would hide a swap).
+    pub order_known: bool,
 }
 
 /// How one channel compares.
@@ -92,7 +101,7 @@ fn is_lossless(format: &str) -> bool {
 
 /// Starts FFmpeg decoding `path` to 32-bit float samples on its output, optionally only the first `seconds`.
 fn spawn_decoder(path: &Path, ffmpeg: &Path, seconds: Option<f64>) -> Result<std::process::Child, String> {
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = command(ffmpeg);
     cmd.args(["-hide_banner", "-v", "error", "-i"]).arg(path);
     if let Some(s) = seconds {
         cmd.args(["-t", &format!("{s}")]);
@@ -279,15 +288,15 @@ pub fn align(source: &[Vec<f32>], decoded: &[Vec<f32>], rate: u32) -> Result<i64
     find_lag(&cut(source, head), &cut(decoded, head + 2 * MAX_LAG), rate as f64).map(|(lag, _)| lag)
 }
 
-/// For each channel of `layout`, the channel of an FFmpeg decode that carries it.
+/// For each channel of `layout`, the channel of an FFmpeg decode that carries it (FFmpeg's own channel order, as
+/// `sw_backend_ffmpeg::decode_order` gives it: a 7.1 decode puts the rear pair before the side pair).
 pub fn decoded_order(layout: &ChannelLayout) -> Vec<usize> {
-    let decoded = decoded_channels(layout.channels.len());
-    layout
-        .channels
-        .iter()
-        .enumerate()
-        .map(|(i, c)| decoded.iter().position(|d| d == c).unwrap_or(i))
-        .collect()
+    let by_decoded = sw_backend_ffmpeg::decode_order(layout);
+    let mut at = vec![0; by_decoded.len()];
+    for (decoded, &channel) in by_decoded.iter().enumerate() {
+        at[channel] = decoded;
+    }
+    at
 }
 
 /// Running totals of one channel.
@@ -353,6 +362,13 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
 /// The source's files opened at the start of its span, and how many frames the span holds.
 fn open_span(src: &Source) -> Result<(StemSet, u64), String> {
     let mut stems = StemSet::open_ordered(src.layout, src.inputs, src.order).map_err(|e| e.to_string())?;
+    // the same order as the job runner: the delay first, then the gain measured on the delayed audio
+    if src.delay_frames != 0 {
+        stems.set_delay_frames(src.delay_frames);
+    }
+    if let Some(db) = src.gain_db {
+        stems.set_gain_db(db);
+    }
     let total = stems
         .select_span(src.start.unwrap_or(0.0), src.duration)
         .map_err(|e| e.to_string())?;
@@ -392,7 +408,11 @@ fn line_up(path: &Path, ffmpeg: &Path, src: &Source, total: u64) -> Result<Align
     let (lag, best_window) = find_lag(&source_head, &head, rate)?;
     Ok(Alignment {
         lag,
-        mapping: match_channels(&source_head, &head, lag, best_window),
+        mapping: if src.order_known {
+            decoded_order(src.layout)
+        } else {
+            match_channels(&source_head, &head, lag, best_window)
+        },
     })
 }
 

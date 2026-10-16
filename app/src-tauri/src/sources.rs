@@ -3,8 +3,8 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 use sw_backend_ffmpeg as ff;
+use sw_core::process::command;
 use sw_core::{autoimport, ChannelLayout};
 
 #[derive(Serialize)]
@@ -126,7 +126,7 @@ pub fn probe(path: String) -> Result<Probe, String> {
     }
     let ffmpeg = ff::find_ffmpeg().ok_or("not a WAV/AIFF file, and ffmpeg is not available to read it")?;
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
-    let out = Command::new(&ffprobe)
+    let out = command(&ffprobe)
         .args([
             "-v",
             "error",

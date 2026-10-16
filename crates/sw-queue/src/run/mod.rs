@@ -1,5 +1,6 @@
 //! Executes one encode job and writes its log.
 
+mod closeness;
 mod encoders;
 mod log;
 mod processed;
@@ -165,7 +166,13 @@ fn execute_inner(
         // the usual check reads the files as they are, without the gain or delay
         return processed::verify(spec, stream, layout, &job, (start, span), edit, log);
     }
-    verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)
+    let outcome = verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)?;
+    if stream.is_lossless() || stream.is_audio_file() {
+        return Ok(outcome);
+    }
+    // decoding cleanly says little about a lossy file: it must also sound like its source
+    let message = closeness::verify(spec, layout, &job.inputs, &job.ffmpeg, (start, span), edit, log)?;
+    Ok(Outcome { message, ..outcome })
 }
 
 fn not_verified(message: String) -> Outcome {
