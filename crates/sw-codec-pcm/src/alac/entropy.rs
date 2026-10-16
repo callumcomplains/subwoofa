@@ -21,16 +21,16 @@ pub(crate) fn put_scalar(w: &mut BitWriter, value: u32, k: u32, escape_bits: u32
     let remainder = value % divisor;
     if quotient > 8 {
         w.put(0x1FF, 9);
-        w.put(value as u64, escape_bits);
+        w.put(value, escape_bits);
         return;
     }
     if quotient > 0 {
-        w.put((1u64 << quotient) - 1, quotient);
+        w.put(((1u64 << quotient) - 1) as u32, quotient);
     }
     w.put(0, 1);
     if k != 1 {
         if remainder > 0 {
-            w.put(remainder as u64 + 1, k);
+            w.put((remainder as u64 + 1) as u32, k);
         } else {
             w.put(0, k - 1);
         }
@@ -84,17 +84,17 @@ mod tests {
         // k = 1: the divisor is 1, so the code is the unary quotient and nothing else
         let mut w = BitWriter::default();
         put_scalar(&mut w, 3, 1, 16);
-        w.align();
-        assert_eq!(w.bytes, vec![0b1110_0000]);
+        w.align(8);
+        assert_eq!(w.bytes(), vec![0b1110_0000]);
         // k = 3: divisor 7; 9 = 1 * 7 + 2 -> unary 10, then (2 + 1) in 3 bits = 011
         let mut w = BitWriter::default();
         put_scalar(&mut w, 9, 3, 16);
-        w.align();
-        assert_eq!(w.bytes, vec![0b1001_1000]);
+        w.align(8);
+        assert_eq!(w.bytes(), vec![0b1001_1000]);
         // a zero remainder is k - 1 zero bits
         let mut w = BitWriter::default();
         put_scalar(&mut w, 7, 3, 16);
-        w.align();
-        assert_eq!(w.bytes, vec![0b1000_0000]);
+        w.align(8);
+        assert_eq!(w.bytes(), vec![0b1000_0000]);
     }
 }

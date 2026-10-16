@@ -147,7 +147,7 @@ pub(crate) fn best_prediction(samples: &[i32], bits: u32, orders: &[usize]) -> P
         let residual = predict(samples, &coefficients, bits);
         let mut w = BitWriter::default();
         entropy_code(&mut w, &residual, bits);
-        let total = w.bytes.len() * 8 + order * 16;
+        let total = w.bytes().len() * 8 + order * 16;
         if best.as_ref().is_none_or(|b| total < b.bits) {
             best = Some(Predicted {
                 coefficients,

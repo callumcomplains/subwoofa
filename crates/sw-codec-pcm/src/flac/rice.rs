@@ -1,6 +1,6 @@
 //! Rice coding of the prediction error: the cheapest parameters for a block's partitions, and writing them.
 
-use crate::bitwriter::BitWriter;
+use crate::bitwriter::{put_rice, BitWriter};
 
 /// Zigzag mapping of a signed residual to an unsigned number (0, -1, 1, -2 ... becomes 0, 1, 2, 3 ...).
 pub(crate) fn zigzag(v: i64) -> u64 {
@@ -106,17 +106,17 @@ pub(crate) fn write_rice(
     block_len: usize,
     coding: &RiceCoding,
 ) {
-    w.put(u64::from(coding.wide), 2);
-    w.put(coding.partition_order as u64, 4);
+    w.put(u32::from(coding.wide), 2);
+    w.put(coding.partition_order, 4);
     let parts = 1usize << coding.partition_order;
     let size = block_len / parts;
     let mut start = 0usize;
     for p in 0..parts {
         let end = if p == 0 { size - predictor_order } else { start + size };
         let k = coding.parameters[p];
-        w.put(k as u64, if coding.wide { 5 } else { 4 });
+        w.put(k, if coding.wide { 5 } else { 4 });
         for &r in &residual[start..end] {
-            w.put_rice(zigzag(r as i64), k);
+            put_rice(w, zigzag(r as i64), k);
         }
         start = end;
     }
@@ -133,7 +133,7 @@ mod tests {
         let coding = rice_code(&residual, 0, 256, 8);
         let mut w = BitWriter::default();
         write_rice(&mut w, &residual, 0, 256, &coding);
-        w.align();
-        assert_eq!(w.bytes.len(), coding.bits.div_ceil(8));
+        w.align(8);
+        assert_eq!(w.bytes().len(), coding.bits.div_ceil(8));
     }
 }

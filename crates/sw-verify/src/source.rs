@@ -100,17 +100,45 @@ fn is_lossless(format: &str) -> bool {
 }
 
 /// Starts FFmpeg decoding `path` to 32-bit float samples on its output, optionally only the first `seconds`.
-fn spawn_decoder(path: &Path, ffmpeg: &Path, seconds: Option<f64>) -> Result<std::process::Child, String> {
+fn spawn_decoder(path: &Path, ffmpeg: &Path, seconds: Option<f64>) -> Result<Decoder, String> {
     let mut cmd = command(ffmpeg);
     cmd.args(["-hide_banner", "-v", "error", "-i"]).arg(path);
     if let Some(s) = seconds {
         cmd.args(["-t", &format!("{s}")]);
     }
-    cmd.args(["-vn", "-f", "f32le", "-acodec", "pcm_f32le", "-"])
+    let mut child = cmd
+        .args(["-vn", "-f", "f32le", "-acodec", "pcm_f32le", "-"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("FFmpeg could not be started: {e}"))
+        .map_err(|e| format!("FFmpeg could not be started: {e}"))?;
+    // read on a thread of its own: a damaged file can make FFmpeg complain at length, and a full pipe would stall it
+    let mut errors = child.stderr.take().unwrap();
+    let complaints = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = errors.read_to_string(&mut text);
+        text
+    });
+    Ok(Decoder { child, complaints })
+}
+
+/// FFmpeg decoding a file to its standard output, and what it says about problems on the way.
+struct Decoder {
+    child: std::process::Child,
+    complaints: std::thread::JoinHandle<String>,
+}
+
+impl Decoder {
+    fn out(&mut self) -> &mut std::process::ChildStdout {
+        self.child.stdout.as_mut().unwrap()
+    }
+
+    /// Stops the decoder (it may still be running when enough was read) and returns its complaints, if any.
+    fn finish(mut self) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.complaints.join().unwrap_or_default().trim().to_string()
+    }
 }
 
 /// Reads up to `frames` frames of `channels` interleaved floats; fewer at the end of the stream.
@@ -233,7 +261,12 @@ fn find_lag(source_head: &[Vec<f32>], head: &[Vec<f32>], rate: f64) -> Result<(i
             .map(|v| (*v as f64).powi(2))
             .sum::<f64>()
     };
-    let limit = source_head[0].len().saturating_sub(WINDOW);
+    if head[0].len() < WINDOW + 1 {
+        return Err("the decode is too short to line up (it needs about two seconds)".into());
+    }
+    // the stretch must lie where both have audio: a decode that stops early (a damaged or cut file) is lined up on
+    // what it has, and the comparison then says how much is missing
+    let limit = source_head[0].len().min(head[0].len()).saturating_sub(WINDOW);
     let (mut best_window, mut best_channel, mut best_energy) = (0usize, 0usize, 0.0);
     for (ch, c) in source_head.iter().enumerate() {
         let mut from = 0;
@@ -264,11 +297,10 @@ fn find_lag(source_head: &[Vec<f32>], head: &[Vec<f32>], rate: f64) -> Result<(i
 /// Decodes a whole file with FFmpeg into one vector of samples per channel, in FFmpeg's channel order.
 pub fn decode_planar(path: &Path, ffmpeg: &Path) -> Result<Vec<Vec<f32>>, String> {
     let channels = decoded_width(path, ffmpeg).ok_or("FFmpeg could not read the encoded file")?;
-    let mut child = spawn_decoder(path, ffmpeg, None)?;
-    let mut out = child.stdout.take().unwrap();
+    let mut decoder = spawn_decoder(path, ffmpeg, None)?;
     let mut planar = vec![Vec::new(); channels];
     loop {
-        let block = read_frames(&mut out, channels, BLOCK).map_err(|e| e.to_string())?;
+        let block = read_frames(decoder.out(), channels, BLOCK).map_err(|e| e.to_string())?;
         for (all, part) in planar.iter_mut().zip(&block) {
             all.extend_from_slice(part);
         }
@@ -276,7 +308,7 @@ pub fn decode_planar(path: &Path, ffmpeg: &Path) -> Result<Vec<Vec<f32>>, String
             break;
         }
     }
-    let _ = child.wait();
+    decoder.finish();
     Ok(planar)
 }
 
@@ -355,6 +387,14 @@ pub fn compare_with_source(report: &mut Report, path: &Path, ffmpeg: &Path, src:
             .collect(),
     };
     add_checks(report, &comparison);
+    if let Some(last) = run.complaints.lines().last() {
+        // usually why a decode stopped early or came out short
+        report.checks.push(Check {
+            name: "Decoder messages".to_string(),
+            status: Status::Warn,
+            detail: format!("FFmpeg reported problems while decoding; the last: {last}"),
+        });
+    }
     report.comparison = Some(comparison);
     Ok(())
 }
@@ -394,12 +434,11 @@ fn line_up(path: &Path, ffmpeg: &Path, src: &Source, total: u64) -> Result<Align
     stems
         .read_planar(&mut source_head, first.min(total as usize))
         .map_err(|e| e.to_string())?;
-    let mut child = spawn_decoder(path, ffmpeg, Some(LAG_SECONDS + MAX_LAG as f64 / rate + 1.0))?;
+    let mut decoder = spawn_decoder(path, ffmpeg, Some(LAG_SECONDS + MAX_LAG as f64 / rate + 1.0))?;
     let decoded_channels_n = decoded_width(path, ffmpeg).unwrap_or(channels);
-    let head = read_frames(child.stdout.as_mut().unwrap(), decoded_channels_n, first + 2 * MAX_LAG)
-        .map_err(|e| e.to_string())?;
-    let _ = child.kill();
-    let _ = child.wait();
+    let head = read_frames(decoder.out(), decoded_channels_n, first + 2 * MAX_LAG).map_err(|e| e.to_string())?;
+    // only the start is read here; what the decoder says about the rest comes out of the full pass
+    decoder.finish();
     if decoded_channels_n != channels {
         return Err(format!(
             "the file decodes to {decoded_channels_n} channels but the source has {channels}"
@@ -423,14 +462,15 @@ struct Run {
     decoded_frames: u64,
     /// Frames of the source before the decode starts (it started early), which have nothing to compare with.
     skipped_source: u64,
+    /// What FFmpeg said went wrong while decoding (empty when nothing did).
+    complaints: String,
 }
 
 /// Compares the whole decode with the whole source, block by block.
 fn tally_all(path: &Path, ffmpeg: &Path, src: &Source, total: u64, alignment: &Alignment) -> Result<Run, String> {
     let (mut stems, _) = open_span(src)?;
     let channels = src.layout.channels.len();
-    let mut child = spawn_decoder(path, ffmpeg, None)?;
-    let mut out = child.stdout.take().unwrap();
+    let mut decoder = spawn_decoder(path, ffmpeg, None)?;
     let mut planar = Vec::new();
     // a positive lag means the decode starts late: its first frames have no source
     let (mut skip_decoded, mut skip_source) = (alignment.lag.max(0) as usize, (-alignment.lag).max(0) as usize);
@@ -441,7 +481,7 @@ fn tally_all(path: &Path, ffmpeg: &Path, src: &Source, total: u64, alignment: &A
     let mut left = total;
     while skip_decoded > 0 {
         let n = skip_decoded.min(BLOCK);
-        let got = read_frames(&mut out, channels, n).map_err(|e| e.to_string())?;
+        let got = read_frames(decoder.out(), channels, n).map_err(|e| e.to_string())?;
         decoded_frames += got[0].len() as u64;
         skip_decoded -= n;
         if got[0].len() < n {
@@ -461,7 +501,7 @@ fn tally_all(path: &Path, ffmpeg: &Path, src: &Source, total: u64, alignment: &A
         let want = BLOCK.min(left as usize);
         let got_source = stems.read_planar(&mut planar, want).map_err(|e| e.to_string())?;
         left -= got_source as u64;
-        let decoded = read_frames(&mut out, channels, got_source.max(1)).map_err(|e| e.to_string())?;
+        let decoded = read_frames(decoder.out(), channels, got_source.max(1)).map_err(|e| e.to_string())?;
         let got_decoded = decoded[0].len();
         decoded_frames += got_decoded as u64;
         let n = got_source.min(got_decoded);
@@ -473,13 +513,12 @@ fn tally_all(path: &Path, ffmpeg: &Path, src: &Source, total: u64, alignment: &A
             break;
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
     Ok(Run {
         tallies,
         compared,
         decoded_frames,
         skipped_source,
+        complaints: decoder.finish(),
     })
 }
 
@@ -490,8 +529,11 @@ fn decoded_width(path: &Path, ffmpeg: &Path) -> Option<usize> {
 
 /// The checks that come out of a comparison.
 fn add_checks(report: &mut Report, c: &Comparison) {
+    // the structure check knows; a report made without one falls back on the format's name
     let named = |text: &str| is_lossless(text);
-    let lossless = named(&report.format) || report.summary.iter().any(|(k, v)| k == "Format" && named(v));
+    let lossless = report
+        .lossless
+        .unwrap_or_else(|| named(&report.format) || report.summary.iter().any(|(k, v)| k == "Format" && named(v)));
     // a channel that is nearly silent in the source has no meaningful signal to noise
     let audible: Vec<&ChannelMatch> = c
         .channels

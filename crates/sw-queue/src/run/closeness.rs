@@ -40,7 +40,10 @@ pub(crate) fn verify(
         gain_db: edit.gain_db,
         order_known: true,
     };
-    let mut report = sw_verify::Report::default();
+    let mut report = sw_verify::Report {
+        lossless: Some(false),
+        ..Default::default()
+    };
     sw_verify::compare_with_source(&mut report, Path::new(&spec.output), ffmpeg, &source)
         .map_err(|e| format!("the encode could not be compared with the source: {e}"))?;
     let comparison = report.comparison.ok_or("the comparison gave no result")?;

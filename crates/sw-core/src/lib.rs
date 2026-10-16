@@ -5,6 +5,7 @@
 //! built from public information only.
 
 pub mod autoimport;
+pub mod bits;
 pub mod bitstream;
 pub mod channel;
 pub mod downmix;

@@ -24,6 +24,20 @@ function Get-Text([string]$Url) {
     return [string]$content
 }
 
+# Puts a program in place even while the old copy is running (an encode or check using FFmpeg): Windows will not
+# overwrite a running program but will rename it, so the old copy steps aside first and is deleted once it can be
+# (now, or on the next run of this script).
+function Install-Program([string]$From, [string]$To) {
+    Get-ChildItem -LiteralPath (Split-Path $To) -Filter ((Split-Path $To -Leaf) + ".old-*") -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $To) {
+        $aside = $To + ".old-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        Move-Item -LiteralPath $To -Destination $aside
+        Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
+    }
+    Copy-Item -LiteralPath $From -Destination $To
+}
+
 $work = Join-Path ([IO.Path]::GetTempPath()) ("subwoofa-ffmpeg-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 
 try {
@@ -48,9 +62,9 @@ try {
     if ($LASTEXITCODE -ne 0 -or $out -notmatch "ffmpeg version") { throw "The downloaded ffmpeg.exe does not run." }
 
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-    Copy-Item $exe.FullName (Join-Path $Dir "ffmpeg.exe") -Force
+    Install-Program $exe.FullName (Join-Path $Dir "ffmpeg.exe")
     $probe = Get-ChildItem (Join-Path $work "x") -Recurse -Filter ffprobe.exe | Select-Object -First 1
-    if ($probe) { Copy-Item $probe.FullName (Join-Path $Dir "ffprobe.exe") -Force }
+    if ($probe) { Install-Program $probe.FullName (Join-Path $Dir "ffprobe.exe") }
     Set-Content -Path (Join-Path $Dir "SOURCE.txt") -Value "FFmpeg $version essentials build from $zipUrl`r`nSHA-256 $actual"
     Say "FFmpeg $version is ready in $Dir"
     exit 0

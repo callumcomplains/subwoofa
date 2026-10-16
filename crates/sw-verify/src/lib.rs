@@ -72,6 +72,9 @@ pub struct Report {
     pub deep: bool,
     pub passed: bool,
     pub duration_secs: f64,
+    /// Whether the format keeps every sample, as the structure check found it (`None` when it could not tell).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lossless: Option<bool>,
     pub summary: Vec<(String, String)>,
     pub checks: Vec<Check>,
     pub findings: Vec<Finding>,
@@ -208,6 +211,7 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
         c.report.format = file_kind.name().to_string();
         probe = Some(audiofile::verify(&mut w, &mut c, file_kind));
         c.report.duration_secs = probe.as_ref().map_or(0.0, |p| p.duration_secs);
+        c.report.lossless = probe.as_ref().map(|p| p.lossless);
         if opt.deep {
             deep::run(path, opt, &mut c, probe.as_ref());
         }
@@ -232,6 +236,7 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
     }
     if let Some(p) = &probe {
         c.report.duration_secs = p.duration_secs;
+        c.report.lossless = Some(p.lossless);
     }
     if opt.deep {
         deep::run(path, opt, &mut c, probe.as_ref());

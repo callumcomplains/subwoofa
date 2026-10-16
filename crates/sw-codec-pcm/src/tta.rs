@@ -191,7 +191,7 @@ fn encode_frame(channels: &[Vec<i32>], bytes_per_sample: u32) -> Vec<u8> {
             }
         }
     }
-    let mut bytes = w.finish();
+    let mut bytes = w.into_bytes();
     let crc = crc32(&bytes);
     bytes.extend_from_slice(&crc.to_le_bytes());
     bytes

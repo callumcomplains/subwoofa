@@ -227,7 +227,7 @@ pub(crate) fn write_subframe(w: &mut BitWriter, s: &Subframe) {
         Predictor::Linear { order, .. } => 32 + (*order as u64 - 1),
     };
     w.put(0, 1); // padding bit
-    w.put(type_code, 6);
+    w.put(type_code as u32, 6);
     if s.wasted > 0 {
         w.put(1, 1);
         w.put(0, s.wasted - 1); // wasted bits - 1 zeros, then a one
@@ -238,15 +238,15 @@ pub(crate) fn write_subframe(w: &mut BitWriter, s: &Subframe) {
     let bps = s.bits_per_sample;
     let block_len = s.samples.len();
     match &s.predictor {
-        Predictor::Constant(v) => w.put_signed(*v as i64, bps),
+        Predictor::Constant(v) => w.put_signed((*v as i64) as i32, bps),
         Predictor::Verbatim => {
             for &v in &s.samples {
-                w.put_signed(v as i64, bps);
+                w.put_signed(v, bps);
             }
         }
         Predictor::Fixed { order } => {
             for &v in &s.samples[..*order] {
-                w.put_signed(v as i64, bps);
+                w.put_signed(v, bps);
             }
             write_rice(w, &s.residual, *order, block_len, s.rice.as_ref().unwrap());
         }
@@ -256,12 +256,12 @@ pub(crate) fn write_subframe(w: &mut BitWriter, s: &Subframe) {
             coefficients,
         } => {
             for &v in &s.samples[..*order] {
-                w.put_signed(v as i64, bps);
+                w.put_signed(v, bps);
             }
-            w.put(LPC_PRECISION as u64 - 1, 4);
-            w.put_signed(*shift as i64, 5);
+            w.put((LPC_PRECISION as u64 - 1) as u32, 4);
+            w.put_signed((*shift as i64) as i32, 5);
             for &c in coefficients {
-                w.put_signed(c as i64, LPC_PRECISION);
+                w.put_signed(c, LPC_PRECISION);
             }
             write_rice(w, &s.residual, *order, block_len, s.rice.as_ref().unwrap());
         }

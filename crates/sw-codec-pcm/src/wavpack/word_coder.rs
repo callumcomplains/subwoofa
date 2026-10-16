@@ -55,7 +55,7 @@ pub(crate) fn encode(residuals: &[i32], stereo: bool, medians: [Medians; 2]) -> 
     };
     coder.run(residuals, stereo);
     Coded {
-        bytes: coder.bits.finish(),
+        bytes: coder.bits.into_bytes(),
         medians: coder.medians,
     }
 }
@@ -275,7 +275,7 @@ mod tests {
                 pending: None,
             };
             c.put_count(count);
-            c.bits.finish().len()
+            c.bits.into_bytes().len()
         };
         assert_eq!(bits_for(0), 1);
         assert_eq!(bits_for(1), 1);

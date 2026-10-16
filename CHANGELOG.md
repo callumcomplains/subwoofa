@@ -47,6 +47,8 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - A failed or canceled encode no longer leaves a broken file under the output name: files are written under a hidden name and renamed when finished.
 - Safer app page: a content security policy, and file names and messages in the queue list are shown as text.
 - WAV files with no sample rate, or a Broadcast WAV `bext` chunk too short to hold a time reference, are reported as damaged instead of misread.
+- Compare with source: a file that stops early (damaged or cut short) is now lined up on the audio it has and reported with how much is missing, instead of "does not line up"; what FFmpeg said went wrong while decoding is shown; lossless or lossy is taken from the file's own structure rather than guessed from the format's name.
+- The FFmpeg download (installer and Settings) no longer fails when FFmpeg is busy with an encode or a check: the old copy is moved aside and removed later.
 
 ## b0.1.0 — first public beta
 

@@ -21,20 +21,20 @@ pub(crate) fn write_element(
 ) {
     let n = channels[0].len();
     let extra_bits = if verbatim { 0 } else { bits.saturating_sub(16) };
-    w.put(kind as u64, 3);
-    w.put(instance as u64, 4);
+    w.put(kind, 3);
+    w.put(instance, 4);
     w.put(0, 12); // unused
     let has_size = n < FRAME_SAMPLES;
-    w.put(u64::from(has_size), 1);
-    w.put((extra_bits >> 3) as u64, 2);
-    w.put(u64::from(verbatim), 1);
+    w.put(u32::from(has_size), 1);
+    w.put(extra_bits >> 3, 2);
+    w.put(u32::from(verbatim), 1);
     if has_size {
-        w.put(n as u64, 32);
+        w.put(n as u32, 32);
     }
     if verbatim {
         for i in 0..n {
             for ch in channels {
-                w.put_signed(ch[i] as i64, bits);
+                w.put_signed(ch[i], bits);
             }
         }
         return;
@@ -68,23 +68,23 @@ pub(crate) fn write_element(
     } else {
         (LEFT_RIGHT, high)
     };
-    w.put(stereo.shift as u64, 8);
-    w.put(stereo.left_weight as u64, 8);
+    w.put(stereo.shift, 8);
+    w.put(stereo.left_weight, 8);
     let predictions: Vec<Predicted> = coded.iter().map(|c| best_prediction(c, width, search.orders)).collect();
     for p in &predictions {
         w.put(0, 4); // prediction type
-        w.put(PREDICTOR_SHIFT as u64, 4);
-        w.put(RICE_MODIFIER as u64, 3);
-        w.put(p.coefficients.len() as u64, 5);
+        w.put(PREDICTOR_SHIFT, 4);
+        w.put(RICE_MODIFIER, 3);
+        w.put(p.coefficients.len() as u32, 5);
         // the decoder reads them oldest tap last: the stream starts with the newest
         for &c in &p.coefficients {
-            w.put_signed(c as i64, 16);
+            w.put_signed(c, 16);
         }
     }
     if extra_bits > 0 {
         for i in 0..n {
             for l in &low {
-                w.put(l[i] as u64, extra_bits);
+                w.put(l[i] as u32, extra_bits);
             }
         }
     }
@@ -122,10 +122,10 @@ pub(crate) fn encode_frame(channels: &[Vec<i32>], bits: u32, search: Search) -> 
                 ch += 1;
             }
         }
-        w.put(ELEMENT_END as u64, 3);
-        w.align();
-        if verbatim || w.bytes.len() <= max_bytes {
-            return w.bytes;
+        w.put(ELEMENT_END, 3);
+        w.align(8);
+        if verbatim || w.bytes().len() <= max_bytes {
+            return w.into_bytes();
         }
     }
     unreachable!("the verbatim frame is always accepted")

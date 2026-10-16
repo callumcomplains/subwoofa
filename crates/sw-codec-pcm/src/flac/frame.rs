@@ -34,11 +34,11 @@ pub(crate) fn encode_frame(
     };
     let mut w = BitWriter::default();
     w.put(0xFFF8, 16); // sync code and fixed block size
-    w.put(block_size_code as u64, 4);
+    w.put(block_size_code as u32, 4);
     w.put(0, 4); // sample rate from STREAMINFO
     w.put(
         match assignment {
-            Assignment::Independent => channels.len() as u64 - 1,
+            Assignment::Independent => (channels.len() as u64 - 1) as u32,
             Assignment::LeftSide => 8,
             Assignment::RightSide => 9,
             Assignment::MidSide => 10,
@@ -49,19 +49,19 @@ pub(crate) fn encode_frame(
     w.put(0, 1);
     put_utf8_number(&mut w, frame_number);
     match block_size_code {
-        6 => w.put(n as u64 - 1, 8),
-        7 => w.put(n as u64 - 1, 16),
+        6 => w.put((n as u64 - 1) as u32, 8),
+        7 => w.put((n as u64 - 1) as u32, 16),
         _ => {}
     }
-    let crc = crc8(&w.bytes);
-    w.put(crc as u64, 8);
+    let crc = crc8(w.bytes());
+    w.put(crc as u32, 8);
     for s in &subframes {
         write_subframe(&mut w, s);
     }
-    w.align();
-    let crc = crc16(&w.bytes);
-    w.put(crc as u64, 16);
-    w.bytes
+    w.align(8);
+    let crc = crc16(w.bytes());
+    w.put(crc as u32, 16);
+    w.into_bytes()
 }
 
 /// Codes a stereo block as left/right, left/side, right/side or mid/side, whichever is smallest.
@@ -112,7 +112,7 @@ pub(crate) fn stereo_options(left: usize, right: usize, side: usize, mid: usize)
 
 pub(crate) fn put_utf8_number(w: &mut BitWriter, value: u64) {
     if value < 0x80 {
-        w.put(value, 8);
+        w.put(value as u32, 8);
         return;
     }
     let continuation_bytes = if value < 0x800 {
@@ -130,9 +130,9 @@ pub(crate) fn put_utf8_number(w: &mut BitWriter, value: u64) {
     };
     let lead_mark = (0xFF00u32 >> (continuation_bytes + 1)) as u8; // 110xxxxx, 1110xxxx ...
     let lead_bits = value >> (6 * continuation_bytes);
-    w.put(lead_mark as u64 | lead_bits, 8);
+    w.put((lead_mark as u64 | lead_bits) as u32, 8);
     for i in (0..continuation_bytes).rev() {
-        w.put(0x80 | ((value >> (6 * i)) & 0x3F), 8);
+        w.put((0x80 | ((value >> (6 * i)) & 0x3F)) as u32, 8);
     }
 }
 
@@ -147,6 +147,6 @@ mod tests {
         put_utf8_number(&mut w, 0x80);
         put_utf8_number(&mut w, 0x7FF);
         put_utf8_number(&mut w, 0x800);
-        assert_eq!(w.bytes, vec![0x7F, 0xC2, 0x80, 0xDF, 0xBF, 0xE0, 0xA0, 0x80]);
+        assert_eq!(w.bytes(), vec![0x7F, 0xC2, 0x80, 0xDF, 0xBF, 0xE0, 0xA0, 0x80]);
     }
 }

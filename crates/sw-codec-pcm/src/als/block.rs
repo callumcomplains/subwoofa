@@ -146,17 +146,17 @@ pub(crate) fn put_rice(w: &mut BitWriter, value: i32, k: u32) {
         put_unary(w, magnitude * 2 + (value < 0) as u32);
     } else {
         put_unary(w, magnitude >> (k - 1));
-        w.put((value >= 0) as u64, 1);
-        w.put((magnitude & ((1 << (k - 1)) - 1)) as u64, k - 1);
+        w.put((value >= 0) as u32, 1);
+        w.put(magnitude & ((1 << (k - 1)) - 1), k - 1);
     }
 }
 
 fn put_unary(w: &mut BitWriter, mut ones: u32) {
     while ones >= 32 {
-        w.put(u32::MAX as u64, 32);
+        w.put(u32::MAX, 32);
         ones -= 32;
     }
-    w.put(((1u64 << ones) - 1) << 1, ones + 1);
+    w.put((((1u64 << ones) - 1) << 1) as u32, ones + 1);
 }
 
 /// Bits [`put_rice`] would write.
@@ -185,8 +185,8 @@ pub(crate) fn encode(signal: &[i32], start: usize, joint: bool, cfg: Settings) -
     let own = &signal[start..];
     if own.iter().all(|&s| s == 0) {
         let mut w = BitWriter::default();
-        w.put((joint as u64) << 5, 8);
-        return w.bytes;
+        w.put((joint as u32) << 5, 8);
+        return w.into_bytes();
     }
     let mut best: Option<Vec<u8>> = None;
     let analysis = lpc::analyse(own, cfg.max_order.min(order_limit(own.len(), cfg.max_order)));
@@ -251,15 +251,15 @@ fn encode_with_order(
 
     let mut w = BitWriter::default();
     w.put(1, 1); // a block with audio
-    w.put(joint as u64, 1);
+    w.put(joint as u32, 1);
     let (parts, params) = best_partition(&residual, cfg);
-    w.put((parts == 4) as u64, 1);
-    w.put(params[0] as u64, cfg.rice_field_bits());
+    w.put((parts == 4) as u32, 1);
+    w.put(params[0], cfg.rice_field_bits());
     for pair in params.windows(2) {
         put_rice(&mut w, pair[1] as i32 - pair[0] as i32, 0);
     }
     w.put(0, 1); // no shifted-out low bits
-    w.put(order as u64, order_bits(own.len(), cfg.max_order));
+    w.put(order as u32, order_bits(own.len(), cfg.max_order));
     for (k, &q) in indices.iter().enumerate() {
         put_coefficient(&mut w, k, q, cfg.table);
     }
@@ -269,8 +269,8 @@ fn encode_with_order(
             put_rice(&mut w, r, k);
         }
     }
-    w.align();
-    w.bytes
+    w.align(8);
+    w.into_bytes()
 }
 
 /// One Rice parameter for the whole block, or one for each quarter; whichever costs fewer bits in all.
@@ -330,8 +330,8 @@ mod tests {
         for (value, k) in [(0, 0), (-1, 0), (5, 0), (0, 1), (-7, 3), (100, 4), (-100, 6)] {
             let mut w = BitWriter::default();
             put_rice(&mut w, value, k);
-            w.align();
-            let written = w.bytes.len() as u64 * 8;
+            w.align(8);
+            let written = w.bytes().len() as u64 * 8;
             let bits = rice_bits(value, k);
             assert!(
                 written >= bits && written < bits + 8,

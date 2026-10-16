@@ -5,49 +5,8 @@ use crate::express::tables::{
     RSD_PACK_3_IN_7, RSD_PACK_5_IN_8,
 };
 
-/// Bit writer, least significant bit first (the bit order of LBR streams).
-#[derive(Default, Clone)]
-pub struct BitsLe {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) cur: u64,
-    pub(crate) n: u32,
-}
-
-impl BitsLe {
-    pub fn new() -> BitsLe {
-        BitsLe::default()
-    }
-
-    pub fn put(&mut self, v: u32, bits: u32) {
-        debug_assert!(bits <= 32);
-        if bits == 0 {
-            return;
-        }
-        let v = if bits == 32 {
-            v as u64
-        } else {
-            (v as u64) & ((1u64 << bits) - 1)
-        };
-        self.cur |= v << self.n;
-        self.n += bits;
-        while self.n >= 8 {
-            self.bytes.push(self.cur as u8);
-            self.cur >>= 8;
-            self.n -= 8;
-        }
-    }
-
-    pub fn bit_len(&self) -> usize {
-        self.bytes.len() * 8 + self.n as usize
-    }
-
-    pub fn into_bytes(mut self) -> Vec<u8> {
-        if self.n > 0 {
-            self.bytes.push(self.cur as u8);
-        }
-        self.bytes
-    }
-}
+/// The bit writer of LBR streams, least significant bit first (the shared one, `sw_core::bits`).
+pub use sw_core::bits::LeBitWriter as BitsLe;
 
 /// Canonical code of a table given as (symbol, length) in code order (the first entry gets the all-zero
 /// code; every next code is the previous plus one, shifted to the length of the entry). Returns the

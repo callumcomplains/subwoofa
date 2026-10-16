@@ -1,57 +1,6 @@
-//! MSB-first bit writer and the AC-3 CRC-16 (x^16 + x^15 + x^2 + 1).
+//! The AC-3 CRC-16 (x^16 + x^15 + x^2 + 1), and the shared most-significant-bit-first writer (`sw_core::bits`).
 
-pub struct BitWriter {
-    buf: Vec<u8>,
-    acc: u64,
-    nacc: u32,
-}
-
-impl Default for BitWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BitWriter {
-    pub fn new() -> Self {
-        BitWriter {
-            buf: Vec::with_capacity(4096),
-            acc: 0,
-            nacc: 0,
-        }
-    }
-
-    /// Append the low `n` bits of `v` (n <= 32).
-    pub fn put(&mut self, v: u32, n: u32) {
-        debug_assert!(n <= 32 && (n == 32 || v >> n == 0), "value {v} does not fit {n} bits");
-        self.acc = (self.acc << n) | v as u64;
-        self.nacc += n;
-        while self.nacc >= 8 {
-            self.nacc -= 8;
-            self.buf.push((self.acc >> self.nacc) as u8);
-        }
-        self.acc &= (1u64 << self.nacc) - 1;
-    }
-
-    pub fn bit_len(&self) -> usize {
-        self.buf.len() * 8 + self.nacc as usize
-    }
-
-    /// Pad with zero bits to `total_bits`, then return the bytes. Panics if already longer.
-    pub fn finish_padded(mut self, total_bits: usize) -> Vec<u8> {
-        assert!(
-            self.bit_len() <= total_bits,
-            "bit overflow: {} > {total_bits}",
-            self.bit_len()
-        );
-        while self.bit_len() < total_bits {
-            let n = (total_bits - self.bit_len()).min(32) as u32;
-            self.put(0, n);
-        }
-        debug_assert_eq!(self.nacc, 0);
-        self.buf
-    }
-}
+pub use sw_core::bits::BitWriter;
 
 const POLY: u32 = 0x18005;
 

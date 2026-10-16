@@ -160,25 +160,25 @@ impl AlsWriter {
     fn config(&self) -> Vec<u8> {
         let p = &self.params;
         let mut w = BitWriter::default();
-        w.put(u32::from_be_bytes(*b"ALS\0") as u64, 32);
-        w.put(p.rate as u64, 32);
-        w.put(p.total_frames, 32);
-        w.put(p.channels() as u64 - 1, 16);
+        w.put(u32::from_be_bytes(*b"ALS\0"), 32);
+        w.put(p.rate, 32);
+        w.put(p.total_frames as u32, 32);
+        w.put((p.channels() as u64 - 1) as u32, 16);
         w.put(0, 3); // file type: none
-        w.put((self.bits / 8 - 1) as u64, 3); // resolution
+        w.put(self.bits / 8 - 1, 3); // resolution
         w.put(0, 1); // not floating point
         w.put(0, 1); // little endian samples
-        w.put(self.frame_len as u64 - 1, 16);
+        w.put((self.frame_len as u64 - 1) as u32, 16);
         w.put(0, 8); // random access distance: none
         w.put(0, 2); // random access info: none
         w.put(1, 1); // the order is chosen per block
-        w.put(self.cfg.table as u64, 2);
+        w.put(self.cfg.table as u32, 2);
         w.put(0, 1); // no long-term prediction
-        w.put(MAX_ORDER as u64, 10);
-        w.put(switching::CONFIG_LEVEL, 2); // block switching: a 16-bit split field per unit
+        w.put(MAX_ORDER as u32, 10);
+        w.put(switching::CONFIG_LEVEL as u32, 2); // block switching: a 16-bit split field per unit
         w.put(0, 1); // no BGMC
         w.put(1, 1); // sub-blocks for the Rice parameters
-        w.put((p.channels() > 1) as u64, 1); // joint stereo
+        w.put((p.channels() > 1) as u32, 1); // joint stereo
         w.put(0, 1); // no multi-channel coding
         w.put(0, 1); // no channel configuration
         w.put(0, 1); // no channel sorting
@@ -186,10 +186,10 @@ impl AlsWriter {
         w.put(0, 1); // no RLS-LMS
         w.put(0, 5);
         w.put(0, 1); // no auxiliary data
-        w.put(u32::MAX as u64, 32); // no stored header
-        w.put(u32::MAX as u64, 32); // no stored trailer
-        w.put(self.crc.value() as u64, 32);
-        w.bytes
+        w.put(u32::MAX, 32); // no stored header
+        w.put(u32::MAX, 32); // no stored trailer
+        w.put(self.crc.value(), 32);
+        w.bytes().to_vec()
     }
 
     /// The `esds` box that carries the audio specific config and the record for MP4 files.
@@ -198,16 +198,16 @@ impl AlsWriter {
         asc.put(31, 5); // object type: escape
         asc.put(36 - 32, 6); // ... to 36, ALS
         match RATES.iter().position(|&r| r == self.params.rate) {
-            Some(i) => asc.put(i as u64, 4),
+            Some(i) => asc.put(i as u32, 4),
             None => {
                 asc.put(15, 4);
-                asc.put(self.params.rate as u64, 24);
+                asc.put(self.params.rate, 24);
             }
         }
         let channels = self.params.channels();
-        asc.put(if channels <= 2 { channels as u64 } else { 0 }, 4); // the record has the real count
+        asc.put(if channels <= 2 { channels as u32 } else { 0 }, 4); // the record has the real count
         asc.put(0, 5);
-        let mut info = asc.bytes;
+        let mut info = asc.bytes().to_vec();
         info.extend(self.config());
 
         let seconds = self.params.total_frames as f64 / self.params.rate as f64;

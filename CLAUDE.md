@@ -230,6 +230,8 @@ high-level description, community MLP notes) and by reading what real streams co
   masters** (DAMF stub, a 153 s DaVinci ADM BWF). Detection of DTS:X in Verify; **DTS:X encoding not possible** (needs
   DTS's licensed encoder). Verify reads JOC in E-AC-3.
 - Layouts: 30, incl. 22.2 (input; mixed down by panning with `--source-layout 22.2`), 9.1.6, 7.1.4...
+- **AC-4** (checked 2026-10-16): the installed engine has templates but no AC-4 filter ("Unknown filter
+  (encode_to_ims_ac4)"); FFmpeg 8.1 has no AC-4 decoder (raw demux/mux only). Needs an engine build with IMS AC-4.
 - **Not done / parked**: HRA 6.1 at 48 kHz (needs a reference), DVD-Audio disc structure (AOB packs), Atmos Theatrical (IAB
   MXF), DTS:X encode, AAF import, AC-4 (DEE build has no AC-4/AAC encoder), MPEG-H, Auro-3D, Datasat.
 - Known quality limits: Express quality "modest" in README known-limits; TrueHD analyser cannot follow substream 2 of
