@@ -92,6 +92,18 @@ impl EncodeSpec {
     }
 }
 
+/// The hidden name a job writes `output` under until it is finished: `.<name>.partial.<ext>` in the same folder,
+/// keeping the extension, which some writers go by (ALS in an MP4 file, for one).
+pub(crate) fn partial_path(output: &str) -> String {
+    let p = std::path::Path::new(output);
+    let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("encode");
+    let file = match p.extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!(".{name}.partial.{ext}"),
+        None => format!(".{name}.partial"),
+    };
+    p.with_file_name(file).to_string_lossy().into_owned()
+}
+
 /// What a finished job reports.
 #[derive(Default)]
 pub struct Outcome {
@@ -127,5 +139,16 @@ impl From<ff::Error> for Failure {
             ff::Error::Canceled => Failure::Canceled,
             other => Failure::Error(other.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_keeps_extension() {
+        let p = partial_path("F:/out/My film.dtshd");
+        assert!(p.ends_with(".My film.partial.dtshd") && p.starts_with("F:/out"), "{p}");
     }
 }

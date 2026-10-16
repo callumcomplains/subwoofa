@@ -363,20 +363,22 @@ pub(crate) fn encode_dolby(
         start: Some(clock(run.start)),
         end: Some(clock(run.start + run.span)),
     };
-    let work = crate::dolby::job_folder("encode")?;
+    let work = crate::dolby::job_folder("encode", task.source.first_file())?;
     if let Some(d) = run.spec.dialnorm {
         log.push_str(&format!(
             "Dialnorm:     the engine measures it; the {d} given is not used\n"
         ));
     }
-    let done = run_task(&dee, &task, &work, progress, &mut |_| {}, cancel).map_err(|e| match e {
+    let done = run_task(&dee, &task, &work, progress, &mut |_| {}, cancel);
+    // gone whatever happened, failures included
+    crate::dolby::remove_job_folder(&work);
+    let done = done.map_err(|e| match e {
         sw_backend_dee::Error::Canceled => Failure::Canceled,
         other => Failure::Error(other.to_string()),
     })?;
     for m in done.messages {
         log.push_str(&format!("Engine said:  {m}\n"));
     }
-    let _ = std::fs::remove_dir_all(&work);
     Ok(())
 }
 

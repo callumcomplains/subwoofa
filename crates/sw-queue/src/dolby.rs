@@ -3,9 +3,9 @@
 //! Dolby's own encoder, as a reference to compare Subwoofa's against or where a delivery asks for it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use sw_backend_dee::{clock, run_task, work_folder, Measured, Source, Task, TaskJob};
+use sw_backend_dee::{clock, run_task, work_folder_near, Measured, Source, Task, TaskJob};
 use sw_core::{Channel, ChannelLayout};
 
 /// Where the engine is: the path chosen in the app or the command line (`SUBWOOFA_DEE`), else the usual places.
@@ -75,7 +75,7 @@ pub fn measure(
 ) -> Result<Measured, String> {
     let dee = find_engine()?;
     let source = engine_source(layout, inputs)?;
-    let work = job_folder("measure")?;
+    let work = job_folder("measure", source.first_file())?;
     let start = span.0.filter(|s| *s > 0.0);
     let output = work.with_extension("xml");
     let job = TaskJob {
@@ -89,9 +89,10 @@ pub fn measure(
         start: start.map(clock),
         end: span.1.map(|d| clock(start.unwrap_or(0.0) + d)),
     };
-    let done = run_task(&dee, &job, &work, progress, &mut |_| {}, cancel).map_err(|e| e.to_string())?;
+    let done = run_task(&dee, &job, &work, progress, &mut |_| {}, cancel).map_err(|e| e.to_string());
+    remove_job_folder(&work);
+    let done = done?;
     let _ = std::fs::remove_file(&done.output);
-    let _ = std::fs::remove_dir_all(&work);
     done.measured
         .ok_or_else(|| "the engine gave no measurement".to_string())
 }
@@ -99,13 +100,23 @@ pub fn measure(
 /// Folders handed out so far by this process, so no two jobs ever get the same one.
 static FOLDERS: AtomicU64 = AtomicU64::new(0);
 
-/// A folder of its own for one engine job, named for it. Jobs running side by side in the queue each get a different
-/// one: the engine's staging empties its folder at the start and end, which would wipe another job's files.
-pub fn job_folder(tag: &str) -> Result<PathBuf, String> {
+/// A folder of its own for one engine job, named for it, on the drive of `near` (the job's first input) when it can
+/// be. Jobs running side by side in the queue each get a different one: the engine's staging empties its folder at
+/// the start and end, which would wipe another job's files.
+pub fn job_folder(tag: &str, near: Option<&Path>) -> Result<PathBuf, String> {
     let n = FOLDERS.fetch_add(1, Ordering::Relaxed);
-    Ok(work_folder()
+    Ok(work_folder_near(near)
         .map_err(|e| e.to_string())?
         .join(format!("{tag}{}_{n}", std::process::id())))
+}
+
+/// Removes a job's folder, and the shared folder above it once no job is left in it (it may sit at the root of a
+/// drive, made for this job).
+pub fn remove_job_folder(work: &Path) {
+    let _ = std::fs::remove_dir_all(work);
+    if let Some(parent) = work.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
 }
 
 #[cfg(test)]
@@ -114,7 +125,7 @@ mod tests {
 
     #[test]
     fn folders_differ() {
-        let (a, b) = (job_folder("encode").unwrap(), job_folder("encode").unwrap());
+        let (a, b) = (job_folder("encode", None).unwrap(), job_folder("encode", None).unwrap());
         assert_ne!(a, b);
     }
 }

@@ -16,13 +16,15 @@ const RELATIVE_GATE: f64 = -10.0;
 /// The gate of the loudness range.
 const RANGE_GATE: f64 = -20.0;
 
-/// How much a channel counts in the sum: 1.0 for the front and height channels, 1.41 (+1.5 dB) for every
-/// surround, nothing for the low-frequency channels.
+/// How much a channel counts in the sum: 1.41 (+1.5 dB) for the surrounds at ear height, 1.0 for the front and
+/// every height channel, nothing for the low-frequency channels. BS.1770-4 (Table 4) gives 1.41 only below 30 degrees
+/// of elevation, so the height layers count 1.0. The rear surrounds (135-150 degrees) also get 1.41, as in FFmpeg's
+/// `ebur128` and common practice, although the table's 60-120 degree band would give them 1.0.
 pub fn channel_weight(c: Channel) -> f64 {
     use Channel::*;
     match c {
         Lfe | Lfe2 => 0.0,
-        Ls | Rs | Cs | Lsr | Rsr | Lss | Rss | Tsl | Tsr | Tbl | Tbr | Tbc => 1.41,
+        Ls | Rs | Cs | Lsr | Rsr | Lss | Rss => 1.41,
         _ => 1.0,
     }
 }
@@ -222,6 +224,19 @@ mod tests {
         // the LFE adds nothing; a surround is 1.5 dB louder than a front channel
         assert!((front.integrated.unwrap() - one.integrated.unwrap()).abs() < 0.01);
         assert!((surround.integrated.unwrap() - one.integrated.unwrap() - 1.5).abs() < 0.05);
+    }
+
+    #[test]
+    fn heights_count_as_fronts() {
+        let tone = sine(48_000, -20.0, 6.0);
+        let front = measure(48_000, &[Channel::L], std::slice::from_ref(&tone));
+        for height in [Channel::Tfl, Channel::Tsl, Channel::Tbl, Channel::Tbc] {
+            let h = measure(48_000, &[height], std::slice::from_ref(&tone));
+            assert!(
+                (h.integrated.unwrap() - front.integrated.unwrap()).abs() < 0.01,
+                "{height:?}"
+            );
+        }
     }
 
     #[test]

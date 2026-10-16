@@ -2,25 +2,16 @@
 
 /// Runs `work` with the encoders limited to `threads` threads; 0 means every core (the shared default pool).
 ///
-/// The encoders spread their work with rayon, so the limit is a rayon pool made for this one call. The call itself
-/// waits for the pool to finish, so values `work` borrows are never used by two threads at once.
-pub fn with_threads<R>(threads: u32, work: impl FnOnce() -> R) -> R {
+/// The encoders spread their work with rayon, so the limit is a rayon pool made for this one call, and `work` runs
+/// on one of its threads (hence `Send`). The call waits for the pool to finish.
+pub fn with_threads<R: Send>(threads: u32, work: impl FnOnce() -> R + Send) -> R {
     if threads == 0 {
         return work();
     }
     let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(threads as usize).build() else {
         return work();
     };
-    // `install` wants a `Send` closure; ours borrows things that are not (a progress callback), but only one
-    // thread touches them at a time, because this thread waits for `install` to return
-    struct Unchecked<T>(T);
-    unsafe impl<T> Send for Unchecked<T> {}
-    let job = Unchecked(work);
-    pool.install(move || {
-        let job = job;
-        Unchecked((job.0)())
-    })
-    .0
+    pool.install(work)
 }
 
 #[cfg(test)]

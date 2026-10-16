@@ -12,7 +12,7 @@ pub use run::EncodeSpec;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,7 +57,6 @@ struct Job {
     cancel: Arc<AtomicBool>,
     started: Option<Instant>,
     elapsed: f64,
-    created_ms: u128,
 }
 
 impl Job {
@@ -148,10 +147,6 @@ impl Queue {
             }
             let id = s.next_id;
             s.next_id += 1;
-            let created_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
             s.jobs.push(Job {
                 id,
                 spec,
@@ -162,7 +157,6 @@ impl Queue {
                 cancel: Arc::new(AtomicBool::new(false)),
                 started: None,
                 elapsed: 0.0,
-                created_ms,
             });
             (id, Self::snapshot_locked(&s))
         };
@@ -246,7 +240,7 @@ fn worker(inner: Arc<Inner>) {
                         .jobs
                         .iter_mut()
                         .filter(|j| j.state == State::Pending)
-                        .min_by_key(|j| j.created_ms)
+                        .min_by_key(|j| j.id)
                     {
                         j.state = State::Running;
                         j.started = Some(Instant::now());

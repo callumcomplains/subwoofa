@@ -4,12 +4,12 @@ use crate::args::DolbyCmd;
 use crate::progress::Progress;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use sw_backend_dee::{run_task, work_folder, Error, Source, Task, TaskDone, TaskJob};
+use sw_backend_dee::{run_task, work_folder_near, Error, Source, Task, TaskDone, TaskJob};
 
 /// Runs one job with a progress line on a terminal and prints what the engine warned about.
 fn run_job(dee: Option<PathBuf>, source: Source, output: &Path, task: Task) -> Result<TaskDone, String> {
     let engine = sw_backend_dee::find_dee(dee.as_deref()).ok_or_else(|| Error::NotFound.to_string())?;
-    let work = work_folder()
+    let work = work_folder_near(source.first_file())
         .map_err(|e| e.to_string())?
         .join(format!("cli{}", std::process::id()));
     let job = TaskJob {
@@ -29,7 +29,7 @@ fn run_job(dee: Option<PathBuf>, source: Source, output: &Path, task: Task) -> R
         &AtomicBool::new(false),
     )
     .map_err(|e| e.to_string());
-    let _ = std::fs::remove_dir_all(&work);
+    sw_queue::dolby::remove_job_folder(&work);
     let done = done?;
     for m in &done.messages {
         eprintln!("engine: {m}");

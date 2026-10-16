@@ -4,7 +4,6 @@
 
 const VERIFY_FILTERS = [{ name: "Encoded audio streams and files", extensions: ["ac3", "eac3", "ec3", "dts", "dtshd", "cpt", "thd", "mlp", "truehd", "wav", "aif", "aiff", "caf", "flac", "wv", "ape", "als", "mxf", "oga", "ogg", "m4a", "tta", "dsf", "dff"] }, { name: "All files", extensions: ["*"] }];
 const verify = { path: null, source: null, text: "", html: "", running: false };
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const STATUS_TAG = { pass: "OK", fail: "FAIL", warn: "WARN", skipped: "SKIP", info: "INFO" };
 
 function setVerifyFile(path) {

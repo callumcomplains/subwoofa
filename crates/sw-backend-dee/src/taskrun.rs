@@ -156,7 +156,22 @@ pub fn run_task(
 /// A work folder with no spaces in its path: the system temporary folder if that qualifies, else a shared folder
 /// that does.
 pub fn work_folder() -> Result<PathBuf, Error> {
-    let mut candidates = vec![std::env::temp_dir()];
+    work_folder_near(None)
+}
+
+/// A work folder on the same drive as `file` when one can be made there, so the input is staged as a hard link
+/// rather than copied (a hard link cannot cross drives, and a copy of a film's stems is several gigabytes on the
+/// drive that holds the temporary folder). Otherwise as [`work_folder`].
+pub fn work_folder_near(file: Option<&Path>) -> Result<PathBuf, Error> {
+    let temp = std::env::temp_dir();
+    let mut candidates = Vec::new();
+    if let Some(root) = file.and_then(|f| std::path::absolute(f).ok()?.ancestors().last().map(Path::to_path_buf)) {
+        let same_drive = temp.ancestors().last() == Some(root.as_path());
+        if !same_drive && std::fs::create_dir_all(root.join("subwoofa-dee")).is_ok() {
+            candidates.push(root);
+        }
+    }
+    candidates.push(temp);
     for var in ["PUBLIC", "ProgramData"] {
         if let Some(p) = std::env::var_os(var) {
             candidates.push(PathBuf::from(p));

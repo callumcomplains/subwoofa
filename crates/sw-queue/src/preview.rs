@@ -39,7 +39,7 @@ pub fn build(
     seconds: f64,
     dir: &Path,
     cancel: &AtomicBool,
-    on_progress: &mut dyn FnMut(f32),
+    on_progress: &mut (dyn FnMut(f32) + Send),
 ) -> Result<Preview, Failure> {
     let layout: &'static ChannelLayout = ChannelLayout::find(&spec.layout).ok_or("unknown layout")?;
     let mut sources = open_sources(spec, layout)?;

@@ -59,7 +59,7 @@ pub async fn dolby_run(
     let cancel = state.cancel.clone();
     blocking(move || {
         let engine = sw_queue::dolby::find_engine()?;
-        let work = sw_queue::dolby::job_folder("app")?;
+        let work = sw_queue::dolby::job_folder("app", job.source.first_file())?;
         let result = sw_backend_dee::run_task(
             &engine,
             &job,
@@ -70,7 +70,7 @@ pub async fn dolby_run(
             &mut |_| {},
             &cancel,
         );
-        let _ = std::fs::remove_dir_all(&work);
+        sw_queue::dolby::remove_job_folder(&work);
         result.map_err(|e| e.to_string())
     })
     .await

@@ -29,6 +29,17 @@ pub enum Source {
     Streams { paths: Vec<PathBuf> },
 }
 
+impl Source {
+    /// The first file the job reads, which says on which drive its work folder belongs.
+    pub fn first_file(&self) -> Option<&Path> {
+        match self {
+            Source::Wav { path } | Source::Stream { path, .. } => Some(path),
+            Source::WavList { files, .. } => files.first().map(|(_, p)| p.as_path()),
+            Source::Streams { paths } => paths.first().map(PathBuf::as_path),
+        }
+    }
+}
+
 /// How loudness is treated: only measured (the dialogue level is then written from the measurement) or measured and
 /// corrected to a broadcast standard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

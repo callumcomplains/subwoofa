@@ -3,6 +3,8 @@
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
 const $ = (id) => document.getElementById(id);
+// text made safe to put inside HTML, attribute values included
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 let cat;                 // catalog from the Rust side
 let inputs = {};         // channel -> path

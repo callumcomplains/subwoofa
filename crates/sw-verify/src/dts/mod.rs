@@ -13,7 +13,7 @@ mod report;
 mod walk;
 mod xll;
 
-use crate::{Collector, Probe, Window};
+use crate::{Collector, Probe, Status, Window};
 use container::Container;
 use report::Facts;
 use walk::walk;
@@ -41,6 +41,9 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
     facts.fill_probe(&s, &mut p);
     report::describe(c, &s, &facts, found.end - found.start);
     report::check_structure(c, &s);
+    if container && s.exss > 0 {
+        report_peak(c, &p);
+    }
     if container {
         found.cross_check(w, c, &s, &facts);
         if c.report.deep {
@@ -51,4 +54,26 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, container: bool) -> Prob
         report::deep_sections(c, &s);
     }
     p
+}
+
+/// Blu-ray's ceiling for a DTS-HD stream, core and extensions together, in kbps.
+const BLURAY_KBPS: f64 = 24_500.0;
+
+/// The busiest second of a DTS-HD stream against what a Blu-ray player has to accept.
+fn report_peak(c: &mut Collector, p: &Probe) {
+    if p.sample_rate == 0 || p.frame_bytes.is_empty() {
+        return;
+    }
+    let measured = crate::peak_one_second(&p.frame_bytes, &p.frame_samples, p.sample_rate);
+    c.kv("Peak bit rate (any 1 s)", format!("{measured:.0} kbps"));
+    let (status, limit) = if measured > BLURAY_KBPS {
+        (Status::Warn, "above")
+    } else {
+        (Status::Pass, "within")
+    };
+    c.check(
+        "Peak data rate",
+        status,
+        format!("{measured:.0} kbps in the busiest second, {limit} the {BLURAY_KBPS:.0} kbps Blu-ray allows"),
+    );
 }

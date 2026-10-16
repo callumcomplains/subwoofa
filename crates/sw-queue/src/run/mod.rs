@@ -28,13 +28,28 @@ pub fn execute(
     spec: &EncodeSpec,
     verify: bool,
     cancel: &AtomicBool,
-    on_progress: &mut dyn FnMut(f32, bool),
+    on_progress: &mut (dyn FnMut(f32, bool) + Send),
 ) -> Result<Outcome, Failure> {
     let t0 = Instant::now();
     let mut log = String::new();
     let mut span_secs = 0.0;
+    // the file is written and checked under a hidden name, and only takes its real name once it is whole: a failed or
+    // canceled job never leaves a broken file that looks finished
+    let partial = spec::partial_path(&spec.output);
+    let work = EncodeSpec {
+        output: partial.clone(),
+        ..spec.clone()
+    };
     let result = crate::threads::with_threads(spec.threads, || {
-        execute_inner(spec, verify, cancel, on_progress, &mut log, t0, &mut span_secs)
+        execute_inner(&work, verify, cancel, on_progress, &mut log, t0, &mut span_secs)
+    })
+    .and_then(|outcome| {
+        let _ = std::fs::remove_file(&spec.output);
+        std::fs::rename(&partial, &spec.output).map_err(|e| format!("{}: {e}", spec.output))?;
+        Ok(outcome)
+    })
+    .inspect_err(|_| {
+        let _ = std::fs::remove_file(&partial);
     })
     .map(|outcome| Outcome {
         bytes: std::fs::metadata(&spec.output).map_or(0, |m| m.len()),
@@ -53,7 +68,8 @@ pub fn execute(
         t0.elapsed().as_secs_f64()
     ));
     if spec.write_log {
-        let _ = std::fs::write(spec.log_path(), log);
+        // the log names the file by its real name
+        let _ = std::fs::write(spec.log_path(), log.replace(&partial, &spec.output));
     }
     result
 }
@@ -239,8 +255,7 @@ fn normalise(
     }
     stems.set_gain_db(gain);
     log.push_str(&format!(
-        "Normalise:    {integrated:.1} LUFS measured, {gain:+.1} dB applied, aiming for {target:.1} LUFS{note}
-"
+        "Normalise:    {integrated:.1} LUFS measured, {gain:+.1} dB applied, aiming for {target:.1} LUFS{note}\n"
     ));
     Ok(gain)
 }

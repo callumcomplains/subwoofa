@@ -124,7 +124,8 @@ impl PcmReader {
                     }
                     fmt = Some((tag, channels, rate, bits));
                 }
-                b"bext" => {
+                // the time reference sits at bytes 338-345 of the chunk; a shorter chunk has none
+                b"bext" if size >= 346 => {
                     f.seek(SeekFrom::Current(338)).map_err(|e| Error::Io(name.clone(), e))?;
                     let b = rd::<8>(&mut f, &name)?;
                     bext_ref = Some(u64::from_le_bytes(b));
@@ -251,6 +252,10 @@ impl PcmReader {
         big_endian: bool,
         frame_bytes: usize,
     ) -> Result<PcmReader, Error> {
+        // every timing works out from the rate; a file without one is damaged (WAV and AIFF alike)
+        if info.sample_rate == 0 {
+            return Err(Error::Corrupt(path));
+        }
         f.seek(SeekFrom::Start(data_start))
             .map_err(|e| Error::Io(path.clone(), e))?;
         Ok(PcmReader {

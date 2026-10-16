@@ -41,6 +41,12 @@ Versions are shown as `b<version> (<UTC build time>)`. The `b` means public beta
 - **Verification of lossy formats** (AC-3, E-AC-3, DTS core, ES, 96/24, High Resolution, Express) now compares the decode with the source, channel by channel, instead of only checking that it decodes. A file that is short, or has a silent, missing or swapped channel, fails; the log and the queue show the worst channel's signal to noise.
 - Fixed: compare with source assumed the wrong FFmpeg channel order for 7.1 (FFmpeg puts the rear pair before the side pair), which made its "channel order" note wrong for 7.1 files.
 - Fixed: the Preview of a job with Normalise or a Delay applied them to the encode only, so the difference and signal-to-noise showed a level change rather than the codec, Normalise measured just the excerpt, and a long delay stopped the preview from lining up. The preview now leaves both out and says so.
+- **Peak data rate check** in Verify: TrueHD and MLP report their busiest second against the peak the stream states and the disc limit (Blu-ray 18 Mbit/s, DVD-Audio 9.6 Mbit/s); DTS-HD against Blu-ray's 24.5 Mbit/s.
+- Loudness: height speakers now count as front speakers (+0 dB), as ITU-R BS.1770-4 says for speakers 30 degrees or more above the listener; Measure, auto-dialnorm and Normalise read slightly lower on programmes with busy heights. Surrounds at ear height still count +1.5 dB.
+- Dolby engine jobs work in a folder on the same drive as their input when they can, so the input is linked rather than copied (a film's stems are no longer copied to the system drive), and the folder is removed when a job fails too.
+- A failed or canceled encode no longer leaves a broken file under the output name: files are written under a hidden name and renamed when finished.
+- Safer app page: a content security policy, and file names and messages in the queue list are shown as text.
+- WAV files with no sample rate, or a Broadcast WAV `bext` chunk too short to hold a time reference, are reported as damaged instead of misread.
 
 ## b0.1.0 — first public beta
 

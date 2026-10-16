@@ -387,3 +387,51 @@ pub fn mas_dir() -> Option<std::path::PathBuf> {
 pub fn mas_verifier() -> Option<std::path::PathBuf> {
     mas_dir().map(|d| d.join("DTSHDVerify.exe")).filter(|p| p.is_file())
 }
+
+/// The highest bit rate over any one second of the stream, in kbps (the whole stream when it is shorter).
+pub(crate) fn peak_one_second(bytes: &[u32], samples: &[u32], rate: u32) -> f64 {
+    let (mut window_bytes, mut window_samples, mut from, mut best) = (0u64, 0u64, 0usize, 0.0f64);
+    for (i, (&b, &s)) in bytes.iter().zip(samples).enumerate() {
+        window_bytes += b as u64;
+        window_samples += s as u64;
+        while window_samples > rate as u64 && from < i {
+            window_bytes -= bytes[from] as u64;
+            window_samples -= samples[from] as u64;
+            from += 1;
+        }
+        if window_samples >= rate as u64 {
+            best = best.max(kbps(window_bytes, window_samples, rate));
+        }
+    }
+    if best == 0.0 {
+        // shorter than a second: its average
+        let all = |v: &[u32]| v.iter().map(|&x| x as u64).sum::<u64>();
+        best = kbps(all(bytes), all(samples), rate);
+    }
+    best
+}
+
+fn kbps(bytes: u64, samples: u64, rate: u32) -> f64 {
+    bytes as f64 * 8.0 * rate as f64 / samples.max(1) as f64 / 1000.0
+}
+
+#[cfg(test)]
+mod peak_tests {
+    use super::*;
+
+    #[test]
+    fn peak_finds_busiest_second() {
+        // 48 kHz, 40-sample access units: 1200 a second; 500 bytes each is 4800 kbps
+        let mut bytes = vec![500u32; 3600];
+        // half a second at twice the size lifts the busiest second to 7200 kbps
+        bytes[1200..1800].fill(1000);
+        let samples = vec![40u32; bytes.len()];
+        assert!((peak_one_second(&bytes, &samples, 48_000) - 7200.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn short_stream_uses_average() {
+        let (bytes, samples) = (vec![500u32, 1500], vec![40u32, 40]);
+        assert!((peak_one_second(&bytes, &samples, 48_000) - 9600.0).abs() < 1.0);
+    }
+}

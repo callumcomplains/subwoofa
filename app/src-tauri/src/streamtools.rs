@@ -152,8 +152,7 @@ pub async fn ac3_set_dialnorm(path: String, output: String, level: u8) -> Result
         let done = sw_codec_ac3::edit::set_dialnorm(&mut data, level)?;
         std::fs::write(&output, data).map_err(|e| format!("{output}: {e}"))?;
         Ok(format!(
-            "Wrote {output}
-Dialnorm -{level} dBFS (was -{}); {} of {} frames rewritten",
+            "Wrote {output}\nDialnorm -{level} dBFS (was -{}); {} of {} frames rewritten",
             done.previous, done.changed, done.frames
         ))
     })

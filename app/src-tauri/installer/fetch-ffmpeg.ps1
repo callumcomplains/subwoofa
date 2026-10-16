@@ -8,7 +8,8 @@ param([string]$Dir = (Join-Path $env:LOCALAPPDATA "Subwoofa\ffmpeg"))
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # the progress bar makes Invoke-WebRequest several times slower
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# TLS 1.2 added to what the system allows (Windows PowerShell 5.1 may not offer it by default); newer ones stay on
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # everything said here also goes to a file, so a failure can be read (and copied) after the window is gone
 $log = Join-Path ([IO.Path]::GetTempPath()) "subwoofa-ffmpeg-log.txt"

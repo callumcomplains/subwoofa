@@ -128,6 +128,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, mlp: bool) -> Probe {
     };
     report_facts(c, &mut p, &t, &f, w.len, mlp);
     report_checks(c, &t);
+    report_peak(c, &p, &f, mlp);
     if c.report.deep {
         report_deep(w, c, &t, &f);
     }
@@ -438,6 +439,47 @@ fn report_facts(c: &mut Collector, p: &mut Probe, t: &Tally, f: &Major, file_len
         "Peak bit rate (stated)",
         format!("{:.0} kbps", ((f.peak as u64 * f.rate as u64 + 8) >> 4) as f64 / 1000.0),
     );
+}
+
+/// Highest data rate a disc allows the stream, in kbps: Blu-ray's 18 Mbit/s for TrueHD, DVD-Audio's 9.6 Mbit/s for MLP.
+const TRUEHD_DISC_KBPS: f64 = 18_000.0;
+const MLP_DISC_KBPS: f64 = 9_600.0;
+/// How far a one-second peak may run over the stated peak before it is flagged: Dolby's encoder states a peak from its
+/// own, longer buffer model, which its files exceed by about 1% when measured over one second.
+const STATED_SLACK: f64 = 1.05;
+
+/// The measured peak bit rate against the one the major syncs state and the disc limit. A decoder sizes its input
+/// buffer by the stated peak, so a stream that runs faster than it says may stutter on strict players. (Like FFmpeg's
+/// encoder, Subwoofa states 9.6 Mbit/s; Dolby's states a peak it measures with its own buffer model.)
+fn report_peak(c: &mut Collector, p: &Probe, f: &Major, mlp: bool) {
+    if f.rate == 0 || p.frame_bytes.is_empty() {
+        return;
+    }
+    let measured = crate::peak_one_second(&p.frame_bytes, &p.frame_samples, f.rate);
+    let stated = ((f.peak as u64 * f.rate as u64 + 8) >> 4) as f64 / 1000.0;
+    c.kv("Peak bit rate (any 1 s)", format!("{measured:.0} kbps"));
+    let (limit, disc) = if mlp {
+        (MLP_DISC_KBPS, "DVD-Audio")
+    } else {
+        (TRUEHD_DISC_KBPS, "Blu-ray")
+    };
+    let (status, detail) = if measured > limit {
+        (
+            Status::Warn,
+            format!("{measured:.0} kbps in the busiest second, above the {limit:.0} kbps {disc} allows"),
+        )
+    } else if measured > stated * STATED_SLACK {
+        (
+            Status::Warn,
+            format!("{measured:.0} kbps in the busiest second, above the {stated:.0} kbps the stream states"),
+        )
+    } else {
+        (
+            Status::Pass,
+            format!("{measured:.0} kbps in the busiest second, in line with the stated {stated:.0} kbps"),
+        )
+    };
+    c.check("Peak data rate", status, detail);
 }
 
 /// The pass/fail checks, one line each.

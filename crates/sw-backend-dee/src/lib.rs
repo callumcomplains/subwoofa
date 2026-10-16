@@ -28,7 +28,7 @@ pub use job::{AtmosJob, DdpOptions, Drc, Presentation, Target, TrueHdOptions};
 pub use profile::profile_xml;
 pub use run::{run, Finished};
 pub use task::{clock, profile, EncodeOptions, Loudness, Measured, Source, Task, TaskJob};
-pub use taskrun::{run_task, work_folder, TaskDone};
+pub use taskrun::{run_task, work_folder, work_folder_near, TaskDone};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

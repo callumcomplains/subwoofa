@@ -192,7 +192,9 @@ Performance, Engines, Appearance, Presets). Footer: output folder + name + Speed
 (source/encoded/difference, loop, blind mode, excerpt start/length); queue list. Ten themes (Studio Amber default,
 Graphite, Midnight, Ocean, Moss, Rose Dusk, Terminal, Paper, Daylight, High Contrast) + custom (six colours). Format
 plates are plain-text SVGs in `app/ui/logos/` (no third-party logos, by LEGAL).
-Window: 1320x860, min 1200x780, `withGlobalTauri`, `csp: null`.
+Window: 1320x860, min 1200x780, `withGlobalTauri`, a CSP (`self` only, inline styles allowed, IPC; Tauri hashes the inline
+theme script itself; `dangerousDisableAssetCspModification: ["style-src"]` keeps `'unsafe-inline'` working). Put
+page-built HTML through `esc()` (`core.js`).
 
 Tauri commands (registered in `main.rs`): catalog, options, auto_import, multichannel_pick, scan_folder, path_stats, probe,
 downmix_default/safe/check, queue_add/list/cancel/remove/clear/set_concurrency, read_log, measure_loudness,

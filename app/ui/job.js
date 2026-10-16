@@ -194,7 +194,7 @@ function renderQueue(jobs) {
     const live = j.state === "running" || j.state === "verifying";
     const label = { pending: "Waiting", running: "Encoding", verifying: "Verifying", passed: "Passed", completed: "Done", failed: "Failed", canceled: "Canceled" }[j.state];
     li.innerHTML = `<span class="qstate ${j.state}">${label}</span>
-      <span class="qname" title="${j.output.replace(/"/g, "&quot;")}">${j.name}${j.message ? `<small class="${j.state === "failed" ? "bad" : ""}" title="${j.message.replace(/"/g, "&quot;")}">${j.message.split(String.fromCharCode(10))[0]}</small>` : ""}</span>
+      <span class="qname" title="${esc(j.output)}">${esc(j.name)}${j.message ? `<small class="${j.state === "failed" ? "bad" : ""}" title="${esc(j.message)}">${esc(j.message.split(String.fromCharCode(10))[0])}</small>` : ""}</span>
       <span class="bar-track"><span class="bar-fill ${done ? "done" : fail ? "fail" : ""}" style="display:block;width:${Math.round(j.progress * 100)}%"></span></span>
       <span class="qtime">${live || done || fail ? fmtClock(j.elapsed_secs) : ""}${j.state === "running" && j.progress > 0.03 ? `<small> ~${fmtClock(j.elapsed_secs * (1 - j.progress) / j.progress)} left</small>` : ""}</span>
       <span class="qbtns"></span>`;

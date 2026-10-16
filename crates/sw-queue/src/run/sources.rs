@@ -37,9 +37,6 @@ pub(crate) fn open_sources(spec: &EncodeSpec, layout: &'static ChannelLayout) ->
     let mut stems = sw_pcm::StemSet::open_ordered(src_layout, &inputs, order).map_err(|e| e.to_string())?;
     let downmixed = src_layout.id != layout.id;
     if downmixed {
-        if spec.engine != "native" {
-            return Err("mixing a richer input layout down needs the native engine".into());
-        }
         stems.set_downmix(sw_core::downmix::Matrix::pan(src_layout.channels, layout.channels));
     }
     if !spec.unlocked && stems.sample_rate != spec.sample_rate {
