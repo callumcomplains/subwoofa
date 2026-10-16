@@ -43,4 +43,4 @@ let Subwoofa finish features it cannot check on its own. None is urgent; each is
 | AAF import | AAF files from your editor | one with a few mono clips, one with a stereo clip, one with embedded and one with linked audio |
 | E-AC-3 enhanced coupling | a Dolby reference decoder (the Dolby Encoding Engine has one: `subwoofa dolby decode`) | can be started |
 | MA 192 kHz band 1 (my band 1 is 3.4% larger than the original's) | nothing more: the existing `NO WAY THIS WORKS.dtshd` is enough, it needs a segment-level parse | - |
-| TrueHD stereo (0.7% larger than Dolby's) | nothing more; the Deep Purple files are enough | - |
+| TrueHD (stereo 0.05% larger than the commercial disc's, 5.1 0.7 to 1.4% larger than the Dolby Encoding Engine's) | nothing more; the Deep Purple files and the engine (`--engine dolby --stream truehd`) are enough | - |
