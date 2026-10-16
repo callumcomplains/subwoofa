@@ -346,7 +346,7 @@ pub(crate) fn encode_dolby(
     cancel: &AtomicBool,
     log: &mut String,
 ) -> Result<(), Failure> {
-    use sw_backend_dee::{clock, run_task, EncodeOptions, Task, TaskJob};
+    use sw_backend_dee::{clock, run_task, TaskJob};
     if run
         .spec
         .source_layout
@@ -356,28 +356,14 @@ pub(crate) fn encode_dolby(
         return Err("the Dolby encoder cannot mix a richer layout down; use Subwoofa's own encoder for that".into());
     }
     let dee = crate::dolby::find_engine()?;
-    let eac3 = run.stream == StreamType::Eac3;
-    let mode = match (eac3, run.layout.channels.len()) {
-        (false, 8) => return Err("Dolby Digital has no 7.1; use Dolby Digital Plus".into()),
-        (false, _) => "dd",
-        (true, 8) => "ddp71",
-        (true, _) => "ddp",
-    };
-    let options = EncodeOptions {
-        mode: mode.into(),
-        data_rate_kbps: run.spec.bitrate.unwrap_or(448),
-        lfe: run.layout.channels.contains(&sw_core::Channel::Lfe),
-        ..Default::default()
-    };
     let task = TaskJob {
         source: crate::dolby::engine_source(run.layout, &job.inputs)?,
         output: run.output().to_path_buf(),
-        task: Task::Encode(Box::new(options)),
+        task: dolby_task(run)?,
         start: Some(clock(run.start)),
         end: Some(clock(run.start + run.span)),
     };
     let work = crate::dolby::job_folder("encode")?;
-    log.push_str("Engine:       Dolby Encoding Engine (Dolby's own encoder)\n");
     if let Some(d) = run.spec.dialnorm {
         log.push_str(&format!(
             "Dialnorm:     the engine measures it; the {d} given is not used\n"
@@ -392,4 +378,29 @@ pub(crate) fn encode_dolby(
     }
     let _ = std::fs::remove_dir_all(&work);
     Ok(())
+}
+
+/// What the engine is asked to make for this job: lossless TrueHD, or Dolby Digital or Digital Plus at the job's rate.
+fn dolby_task(run: &Run) -> Result<sw_backend_dee::Task, Failure> {
+    use sw_backend_dee::{EncodeOptions, Task};
+    if run.stream == StreamType::TrueHd {
+        // the engine's 6 and 8 channel presentations lower the surrounds by 3 dB unless told not to
+        return Ok(Task::Truehd {
+            metering: "1770-4".into(),
+            surround_3db: false,
+        });
+    }
+    let eac3 = run.stream == StreamType::Eac3;
+    let mode = match (eac3, run.layout.channels.len()) {
+        (false, 8) => return Err("Dolby Digital has no 7.1; use Dolby Digital Plus".into()),
+        (false, _) => "dd",
+        (true, 8) => "ddp71",
+        (true, _) => "ddp",
+    };
+    Ok(Task::Encode(Box::new(EncodeOptions {
+        mode: mode.into(),
+        data_rate_kbps: run.spec.bitrate.unwrap_or(448),
+        lfe: run.layout.channels.contains(&sw_core::Channel::Lfe),
+        ..Default::default()
+    })))
 }

@@ -120,5 +120,5 @@ function initDolby() {
 
 /** Whether a job for this stream should go to Dolby's own encoder. */
 function useDolbyEncoder() {
-  return dolbyFound() && $("optDolbyEnc").checked && ["ac3", "eac3"].includes($("stream").value);
+  return dolbyFound() && $("optDolbyEnc").checked && ["ac3", "eac3", "truehd"].includes($("stream").value);
 }

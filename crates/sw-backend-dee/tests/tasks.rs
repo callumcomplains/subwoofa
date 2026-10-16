@@ -244,3 +244,20 @@ fn pcm_loudness_is_corrected() {
     );
     assert!(std::fs::metadata(&corrected.output).unwrap().len() > 1_000_000);
 }
+
+#[test]
+fn pcm_becomes_lossless_truehd_with_the_surrounds_left_alone() {
+    let Some(b) = bench("truehd") else { return };
+    let stems = b.stems(6);
+    let done = b.run(
+        stems,
+        "out.thd",
+        Task::Truehd {
+            metering: "1770-4".into(),
+            surround_3db: false,
+        },
+    );
+    let r = verified(&done.output);
+    assert!(r.format.contains("TrueHD"), "{}", r.format);
+    assert!(std::fs::metadata(&done.output).unwrap().len() > 100_000);
+}

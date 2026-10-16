@@ -115,6 +115,14 @@ pub enum Task {
     },
     /// PCM to Dolby Digital or Dolby Digital Plus.
     Encode(Box<EncodeOptions>),
+    /// PCM (up to 7.1) to ordinary lossless Dolby TrueHD, with the engine's own encoder.
+    Truehd {
+        /// `1770-4`, `1770-3`, `1770-2`, `1770-1` or `LeqA`: how the dialogue level written into the stream is measured.
+        metering: String,
+        /// The 6 and 8 channel presentations lower the surrounds by 3 dB unless told not to, which would change a
+        /// finished mix; false (the default) leaves the audio as it is.
+        surround_3db: bool,
+    },
     /// Dolby Digital (Plus) to a WAV file; `drc` is `none`, `line` or `rf`.
     Decode { drc: String },
     /// Dolby Digital (Plus) to Dolby Digital Plus, with optional loudness correction (`None` leaves it alone).
@@ -206,6 +214,7 @@ pub(crate) fn writes_manifest(task: &Task) -> bool {
 fn output_tag(task: &Task) -> &'static str {
     match task {
         Task::Measure { .. } => "manifest",
+        Task::Truehd { .. } => "mlp",
         Task::Encode(o) if o.mode == "dd" => "ac3",
         Task::Encode(_) | Task::Transcode { .. } | Task::Edit { .. } => "ec3",
         Task::Decode { .. } | Task::Correct { .. } | Task::Reorder => "wav",
@@ -390,6 +399,26 @@ fn filter_xml(task: &Task) -> Result<String, Error> {
             format!("<measure_loudness version=\"1\">{inner}</measure_loudness>")
         }
         Task::Encode(o) => encode_filter(o)?,
+        Task::Truehd { metering, surround_3db } => {
+            let metering = pick(
+                "metering mode",
+                metering,
+                &["1770-4", "1770-3", "1770-2", "1770-1", "LeqA"],
+            )?;
+            let presentation = |name: &str| {
+                format!(
+                    "<{name}>{}{}</{name}>",
+                    el("drc_profile", "film_light"),
+                    el("surround_3db_attenuation", flag(*surround_3db))
+                )
+            };
+            format!(
+                "<encode_to_dthd version=\"1\"><loudness_measurement>{}</loudness_measurement>{}{}</encode_to_dthd>",
+                el("metering_mode", metering),
+                presentation("presentation_8ch"),
+                presentation("presentation_6ch")
+            )
+        }
         Task::Decode { drc } => format!(
             "<ddp_decode version=\"1\">{}</ddp_decode>",
             el("drc", pick("DRC", drc, &["none", "line", "rf"])?)
@@ -702,6 +731,34 @@ mod tests {
             x.contains("<generic version=\"1\"><file_name>a.ec3 b.ec3</file_name>")
                 && x.contains("<order>trim_join</order>")
         );
+    }
+
+    #[test]
+    fn truehd_is_encoded_without_the_surround_cut_unless_asked() {
+        let make = |cut: bool| {
+            profile(
+                &job(
+                    wav_list("5.1"),
+                    "D:/o/a.thd",
+                    Task::Truehd {
+                        metering: "1770-4".into(),
+                        surround_3db: cut,
+                    },
+                ),
+                Path::new(TEMP),
+            )
+            .unwrap()
+        };
+        let plain = make(false);
+        for want in [
+            "<encode_to_dthd version=\"1\">",
+            "<mlp version=\"1\"><file_name>a.thd</file_name>",
+            "<presentation_8ch><drc_profile>film_light</drc_profile><surround_3db_attenuation>false</surround_3db_attenuation></presentation_8ch>",
+            "<presentation_6ch><drc_profile>film_light</drc_profile><surround_3db_attenuation>false</surround_3db_attenuation></presentation_6ch>",
+        ] {
+            assert!(plain.contains(want), "missing {want} in {plain}");
+        }
+        assert!(make(true).contains("<surround_3db_attenuation>true</surround_3db_attenuation>"));
     }
 
     #[test]

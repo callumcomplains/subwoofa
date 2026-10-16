@@ -124,7 +124,13 @@ fn execute_inner(
     };
     log.push_str(&format!(
         "Engine:       {}\n",
-        if native { "Subwoofa native encoder" } else { "FFmpeg" }
+        if spec.engine == "dolby" {
+            "Dolby Encoding Engine (Dolby's own encoder)"
+        } else if native {
+            "Subwoofa native encoder"
+        } else {
+            "FFmpeg"
+        }
     ));
 
     let ctx = Run {
@@ -228,9 +234,9 @@ fn normalise(
 fn use_native_engine(spec: &EncodeSpec, stream: StreamType, have_ffmpeg: bool) -> Result<bool, Failure> {
     if spec.engine == "dolby" {
         // Dolby's own encoder, run through the Dolby Encoding Engine: neither of ours
-        if !matches!(stream, StreamType::Ac3 | StreamType::Eac3) {
+        if !matches!(stream, StreamType::Ac3 | StreamType::Eac3 | StreamType::TrueHd) {
             return Err(format!(
-                "the Dolby Encoding Engine encodes Dolby Digital and Digital Plus here, not {}",
+                "the Dolby Encoding Engine encodes Dolby Digital, Digital Plus and TrueHD here, not {}",
                 stream.display_name()
             )
             .into());
