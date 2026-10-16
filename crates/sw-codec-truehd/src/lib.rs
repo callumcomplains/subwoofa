@@ -318,7 +318,6 @@ impl Encoder {
         Domain {
             coded,
             src_q,
-            coarse,
             unity,
             dest,
             eff_dest,
@@ -333,14 +332,15 @@ impl Encoder {
     fn analyse(&self, domain: &Domain, n: usize) -> Vec<ChannelAnalysis> {
         let decorrelate = self.cfg.decorrelate && self.cfg.effort != sw_core::Effort::Fast;
         let tools = Tools::for_effort(self.cfg.effort);
-        let (coarse, unity) = (domain.coarse, domain.unity);
         let both: Vec<(ChannelAnalysis, Option<(ChannelAnalysis, usize)>)> = {
             use rayon::prelude::*;
             (0..self.cfg.channels)
                 .into_par_iter()
                 .map(|c| {
                     let forced = domain.forced_q[c];
-                    let allow = decorrelate && !(coarse && (c == 0 || (c == 1 && !unity)));
+                    // every channel may be predicted from those below it, the stereo pair of a downmix included (channel 0 has
+                    // nothing below it, and the analysis knows)
+                    let allow = decorrelate;
                     analyze_with_prediction(&domain.coded, c, n, self.au, forced, allow, tools)
                 })
                 .collect()
@@ -510,8 +510,6 @@ struct Domain<'a> {
     coded: Cow<'a, [Vec<i32>]>,
     /// Unused low bits of the two front source channels (0 without a coarse downmix).
     src_q: [u8; 2],
-    /// The source has unused low bits, so the downmix is coarse.
-    coarse: bool,
     /// The coded pair is the full-level downmix and substream 0 scales it with matrices.
     unity: bool,
     /// Gain of the front channels in the decoder, as configured and as used in this interval.
