@@ -22,6 +22,23 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
+/// Stops a helper program and everything it started, then waits for it. `ffmpeg.exe` is often a launcher (a package
+/// manager's shim) that runs the real program as its child: killing only the launcher would leave the real one
+/// running, writing to a file or holding our pipes open. On Windows the whole tree goes (`taskkill /T`); elsewhere,
+/// and should that fail, the program itself.
+pub fn stop(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let _ = command("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

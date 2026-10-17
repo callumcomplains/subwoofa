@@ -247,8 +247,7 @@ fn follow_output(
     let mut last = 0.0f32;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            sw_core::process::stop(child);
             return Err(Error::Canceled);
         }
         match lines.recv_timeout(std::time::Duration::from_millis(100)) {

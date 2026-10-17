@@ -1,8 +1,8 @@
 # Speed
 
 How fast Subwoofa encodes, next to FFmpeg and the original DTS-HD Master Audio Suite encoder (DTSHDMASE). Measured
-on 2026-10-12 to 14. These are single-machine numbers: use them to see the order of magnitude, not as a benchmark
-suite.
+on 2026-10-12 to 14 (the TrueHD row again on 2026-10-17, after its compression gained about 2%). These are
+single-machine numbers: use them to see the order of magnitude, not as a benchmark suite.
 
 ## What was measured
 
@@ -28,7 +28,7 @@ Time in seconds (x real time) and output size in MB.
 |---|---|---|---|---|
 | Dolby Digital (AC-3) 640 kbps | **0.65 s (185x)**, 9.6 MB | 2.1 s (56x) | 0.7 s (176x), 9.6 MB | |
 | Dolby Digital Plus (E-AC-3) 640 kbps | 0.61 s (197x), 9.6 MB | 1.9 s (63x) | 0.6 s (185x), 9.6 MB | |
-| Dolby TrueHD (lossless) | **1.7 s (71x)**, **54.4 MB** | 10.9 s (11x) | 2.6 s (46x), 55.7 MB | |
+| Dolby TrueHD (lossless) | **1.7 s (70x)**, **53.2 MB** | 9.0 s (13x) | 2.6 s (46x), 55.7 MB | |
 | DTS core 1509 kbps | **2.4 s (50x)**, 22.6 MB | 11.9 s (10x) | 5.6 s (22x), 22.6 MB | 7.5 s (16x), 22.6 MB |
 | DTS-HD High Resolution 3018 kbps | **4.7 s (26x)**, 45.3 MB | 27.3 s (4x) | not available | 8.5 s (14x), 45.3 MB |
 | DTS-HD Master Audio (core + lossless) | **5.6 s (21x)**, **57.0 MB** | 24.2 s (5x) | not available | 14.5 s (8x), 60.1 MB |
@@ -50,9 +50,9 @@ Bold marks where Subwoofa is the smaller file or the faster program.
   format it makes.** DTS core is 2.3 times quicker than FFmpeg's encoder and 3 times quicker than the original;
   Master Audio is 2.6 times quicker than the original.
 - **On one core it does not.** FFmpeg's encoders are single-threaded and cheap, and Subwoofa's do more work to find
-  smaller files: on one core TrueHD takes 4 times as long as FFmpeg, AC-3 3 times. The lead above comes from using
+  smaller files: on one core TrueHD takes 3.4 times as long as FFmpeg, AC-3 3 times. The lead above comes from using
   the whole machine, and a machine that is busy with other encodes gives less of it back (Settings, Performance).
-- **Where Subwoofa wins on size:** TrueHD is 2.4% smaller than FFmpeg's, WavPack 6% smaller, DTS-HD Master Audio 5%
+- **Where Subwoofa wins on size:** TrueHD is 4.4% smaller than FFmpeg's, WavPack 6% smaller, DTS-HD Master Audio 5%
   smaller than the original encoder's. FLAC, Apple Lossless and TTA come out within 1% of FFmpeg's.
 - **Plain copies are at parity.** A WAV copy is 0.22 s against FFmpeg's 0.23 s. The floor of every number above is
   reading and converting the six input files, which now overlaps with encoding.

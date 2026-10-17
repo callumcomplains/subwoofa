@@ -339,8 +339,7 @@ pub fn run_progress(
     let stdout = child.stdout.take().expect("piped stdout");
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            sw_core::process::stop(&mut child);
             return Err(Error::Canceled);
         }
         if let Some(us) = line

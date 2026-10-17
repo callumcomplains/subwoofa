@@ -135,8 +135,10 @@ impl Decoder {
 
     /// Stops the decoder (it may still be running when enough was read) and returns its complaints, if any.
     fn finish(mut self) -> String {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // `ffmpeg` may be a launcher (Chocolatey's shim) whose real FFmpeg would otherwise wait on a full pipe for ever,
+        // keeping its messages pipe open: close the audio pipe, then stop the launcher and what it started
+        drop(self.child.stdout.take());
+        sw_core::process::stop(&mut self.child);
         self.complaints.join().unwrap_or_default().trim().to_string()
     }
 }

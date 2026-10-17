@@ -17,10 +17,11 @@ ALAC, TTA, DSD). It also verifies what it writes, and has StreamTools for trimmi
 |---|---|
 | **Encode** | 30 channel layouts up to 22.2, Blu-ray / DVD / DTS Music Disc rules built in, lossless and lossy, own encoders written from public specs |
 | **Bitstream and Downmix** | timecode, seamless branching, embedded stereo and 5.1 downmixes, clip check, safe trim |
-| **StreamTools** | info and bit-rate chart, trim, split, append, replace, re-stripe, add silence |
-| **Verify** | structure and checksum check for every stream type, plus a deep mode with a full decode |
-| **Atmos** | TrueHD and Dolby Digital Plus Atmos through the Dolby Encoding Engine you supply |
-| **Queue** | several encodes at once, progress, cancel, automatic verify |
+| **StreamTools** | info and bit-rate chart, trim, split, append, replace and insert, re-stripe, add silence, dialnorm edit without re-encoding |
+| **Verify** | structure and checksum check for every stream type, a deep mode with a full decode, a printable QC report, comparison with the source (sample-exact for lossless); recognises DTS:X, Dolby Atmos, AC-4 and DTS-UHD |
+| **Loudness and preview** | BS.1770 / EBU R 128 measurement, dialnorm from it, normalise to a target; a short preview of the encode with A/B and a blind mode |
+| **Atmos and Dolby's encoders** | TrueHD and Dolby Digital Plus Atmos, Dolby's own DD/DD+/TrueHD encoders, decode, transcode and Dolby's dialogue-aware meter, through the Dolby Encoding Engine you supply |
+| **Queue and automation** | several encodes at once, progress, cancel, automatic verify; JSON job files, folder batches and watch folders |
 
 Every format and its test status: [docs/FORMATS.md](docs/FORMATS.md).
 
