@@ -482,8 +482,14 @@ fn report_peak(c: &mut Collector, p: &Probe, f: &Major, mlp: bool) {
     c.check("Peak data rate", status, detail);
 }
 
-/// The pass/fail checks, one line each.
+/// The pass/fail checks, one line each: the framing and checksums, then the stream as a whole.
 fn report_checks(c: &mut Collector, t: &Tally) {
+    report_framing(c, t);
+    report_stream(c, t);
+}
+
+/// Access units, major syncs, parity, the substream directory and the substreams' checksums.
+fn report_framing(c: &mut Collector, t: &Tally) {
     let aus = t.aus;
     let ok = |n: u64| if n == 0 { Status::Pass } else { Status::Fail };
     c.check(
@@ -543,6 +549,10 @@ fn report_checks(c: &mut Collector, t: &Tally) {
             )
         },
     );
+}
+
+/// Timing, restart points, parameter changes and whether the file ends on a boundary.
+fn report_stream(c: &mut Collector, t: &Tally) {
     // Dolby's own encoder lets this timestamp jump (it follows the variable data rate), so it is reported, not judged
     c.check(
         "Input timing",

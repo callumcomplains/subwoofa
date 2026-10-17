@@ -60,14 +60,7 @@ pub(crate) fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
     };
     let in_mdia = boxes(w, mdia, mdia + mdia_size);
     if let Some((mdhd, _)) = find(&in_mdia, b"mdhd") {
-        let d = w.get(mdhd, 36).to_vec();
-        if d.len() >= 32 && d[0] == 1 {
-            facts.rate = be32(&d[20..24]);
-            facts.frames = Some(be64(&d[24..32]));
-        } else if d.len() >= 20 {
-            facts.rate = be32(&d[12..16]);
-            facts.frames = Some(be32(&d[16..20]) as u64);
-        }
+        read_media_header(w, mdhd, &mut facts);
     }
     let Some((minf, minf_size)) = find(&in_mdia, b"minf") else {
         return facts;
@@ -78,58 +71,88 @@ pub(crate) fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
     };
     let table = boxes(w, stbl, stbl + stbl_size);
     if let Some((stsd, size)) = find(&table, b"stsd") {
-        let entry = boxes(w, stsd + 8, stsd + size);
-        if let Some(([a, b, c4, d4], e, e_size)) = entry.first().cloned() {
-            let name = String::from_utf8_lossy(&[a, b, c4, d4]).to_string();
-            c.kv("Codec", codec_name(&name));
-            // an audio sample entry: 8 bytes of reserved and data reference, 8 reserved, then the channel count
-            let head = w.get(e, 28).to_vec();
-            if head.len() >= 18 && facts.channels == 0 {
-                facts.channels = u16::from_be_bytes([head[16], head[17]]) as u32;
-            }
-            if let Some(why) = not_checked(&name) {
-                facts.lossless = false;
-                facts.no_decoder = true;
-                c.check("Audio", Status::Skipped, why);
-            }
-            let kids = boxes(w, e + 28, e + e_size);
-            if let Some((cookie, size)) = find(&kids, b"alac") {
-                let d = w.get(cookie, size as usize).to_vec();
-                if d.len() >= 28 {
-                    facts.bits = d[9] as u32;
-                    facts.channels = d[13] as u32;
-                    c.kv("Frame length", format!("{} samples", be32(&d[4..8])));
-                    c.check(
-                        "ALAC description",
-                        Status::Pass,
-                        format!(
-                            "{} bits, {} channels, rice parameters {}/{}/{}",
-                            d[9], d[13], d[10], d[11], d[12]
-                        ),
-                    );
-                    if facts.rate == 0 {
-                        facts.rate = be32(&d[24..28]);
-                    }
-                }
-            } else if name == "alac" {
-                c.check("ALAC description", Status::Fail, "the sample entry has no alac box");
-            }
-        }
+        read_sample_entry(w, c, (stsd, size), &mut facts);
     }
     if let (Some((stsz, _)), Some((_, mdat_size))) = (find(&table, b"stsz"), mdat) {
-        let d = w.get(stsz, 12).to_vec();
-        if d.len() >= 12 {
-            let count = be32(&d[8..12]) as usize;
-            let sizes = w.get(stsz + 12, count * 4).to_vec();
-            let sum: u64 = sizes.chunks_exact(4).map(|s| be32(s) as u64).sum();
-            c.check(
-                "Sample table",
-                if sum <= mdat_size { Status::Pass } else { Status::Fail },
-                format!("{count} frames totalling {sum} bytes; the mdat box holds {mdat_size}"),
-            );
-        }
+        check_sample_table(w, c, stsz, mdat_size);
     }
     facts
+}
+
+/// `mdhd`: the track's time scale (its sample rate, for audio) and length.
+fn read_media_header(w: &mut Window, mdhd: u64, facts: &mut Facts) {
+    let d = w.get(mdhd, 36).to_vec();
+    if d.len() >= 32 && d[0] == 1 {
+        facts.rate = be32(&d[20..24]);
+        facts.frames = Some(be64(&d[24..32]));
+    } else if d.len() >= 20 {
+        facts.rate = be32(&d[12..16]);
+        facts.frames = Some(be32(&d[16..20]) as u64);
+    }
+}
+
+/// The first sample entry of `stsd`: the codec, the channel count, and Apple Lossless's own description.
+fn read_sample_entry(w: &mut Window, c: &mut Collector, (stsd, size): (u64, u64), facts: &mut Facts) {
+    let entry = boxes(w, stsd + 8, stsd + size);
+    let Some(([a, b, c4, d4], e, e_size)) = entry.first().cloned() else {
+        return;
+    };
+    let name = String::from_utf8_lossy(&[a, b, c4, d4]).to_string();
+    c.kv("Codec", codec_name(&name));
+    // an audio sample entry: 8 bytes of reserved and data reference, 8 reserved, then the channel count
+    let head = w.get(e, 28).to_vec();
+    if head.len() >= 18 && facts.channels == 0 {
+        facts.channels = u16::from_be_bytes([head[16], head[17]]) as u32;
+    }
+    if let Some(why) = not_checked(&name) {
+        facts.lossless = false;
+        facts.no_decoder = true;
+        c.check("Audio", Status::Skipped, why);
+    }
+    let kids = boxes(w, e + 28, e + e_size);
+    match find(&kids, b"alac") {
+        Some(cookie) => read_alac_cookie(w, c, cookie, facts),
+        None if name == "alac" => c.check("ALAC description", Status::Fail, "the sample entry has no alac box"),
+        None => {}
+    }
+}
+
+/// The `alac` box of an Apple Lossless sample entry: bit depth, channels, frame length and rate.
+fn read_alac_cookie(w: &mut Window, c: &mut Collector, (cookie, size): (u64, u64), facts: &mut Facts) {
+    let d = w.get(cookie, size as usize).to_vec();
+    if d.len() < 28 {
+        return;
+    }
+    facts.bits = d[9] as u32;
+    facts.channels = d[13] as u32;
+    c.kv("Frame length", format!("{} samples", be32(&d[4..8])));
+    c.check(
+        "ALAC description",
+        Status::Pass,
+        format!(
+            "{} bits, {} channels, rice parameters {}/{}/{}",
+            d[9], d[13], d[10], d[11], d[12]
+        ),
+    );
+    if facts.rate == 0 {
+        facts.rate = be32(&d[24..28]);
+    }
+}
+
+/// `stsz`: the frame sizes it lists must fit in the media data box.
+fn check_sample_table(w: &mut Window, c: &mut Collector, stsz: u64, mdat_size: u64) {
+    let d = w.get(stsz, 12).to_vec();
+    if d.len() < 12 {
+        return;
+    }
+    let count = be32(&d[8..12]) as usize;
+    let sizes = w.get(stsz + 12, count * 4).to_vec();
+    let sum: u64 = sizes.chunks_exact(4).map(|s| be32(s) as u64).sum();
+    c.check(
+        "Sample table",
+        if sum <= mdat_size { Status::Pass } else { Status::Fail },
+        format!("{count} frames totalling {sum} bytes; the mdat box holds {mdat_size}"),
+    );
 }
 
 /// The movie's sound track: the first track whose handler is `soun` (a film may hold a video track first), else the

@@ -4,6 +4,7 @@ use crate::container::exss::{exss_frame_x96, exss_frame_xxch_x96, ExssParams};
 use crate::dca::dts96::{decimator_taps, CORE_ADVANCE, DECIMATION_PHASE, HALF};
 use crate::dca::encoder::Config as CoreConfig;
 use crate::dca::encoder::Encoder as CoreEncoder;
+use crate::dca::encoder::Leftovers;
 use crate::dca::encoder::XxchParams;
 use crate::dca::qmf64::Analysis64;
 use crate::dca::qmf64::BANDS as BANDS64;
@@ -29,6 +30,11 @@ pub struct Hra96Config {
     /// Stereo downmix levels for the core's auxiliary data.
     pub aux: Option<crate::dca::encoder::AuxDownmix>,
 }
+
+/// One channel's reconstructed core subbands for a frame (per band, per sample).
+type Deq = Vec<Vec<i32>>;
+/// One channel's 64-band analysis of a frame (per band, per sample).
+type Bands = Vec<Vec<f64>>;
 
 pub struct Hra96Encoder {
     pub(crate) kind: Hra96Kind,
@@ -260,34 +266,8 @@ impl Hra96Encoder {
             return Vec::new();
         }
         let first = self.emitted;
-        let channels = self.buf.len();
-        // the decimated input of every channel of every frame
-        let dec: Vec<Vec<Vec<f64>>> = {
-            let me: &Hra96Encoder = &*self;
-            (0..count * channels)
-                .into_par_iter()
-                .map(|k| me.decimated(k % channels, first + k / channels))
-                .collect::<Vec<_>>()
-                .chunks(channels)
-                .map(|c| c.to_vec())
-                .collect()
-        };
-        // the 48 kHz core
-        let core_in: Vec<Vec<Vec<f64>>> = dec
-            .iter()
-            .map(|d| self.core_inputs.iter().map(|&i| d[i].clone()).collect())
-            .collect();
-        let core_refs: Vec<&[Vec<f64>]> = core_in.iter().map(|f| f.as_slice()).collect();
-        let coded = self.core.encode_batch(&core_refs);
-        let mut datas = Vec::with_capacity(count);
-        let mut core_deqs = Vec::with_capacity(count);
-        let mut sizes = Vec::with_capacity(count);
-        for (i, (mut data, left)) in coded.into_iter().enumerate() {
-            data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
-            sizes.push(self.split_rest(first + i, data.len()));
-            datas.push(data);
-            core_deqs.push(left.deq);
-        }
+        let dec = self.decimated_frames(first, count);
+        let (mut datas, core_deqs, sizes) = self.encode_cores(&dec, first);
         // the rear pair's XXCH extension
         let rear = match self.rear.as_mut() {
             Some(r) => {
@@ -297,38 +277,7 @@ impl Hra96Encoder {
             }
             None => Vec::new(),
         };
-        // X96: the five core channels, then the extra channels that have a set of their own
-        let (dropped, delay, extra_start, kind) = (self.dropped, self.ana_delay, self.extra_start, self.kind);
-        let (n, bufs) = (self.n, &self.buf);
-        let core_bands: Vec<Vec<Vec<Vec<f64>>>> = self
-            .core_ana
-            .par_iter_mut()
-            .enumerate()
-            .map(|(ch, ana)| {
-                (0..count)
-                    .map(|i| Self::analyse(ana, &bufs[ch], (first + i) * n, dropped, delay, &core_deqs[i][ch]))
-                    .collect()
-            })
-            .collect();
-        let extra_bands: Vec<Vec<Vec<Vec<f64>>>> = self
-            .extra_ana
-            .par_iter_mut()
-            .enumerate()
-            .map(|(j, ana)| {
-                (0..count)
-                    .map(|i| {
-                        // the XCH channel's reconstruction is the core encoder's sixth plan; the rears' is the rear
-                        // encoder's
-                        let deq = if kind == Hra96Kind::Discrete {
-                            &core_deqs[i][5]
-                        } else {
-                            &rear[i].1.deq[j]
-                        };
-                        Self::analyse(ana, &bufs[extra_start + j], (first + i) * n, dropped, delay, deq)
-                    })
-                    .collect()
-            })
-            .collect();
+        let (core_bands, extra_bands) = self.x96_bands(first, count, &core_deqs, &rear);
         let x96_frames: Vec<Vec<u8>> = (0..count)
             .into_par_iter()
             .map(|i| {
@@ -349,7 +298,93 @@ impl Hra96Encoder {
             }
         }
         self.emitted += count;
-        // drop samples no later frame needs
+        self.drop_used_samples();
+        datas
+    }
+
+    /// The decimated (48 kHz) input of every channel of `count` frames from `first`, worked out on all cores.
+    fn decimated_frames(&self, first: usize, count: usize) -> Vec<Vec<Vec<f64>>> {
+        use rayon::prelude::*;
+        let channels = self.buf.len();
+        (0..count * channels)
+            .into_par_iter()
+            .map(|k| self.decimated(k % channels, first + k / channels))
+            .collect::<Vec<_>>()
+            .chunks(channels)
+            .map(|c| c.to_vec())
+            .collect()
+    }
+
+    /// The 48 kHz core of each frame: its bytes (padded to whole 32-bit words), its reconstructed subbands per
+    /// channel, and how the rest of the frame's bytes divide between XXCH and X96.
+    #[allow(clippy::type_complexity)]
+    fn encode_cores(
+        &mut self,
+        dec: &[Vec<Vec<f64>>],
+        first: usize,
+    ) -> (Vec<Vec<u8>>, Vec<Vec<Deq>>, Vec<(usize, usize)>) {
+        let core_in: Vec<Vec<Vec<f64>>> = dec
+            .iter()
+            .map(|d| self.core_inputs.iter().map(|&i| d[i].clone()).collect())
+            .collect();
+        let core_refs: Vec<&[Vec<f64>]> = core_in.iter().map(|f| f.as_slice()).collect();
+        let coded = self.core.encode_batch(&core_refs);
+        let (mut datas, mut deqs, mut sizes) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, (mut data, left)) in coded.into_iter().enumerate() {
+            data.resize(data.len() + (4 - data.len() % 4) % 4, 0);
+            sizes.push(self.split_rest(first + i, data.len()));
+            datas.push(data);
+            deqs.push(left.deq);
+        }
+        (datas, deqs, sizes)
+    }
+
+    /// The 64-band analysis for X96 of every frame: the five core channels, then the extra channels that have a set
+    /// of their own, each less the 48 kHz coding's reconstruction. Per channel, then per frame.
+    fn x96_bands(
+        &mut self,
+        first: usize,
+        count: usize,
+        core_deqs: &[Vec<Deq>],
+        rear: &[(Vec<u8>, Leftovers)],
+    ) -> (Vec<Vec<Bands>>, Vec<Vec<Bands>>) {
+        use rayon::prelude::*;
+        let (dropped, delay, extra_start, kind) = (self.dropped, self.ana_delay, self.extra_start, self.kind);
+        let (n, bufs) = (self.n, &self.buf);
+        let core_bands = self
+            .core_ana
+            .par_iter_mut()
+            .enumerate()
+            .map(|(ch, ana)| {
+                (0..count)
+                    .map(|i| Self::analyse(ana, &bufs[ch], (first + i) * n, dropped, delay, &core_deqs[i][ch]))
+                    .collect()
+            })
+            .collect();
+        let extra_bands = self
+            .extra_ana
+            .par_iter_mut()
+            .enumerate()
+            .map(|(j, ana)| {
+                (0..count)
+                    .map(|i| {
+                        // the XCH channel's reconstruction is the core encoder's sixth plan; the rears' is the rear
+                        // encoder's
+                        let deq = if kind == Hra96Kind::Discrete {
+                            &core_deqs[i][5]
+                        } else {
+                            &rear[i].1.deq[j]
+                        };
+                        Self::analyse(ana, &bufs[extra_start + j], (first + i) * n, dropped, delay, deq)
+                    })
+                    .collect()
+            })
+            .collect();
+        (core_bands, extra_bands)
+    }
+
+    /// Drops input samples no later frame needs.
+    fn drop_used_samples(&mut self) {
         let keep_from = (self.emitted * self.n).saturating_sub(HALF + 4 + 64);
         if keep_from > self.dropped + (1 << 16) {
             let cut = keep_from - self.dropped;
@@ -358,7 +393,6 @@ impl Hra96Encoder {
             }
             self.dropped = keep_from;
         }
-        datas
     }
 
     /// How the bytes of frame `f` beyond the core and the extension header divide: `(xxch, x96)`.

@@ -129,30 +129,9 @@ fn execute_inner(
     } else {
         sw_pcm::slot_map(layout, &inputs, order).map_err(|e| e.to_string())?
     };
-    let job = ff::Job {
-        stream,
-        layout,
-        inputs,
-        output: PathBuf::from(&spec.output),
-        bitrate_kbps: spec.bitrate,
-        sample_rate: Some(spec.sample_rate),
-        dialnorm: spec.dialnorm,
-        start_secs: spec.start,
-        duration_secs: (spec.start.is_some() || spec.duration.is_some()).then_some(span),
-        frames: Some((span * stems.sample_rate as f64).round() as u64),
-        slots: Some(slots),
-        ffmpeg: ffmpeg.clone().unwrap_or_default(),
-    };
-    log.push_str(&format!(
-        "Engine:       {}\n",
-        if spec.engine == "dolby" {
-            "Dolby Encoding Engine (Dolby's own encoder)"
-        } else if native {
-            "Subwoofa native encoder"
-        } else {
-            "FFmpeg"
-        }
-    ));
+    let frames = (span * stems.sample_rate as f64).round() as u64;
+    let job = ffmpeg_job(spec, (stream, layout), inputs, slots, (span, frames), ffmpeg.clone());
+    log.push_str(&format!("Engine:       {}\n", engine_name(spec, native)));
 
     let ctx = Run {
         spec,
@@ -166,7 +145,6 @@ fn execute_inner(
     let mut progress = |p: f32| on_progress(p, false);
     run_encoder(&ctx, native, &job, &mut stems, &mut progress, cancel, log)?;
     let size = log_result(log, spec, stream, span, t0.elapsed().as_secs_f64());
-
     if !verify || downmixed {
         return Ok(not_verified(format!("encoded {:.1} MB", size as f64 / 1e6)));
     }
@@ -178,16 +156,66 @@ fn execute_inner(
         )));
     }
     on_progress(1.0, true);
+    check_result(&ctx, &job, ffmpeg.as_deref(), (edit, stems.bits), log)
+}
+
+/// What FFmpeg would be told for this job: it encodes the formats Subwoofa does not, and its reading of the inputs is
+/// the source side of the lossless check.
+fn ffmpeg_job(
+    spec: &EncodeSpec,
+    (stream, layout): (StreamType, &'static ChannelLayout),
+    inputs: std::collections::HashMap<sw_core::Channel, PathBuf>,
+    slots: Vec<(PathBuf, usize)>,
+    (span, frames): (f64, u64),
+    ffmpeg: Option<PathBuf>,
+) -> ff::Job {
+    ff::Job {
+        stream,
+        layout,
+        inputs,
+        output: PathBuf::from(&spec.output),
+        bitrate_kbps: spec.bitrate,
+        sample_rate: Some(spec.sample_rate),
+        dialnorm: spec.dialnorm,
+        start_secs: spec.start,
+        duration_secs: (spec.start.is_some() || spec.duration.is_some()).then_some(span),
+        frames: Some(frames),
+        slots: Some(slots),
+        ffmpeg: ffmpeg.unwrap_or_default(),
+    }
+}
+
+/// The encoder that does the job, as the log names it.
+fn engine_name(spec: &EncodeSpec, native: bool) -> &'static str {
+    if spec.engine == "dolby" {
+        "Dolby Encoding Engine (Dolby's own encoder)"
+    } else if native {
+        "Subwoofa native encoder"
+    } else {
+        "FFmpeg"
+    }
+}
+
+/// Checks the finished file the way its kind needs: lossless against the source (with any gain or delay applied),
+/// audio files by their structure and a decode, lossy streams by a clean decode and their closeness to the source.
+fn check_result(
+    ctx: &Run,
+    job: &ff::Job,
+    ffmpeg: Option<&std::path::Path>,
+    (edit, bits): (processed::Edit, u16),
+    log: &mut String,
+) -> Result<Outcome, Failure> {
+    let (spec, stream, layout, span) = (ctx.spec, ctx.stream, ctx.layout, (ctx.start, ctx.span));
     if edit.changes_audio() && stream.is_lossless() && !stream.is_audio_file() {
         // the usual check reads the files as they are, without the gain or delay
-        return processed::verify(spec, stream, layout, &job, (start, span), edit, log);
+        return processed::verify(spec, stream, layout, job, span, edit, log);
     }
-    let outcome = verify_output(spec, stream, ffmpeg.as_deref(), &job, stems.bits, span, log)?;
+    let outcome = verify_output(spec, stream, ffmpeg, job, bits, ctx.span, log)?;
     if stream.is_lossless() || stream.is_audio_file() {
         return Ok(outcome);
     }
     // decoding cleanly says little about a lossy file: it must also sound like its source
-    let message = closeness::verify(spec, layout, &job.inputs, &job.ffmpeg, (start, span), edit, log)?;
+    let message = closeness::verify(spec, layout, &job.inputs, &job.ffmpeg, span, edit, log)?;
     Ok(Outcome { message, ..outcome })
 }
 

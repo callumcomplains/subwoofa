@@ -319,40 +319,8 @@ fn analyze_substream(
             break;
         }
         if b.get(1) == 1 {
-            let restart = b.get(1) == 1;
-            if restart {
-                let s0 = b.pos;
-                b.get(13);
-                st.noise_type = b.get(1);
-                b.get(16);
-                st.min = b.get(4) as usize;
-                st.max = b.get(4) as usize;
-                st.max_matrix = b.get(4) as usize;
-                b.get(4);
-                b.get(23);
-                b.get(19);
-                b.get(1);
-                b.get(8);
-                b.get(16);
-                for _ in 0..=st.max_matrix {
-                    b.get(6);
-                }
-                b.get(8);
-                stats.restart_bits += (b.pos - s0) as u64;
-                if stats.channels.is_empty() {
-                    stats.channels = format!("{}..{} (matrix ch {})", st.min, st.max, st.max_matrix);
-                }
-                st.seen_restart = true;
-                st.presence = 0xFF;
-                st.matrices.clear();
-                st.blocksize = 8;
-                st.quant = [0; 16];
-                for c in &mut st.ch {
-                    *c = ChState {
-                        huff_lsbs: 24,
-                        ..Default::default()
-                    };
-                }
+            if b.get(1) == 1 {
+                read_restart_header(&mut b, st, stats);
             }
             if !st.seen_restart {
                 return;
@@ -365,45 +333,85 @@ fn analyze_substream(
         if !st.seen_restart {
             return;
         }
-        // block data
         *blocksizes.entry(st.blocksize).or_default() += 1;
-        stats.blocks += 1;
-        let d0 = b.pos;
-        for _ in 0..st.blocksize {
-            for (_, _, byp) in &st.matrices {
-                if *byp == 1 {
-                    b.get(1);
-                    stats.bypass_bits += 1;
-                }
-            }
-            for ch in st.min..=st.max {
-                let cs = &st.ch[ch];
-                let lsb = cs.huff_lsbs.saturating_sub(st.quant[ch]) as usize;
-                let s = b.pos;
-                if cs.codebook > 0 {
-                    if huff_symbol(&mut b, cs.codebook).is_none() {
-                        errors.push(format!("substream {si}: bad Huffman code"));
-                        return;
-                    }
-                    stats.huff_bits += (b.pos - s) as u64;
-                }
-                b.get(lsb);
-                stats.lsb_bits += lsb as u64;
-                let e = stats.per_channel.entry(ch).or_default();
-                e.0 += 1;
-                e.1 += (b.pos - s) as u64;
-            }
-            if b.left() == 0 {
-                errors.push(format!("substream {si}: ran out of data in a block"));
-                return;
-            }
+        if let Err(e) = read_block_data(&mut b, st, stats) {
+            errors.push(format!("substream {si}: {e}"));
+            return;
         }
-        stats.data_bits += (b.pos - d0) as u64;
         let _ = block_start;
         if b.get(1) == 1 {
             break;
         }
     }
+}
+
+/// A restart header: the channels this substream codes and its matrix channels; it resets the decoding state.
+fn read_restart_header(b: &mut Bits, st: &mut SubState, stats: &mut SubStats) {
+    let s0 = b.pos;
+    b.get(13); // sync word
+    st.noise_type = b.get(1);
+    b.get(16); // output timing
+    st.min = b.get(4) as usize;
+    st.max = b.get(4) as usize;
+    st.max_matrix = b.get(4) as usize;
+    b.get(4); // noise shift
+    b.get(23); // noise seed
+    b.get(19); // reserved
+    b.get(1); // data check present
+    b.get(8); // lossless check
+    b.get(16); // reserved
+    for _ in 0..=st.max_matrix {
+        b.get(6); // channel assignment
+    }
+    b.get(8); // checksum
+    stats.restart_bits += (b.pos - s0) as u64;
+    if stats.channels.is_empty() {
+        stats.channels = format!("{}..{} (matrix ch {})", st.min, st.max, st.max_matrix);
+    }
+    st.seen_restart = true;
+    st.presence = 0xFF;
+    st.matrices.clear();
+    st.blocksize = 8;
+    st.quant = [0; 16];
+    for c in &mut st.ch {
+        *c = ChState {
+            huff_lsbs: 24,
+            ..Default::default()
+        };
+    }
+}
+
+/// One block of residual data: LSB-bypass bits, then each channel's Huffman code and raw LSBs per sample.
+fn read_block_data(b: &mut Bits, st: &SubState, stats: &mut SubStats) -> Result<(), &'static str> {
+    stats.blocks += 1;
+    let d0 = b.pos;
+    for _ in 0..st.blocksize {
+        for (_, _, byp) in &st.matrices {
+            if *byp == 1 {
+                b.get(1);
+                stats.bypass_bits += 1;
+            }
+        }
+        for ch in st.min..=st.max {
+            let cs = &st.ch[ch];
+            let lsb = cs.huff_lsbs.saturating_sub(st.quant[ch]) as usize;
+            let s = b.pos;
+            if cs.codebook > 0 {
+                huff_symbol(b, cs.codebook).ok_or("bad Huffman code")?;
+                stats.huff_bits += (b.pos - s) as u64;
+            }
+            b.get(lsb);
+            stats.lsb_bits += lsb as u64;
+            let e = stats.per_channel.entry(ch).or_default();
+            e.0 += 1;
+            e.1 += (b.pos - s) as u64;
+        }
+        if b.left() == 0 {
+            return Err("ran out of data in a block");
+        }
+    }
+    stats.data_bits += (b.pos - d0) as u64;
+    Ok(())
 }
 
 fn parse_filter(b: &mut Bits, f: &mut Fir) {

@@ -515,9 +515,10 @@ come from; (5) comments explain why; (6) each piece has a test that fails when i
 decoder; (7) no dead code or debug leftovers (clippy `-D warnings` with `dead_code` catches unused struct fields: it failed on a
 leftover `coarse` field once).
 Refactor safety net: golden checksums + old-vs-new binary comparisons. Three readability rounds are done (splits along format
-stages, long functions into named steps). Left: six functions of 90-106 lines in DTS/TrueHD (`next_frames` in
-`dca/hra/hra96/encoder.rs`, `analyze_substream`, `report_checks` in `sw-verify/src/thd.rs`, Express `encode_to_file`, `lpc_band`,
-...). Find long functions with a small Node script (a brace-matching line counter; the one used is not saved).
+stages, long functions into named steps). 2026-10-17 split the HRA 96k `next_frames`, `analyze_substream`, TrueHD
+`report_checks`, the MP4 reader and `execute_inner` (now 84). Left over 90 lines: `ma_core::new` (99), Express `encode_to_file`
+(98) and `lpc_band` (97), `index_dts` (95), `source::add_checks` (95), XXCH `encode_to_file` (94), `dts96::next_frames` (91).
+Measure with a brace-matching line counter in Node (count from the `fn` line to its closing brace; skip `tests/`).
 The UI standard: every explanation lives in an (i) (`INFO` list in `app/ui/tabs.js`; selector `@...` names the label itself), no
 visible paragraphs, nothing clipped, `hidden` must really hide (`.srow[hidden]`, `.chk[hidden]`, `.f[hidden]`, `.op-row[hidden]`
 have explicit rules).
