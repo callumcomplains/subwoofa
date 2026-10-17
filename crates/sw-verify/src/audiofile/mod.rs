@@ -120,6 +120,8 @@ struct Facts {
     /// Samples per channel, when the headers give it.
     frames: Option<u64>,
     lossless: bool,
+    /// No decoder exists for the codec inside (AC-4 or DTS-UHD in an MP4).
+    no_decoder: bool,
 }
 
 pub(crate) fn verify(w: &mut Window, c: &mut Collector, kind: AudioKind) -> Probe {
@@ -167,6 +169,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, kind: AudioKind) -> Prob
         sample_rate: facts.rate,
         channels: facts.channels,
         lossless: facts.lossless,
+        no_decoder: facts.no_decoder,
         ..Default::default()
     }
 }

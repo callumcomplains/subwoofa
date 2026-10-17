@@ -49,6 +49,7 @@ pub(crate) fn dsf(w: &mut Window, c: &mut Collector) -> Facts {
         bits: 1,
         frames: Some(samples),
         lossless: false,
+        no_decoder: false,
     }
 }
 

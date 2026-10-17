@@ -59,5 +59,6 @@ pub(crate) fn wavpack(w: &mut Window, c: &mut Collector) -> Facts {
         bits,
         frames: Some(frames),
         lossless: true,
+        no_decoder: false,
     }
 }

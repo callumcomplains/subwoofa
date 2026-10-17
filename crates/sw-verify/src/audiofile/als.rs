@@ -39,5 +39,6 @@ pub(crate) fn als(w: &mut Window, c: &mut Collector) -> Facts {
         bits,
         frames: Some(samples),
         lossless: true,
+        no_decoder: false,
     }
 }

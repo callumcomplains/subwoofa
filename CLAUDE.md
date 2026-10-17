@@ -391,6 +391,19 @@ the verdict meanwhile.
   opening (AAC 22.2 + 24 mono WAV + .mka), Terrifier 3 (8ch PCM + mono split).
 - `O:\MEDIA\Unsorted\forSubwoofa\DEEP_PURPLE_MADE_IN_JAPAN`: Blu-ray with LPCM + DTS-HD MA + TrueHD + AC-3 of one stereo 96k
   programme (commercial MA/TrueHD decode bit-identical to LPCM; ours too).
+- `E:\FormatProgram\TEST FILES\OnlineTestFiles` (added 2026-10-16; public sample clips):
+  - `DolbyAC4DeliveryKitv1.5\`: Dolby's AC-4 kit: 2.0, 5.1, 5.1.4 and IMS at 25 and 29.97 fps (frame rate and bit rate in
+    the file names: the ground truth for the AC-4 check), plus the same clip as AAC and DD+.
+  - `PhotoprismAC4\`: A-JOC, channel-based (44.1 kHz) and IMS (two presentations) AC-4. `PhotoprismWAV\`: odd WAVs (A-law,
+    mu-law, GSM, u8, 9 ch, 3 kHz, 192 kHz, a layout change) for input-reader robustness.
+  - `KodiAudioTestClips\`: `DTS-UHD DTSX P2 Sample.mp4` (DTS-UHD in MP4, 10 ch, 6 241 frames, 133.141 s; FFmpeg cannot
+    decode it); DTS:X discs `DTSX Emulator.mkv`, `DTSX Gravity.mkv`, `DTSX_Demo_2016.m2ts`; `Dolby Amaze.ATMOS.m2ts` (TrueHD
+    Atmos, AC-3, and Blu-ray DD+ Atmos 7.1 = AC-3 bsid 6 + E-AC-3 dependent frames); `EAC3-JOC ATMOS.mkv`; `DTS-HRA 7.1
+    Orchestra.mkv` (96 kHz HRA 7.1); `DTS-HD MA 7.1 'Dredd'` and THX Deep Note (MA); spoken channel-test FLACs (5.0-7.1 at
+    44.1-192 kHz) and `TrueHDChannelTest.mkv` for listening checks of channel order.
+  - Elementary streams taken out of them (`ffmpeg -i X -map 0:a:N -c copy -f dts|truehd|eac3|data`) are in
+    `F:\SubwoofaTests\online` (`uhd.raw`, `amaze_atmos.thd`, `amaze_joc71.eac3`, `dtsx_*.dtshd` ...). `amaze_atmos.thd`
+    reproduces the TrueHD-analyser gap with Atmos substreams (open item 4).
 - Test outputs always go to `F:\SubwoofaTests` (C: is nearly full).
 
 ### 8.3 The test suite

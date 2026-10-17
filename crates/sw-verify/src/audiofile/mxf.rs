@@ -166,5 +166,6 @@ fn report_descriptor(c: &mut Collector, k: &Klv) -> Facts {
         bits: number(0x3d01) as u32,
         frames: Some((seconds * rate as f64).round() as u64),
         lossless: true,
+        no_decoder: false,
     }
 }

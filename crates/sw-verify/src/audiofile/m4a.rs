@@ -50,8 +50,7 @@ pub(crate) fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
         return facts;
     };
     let mdat = find(&top, b"mdat");
-    let trak = boxes(w, moov, moov + moov_size);
-    let Some((trak_start, trak_size)) = find(&trak, b"trak") else {
+    let Some((trak_start, trak_size)) = audio_track(w, moov, moov_size) else {
         c.check("Track", Status::Fail, "there is no track in the moov box");
         return facts;
     };
@@ -82,7 +81,17 @@ pub(crate) fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
         let entry = boxes(w, stsd + 8, stsd + size);
         if let Some(([a, b, c4, d4], e, e_size)) = entry.first().cloned() {
             let name = String::from_utf8_lossy(&[a, b, c4, d4]).to_string();
-            c.kv("Codec", name.clone());
+            c.kv("Codec", codec_name(&name));
+            // an audio sample entry: 8 bytes of reserved and data reference, 8 reserved, then the channel count
+            let head = w.get(e, 28).to_vec();
+            if head.len() >= 18 && facts.channels == 0 {
+                facts.channels = u16::from_be_bytes([head[16], head[17]]) as u32;
+            }
+            if let Some(why) = not_checked(&name) {
+                facts.lossless = false;
+                facts.no_decoder = true;
+                c.check("Audio", Status::Skipped, why);
+            }
             let kids = boxes(w, e + 28, e + e_size);
             if let Some((cookie, size)) = find(&kids, b"alac") {
                 let d = w.get(cookie, size as usize).to_vec();
@@ -121,4 +130,54 @@ pub(crate) fn m4a(w: &mut Window, c: &mut Collector) -> Facts {
         }
     }
     facts
+}
+
+/// The movie's sound track: the first track whose handler is `soun` (a film may hold a video track first), else the
+/// first track of any kind.
+fn audio_track(w: &mut Window, moov: u64, moov_size: u64) -> Option<(u64, u64)> {
+    let tracks: Vec<(u64, u64)> = boxes(w, moov, moov + moov_size)
+        .into_iter()
+        .filter(|b| &b.0 == b"trak")
+        .map(|b| (b.1, b.2))
+        .collect();
+    let is_sound = |w: &mut Window, (start, size): (u64, u64)| {
+        let in_trak = boxes(w, start, start + size);
+        let Some((mdia, mdia_size)) = find(&in_trak, b"mdia") else {
+            return false;
+        };
+        let in_mdia = boxes(w, mdia, mdia + mdia_size);
+        // hdlr: version and flags, pre_defined, then the handler type
+        find(&in_mdia, b"hdlr").is_some_and(|(hdlr, _)| w.get(hdlr + 8, 4) == b"soun")
+    };
+    tracks
+        .iter()
+        .copied()
+        .find(|&t| is_sound(w, t))
+        .or(tracks.first().copied())
+}
+
+/// A sample entry's four-letter code with the format's name, when it is one Subwoofa knows.
+fn codec_name(code: &str) -> String {
+    let name = match code {
+        "alac" => "Apple Lossless",
+        "ac-4" => "Dolby AC-4",
+        "dtsx" => "DTS-UHD (DTS:X Profile 2)",
+        "ec-3" => "Dolby Digital Plus (E-AC-3)",
+        "ac-3" => "Dolby Digital (AC-3)",
+        "mp4a" => "MPEG-4 audio (AAC, or ALS)",
+        _ => return code.to_string(),
+    };
+    format!("{name} ({code})")
+}
+
+/// Why the audio of a codec this check only names is not checked further.
+fn not_checked(code: &str) -> Option<&'static str> {
+    match code {
+        "dtsx" | "ac-4" => Some(
+            "the stream is recognised, but no decoder for it is available (FFmpeg has none), so its frames and \
+             audio are not checked here; for a frame check, take the stream out of the MP4 \
+             (ffmpeg -i FILE -map 0:a -c copy -f data OUT) and verify that",
+        ),
+        _ => None,
+    }
 }

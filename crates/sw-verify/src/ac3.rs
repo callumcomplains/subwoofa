@@ -71,6 +71,8 @@ struct Tally {
     truncated: u64,
     param_changes: u64,
     size_changes: u64,
+    /// Size of the last frame that starts an access unit (dependent substreams have sizes of their own).
+    last_size: Option<usize>,
     /// Bytes skipped while looking for the next sync word.
     skipped_bytes: u64,
     /// Complexity index of Joint Object Coding (Dolby Atmos), and in how many access units it was signalled.
@@ -93,7 +95,7 @@ pub(crate) fn verify(w: &mut Window, c: &mut Collector, eac3: bool) -> Probe {
         0.0
     };
     report_facts(c, &p, &tally, &h0, w.len, eac3);
-    report_checks(c, &p, &tally, &h0, eac3);
+    report_checks(c, &tally, &h0, eac3);
     if c.report.deep {
         c.section("First frame header", tally.first_dump);
     }
@@ -144,8 +146,13 @@ fn walk_frames(w: &mut Window, c: &mut Collector, eac3: bool, p: &mut Probe) -> 
                 None => break,
             }
         }
-        let (h, fsize, header_ok) = if eac3 { parse_e(&head) } else { parse_a(&head) };
-        if !header_ok || fsize == 0 {
+        // AC-3 or E-AC-3 is told frame by frame (bit stream id above 10): an AC-3 stream may carry an E-AC-3 dependent
+        // substream after each frame, as Blu-ray's Dolby Digital Plus 7.1 does (an AC-3 core for older players, the
+        // extra channels in E-AC-3)
+        let frame_eac3 = head[5] >> 3 > 10;
+        let (h, fsize, header_ok) = if frame_eac3 { parse_e(&head) } else { parse_a(&head) };
+        let dependent = frame_eac3 && h.strmtyp == 1;
+        if !header_ok || fsize == 0 || (frame_eac3 != eac3 && !dependent) {
             t.bad_headers += 1;
             c.finding(Status::Fail, Some(pos), "invalid frame header".to_string());
             pos += 2;
@@ -161,18 +168,18 @@ fn walk_frames(w: &mut Window, c: &mut Collector, eac3: bool, p: &mut Probe) -> 
             break;
         }
         let frame = w.get(pos, fsize).to_vec();
-        check_crcs(c, &frame, pos, eac3, &mut t);
+        check_crcs(c, &frame, pos, frame_eac3, &mut t);
         if t.first.is_none() {
-            t.first_dump = if eac3 { dump_e(&frame) } else { dump_a(&frame) };
+            t.first_dump = if frame_eac3 { dump_e(&frame) } else { dump_a(&frame) };
             t.first = Some(h.clone());
         }
-        if eac3 {
+        if frame_eac3 {
             if let Some(j) = joc_complexity(&frame) {
                 t.joc_frames += 1;
                 t.joc.get_or_insert(j);
             }
         }
-        if eac3 && h.strmtyp == 1 {
+        if dependent {
             t.dependent += 1;
         } else {
             if current.as_ref().is_some_and(|prev| *prev != h) {
@@ -190,13 +197,14 @@ fn walk_frames(w: &mut Window, c: &mut Collector, eac3: bool, p: &mut Probe) -> 
             t.samples += h.blocks as u64 * 256;
             p.frame_samples.push(h.blocks * 256);
         }
-        if eac3 && h.strmtyp == 1 && !p.frame_bytes.is_empty() {
+        if dependent && !p.frame_bytes.is_empty() {
             // a dependent substream belongs to the access unit before it: the bit rate chart counts them together
             *p.frame_bytes.last_mut().unwrap() += fsize as u32;
         } else {
-            if p.frame_bytes.last().is_some_and(|last| *last != fsize as u32) {
+            if t.last_size.is_some_and(|last| last != fsize) {
                 t.size_changes += 1;
             }
+            t.last_size = Some(fsize);
             p.frame_bytes.push(fsize as u32);
         }
         t.frames += 1;
@@ -230,6 +238,15 @@ fn check_crcs(c: &mut Collector, frame: &[u8], pos: u64, eac3: bool, t: &mut Tal
 fn report_facts(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, file_len: u64, eac3: bool) {
     let family = if eac3 { "E-AC-3" } else { "AC-3" };
     c.kv("Format", format!("{family}, bit stream id {}", h0.bsid));
+    // an AC-3 core with E-AC-3 extension frames: the channels below are the core's
+    let extended = !eac3 && t.dependent > 0;
+    if extended {
+        c.kv(
+            "Structure",
+            "AC-3 core + E-AC-3 dependent substream (Blu-ray Dolby Digital Plus: the core plays on any AC-3 decoder, \
+             the extension adds the channels beyond 5.1)",
+        );
+    }
     c.kv("Sample rate", format!("{} Hz", h0.rate));
     c.kv(
         "Channels",
@@ -241,7 +258,7 @@ fn report_facts(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, file_len: 
     );
     c.kv(
         "Frames",
-        if eac3 && t.dependent > 0 {
+        if t.dependent > 0 {
             format!(
                 "{} access units ({} frames, {} in dependent substreams)",
                 t.access_units, t.frames, t.dependent
@@ -261,7 +278,7 @@ fn report_facts(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, file_len: 
         );
     }
     c.kv("Dialogue level", format!("-{} dBFS", h0.dialnorm));
-    if !eac3 {
+    if !eac3 && !extended {
         return;
     }
     let Some(j) = t.joc else {
@@ -286,7 +303,7 @@ fn report_facts(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, file_len: 
 }
 
 /// The pass/fail checks, one line each.
-fn report_checks(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, eac3: bool) {
+fn report_checks(c: &mut Collector, t: &Tally, h0: &Header, eac3: bool) {
     let verdict = |ok: bool, bad: Status| if ok { Status::Pass } else { bad };
     c.check(
         "Sync words",
@@ -306,8 +323,7 @@ fn report_checks(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, eac3: boo
             format!("{} invalid header(s)", t.bad_headers)
         },
     );
-    let frames = t.frames;
-    let crc_detail = |bad: u64| {
+    let crc_detail = |bad: u64, frames: u64| {
         if bad == 0 {
             format!("{frames} of {frames} frames")
         } else {
@@ -315,16 +331,17 @@ fn report_checks(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, eac3: boo
         }
     };
     if !eac3 {
+        // only the AC-3 frames have a CRC1, not E-AC-3 extension frames among them
         c.check(
             "CRC1 (first 5/8 of each frame)",
             verdict(t.bad_crc1 == 0, Status::Fail),
-            crc_detail(t.bad_crc1),
+            crc_detail(t.bad_crc1, t.frames - t.dependent),
         );
     }
     c.check(
         "CRC (whole frame)",
         verdict(t.bad_crc2 == 0, Status::Fail),
-        crc_detail(t.bad_crc2),
+        crc_detail(t.bad_crc2, t.frames),
     );
     c.check(
         "Complete file",
@@ -351,8 +368,8 @@ fn report_checks(c: &mut Collector, p: &Probe, t: &Tally, h0: &Header, eac3: boo
             verdict(cbr, Status::Warn),
             if cbr {
                 format!(
-                    "every frame is {} bytes{}",
-                    p.frame_bytes.first().copied().unwrap_or(0),
+                    "every AC-3 frame is {} bytes{}",
+                    t.last_size.unwrap_or(0),
                     if h0.rate == 44_100 {
                         " (44.1 kHz alternates by one word)"
                     } else {

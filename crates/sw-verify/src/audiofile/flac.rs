@@ -26,6 +26,7 @@ pub(crate) fn streaminfo(c: &mut Collector, d: &[u8]) -> Facts {
         bits,
         frames: if total > 0 { Some(total) } else { None },
         lossless: true,
+        no_decoder: false,
     }
 }
 

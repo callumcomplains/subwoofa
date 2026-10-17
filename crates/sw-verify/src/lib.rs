@@ -8,12 +8,14 @@
 //!   dump of every header the stream carries.
 
 mod ac3;
+mod ac4;
 mod analysis;
 mod audiofile;
 mod bits;
 mod crc;
 mod deep;
 mod dts;
+mod dtsuhd;
 mod html;
 mod source;
 mod thd;
@@ -212,9 +214,7 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
         probe = Some(audiofile::verify(&mut w, &mut c, file_kind));
         c.report.duration_secs = probe.as_ref().map_or(0.0, |p| p.duration_secs);
         c.report.lossless = probe.as_ref().map(|p| p.lossless);
-        if opt.deep {
-            deep::run(path, opt, &mut c, probe.as_ref());
-        }
+        deep_or_skip(path, opt, &mut c, probe.as_ref());
         return Ok(c.finish());
     }
     c.report.format = kind.name().to_string();
@@ -222,6 +222,8 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
         Kind::Ac3 | Kind::Eac3 => probe = Some(ac3::verify(&mut w, &mut c, kind == Kind::Eac3)),
         Kind::Dts | Kind::DtsHd => probe = Some(dts::verify(&mut w, &mut c, kind == Kind::DtsHd)),
         Kind::TrueHd | Kind::Mlp => probe = Some(thd::verify(&mut w, &mut c, kind == Kind::Mlp)),
+        Kind::Ac4 => probe = Some(ac4::verify(&mut w, &mut c)),
+        Kind::DtsUhd => probe = Some(dtsuhd::verify(&mut w, &mut c)),
         Kind::DtsPacked => {
             c.check(
                 "Recognised stream",
@@ -231,17 +233,31 @@ pub fn verify(path: &Path, opt: &Options) -> Result<Report, Error> {
             c.check("Frame structure", Status::Skipped, "the structure check reads the plain byte-stream form; unpack the stream first, or use deep verification, which decodes it");
         }
         Kind::Unknown => {
-            c.check("Recognised stream", Status::Fail, "the file is not a known stream or audio file (AC-3, E-AC-3, DTS, DTS-HD, TrueHD, MLP, WAV, AIFF, CAF, FLAC, ALAC/M4A, TTA, DSD)");
+            c.check("Recognised stream", Status::Fail, "the file is not a known stream or audio file (AC-3, E-AC-3, AC-4, DTS, DTS-HD, DTS-UHD, TrueHD, MLP, WAV, AIFF, CAF, FLAC, ALAC/M4A, TTA, DSD)");
         }
     }
     if let Some(p) = &probe {
         c.report.duration_secs = p.duration_secs;
         c.report.lossless = Some(p.lossless);
     }
-    if opt.deep {
-        deep::run(path, opt, &mut c, probe.as_ref());
-    }
+    deep_or_skip(path, opt, &mut c, probe.as_ref());
     Ok(c.finish())
+}
+
+/// The deep check (a full decode), when it was asked for and a decoder exists for the format.
+fn deep_or_skip(path: &Path, opt: &Options, c: &mut Collector, probe: Option<&Probe>) {
+    if !opt.deep {
+        return;
+    }
+    if probe.is_some_and(|p| p.no_decoder) {
+        c.check(
+            "Deep check",
+            Status::Skipped,
+            "there is no decoder for this format to decode it with",
+        );
+        return;
+    }
+    deep::run(path, opt, c, probe);
 }
 
 /// What the structure pass learned that the deep pass can use.
@@ -260,6 +276,8 @@ pub(crate) struct Probe {
     /// Sample rate of the core (differs from `sample_rate` when the lossless data runs at twice the core's rate).
     pub core_rate: u32,
     pub dts: bool,
+    /// No decoder for the format is available (AC-4, DTS-UHD), so the deep check cannot decode it.
+    pub no_decoder: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,6 +290,9 @@ enum Kind {
     DtsPacked,
     TrueHd,
     Mlp,
+    /// Recognised and framing-checked, but not decodable here.
+    Ac4,
+    DtsUhd,
     Unknown,
 }
 
@@ -285,6 +306,8 @@ impl Kind {
             Kind::DtsPacked => "DTS in 14-bit or little-endian words",
             Kind::TrueHd => "Dolby TrueHD",
             Kind::Mlp => "MLP (Meridian Lossless Packing)",
+            Kind::Ac4 => "Dolby AC-4",
+            Kind::DtsUhd => "DTS-UHD (DTS:X Profile 2)",
             Kind::Unknown => "unknown",
         }
     }
@@ -304,12 +327,19 @@ fn sniff(h: &[u8]) -> Kind {
     }
     if h.len() >= 4 {
         let w = be32(h);
+        // DTS-UHD frames start with one of two sync words (a sync frame, or one between)
+        if w == 0x4041_1BF2 || w == 0x71C4_42E8 {
+            return Kind::DtsUhd;
+        }
         if w == 0x7FFE_8001 || w == 0x6458_2025 {
             return Kind::Dts;
         }
         if w == 0xFE7F_0180 || w == 0x1FFF_E800 || w == 0xFF1F_00E8 || w == 0x7FFE_0180 {
             return Kind::DtsPacked;
         }
+    }
+    if h.len() >= 4 && h[0] == 0xAC && (h[1] == 0x40 || h[1] == 0x41) {
+        return Kind::Ac4;
     }
     if h.len() >= 6 && h[0] == 0x0B && h[1] == 0x77 {
         // both syntaxes carry the bit stream id in the top five bits of byte 5
