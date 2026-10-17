@@ -130,14 +130,27 @@ fn level(value: Option<f64>, unit: &str) -> String {
     }
 }
 
+/// Seconds of audio the 400 ms blocks and the 3 s windows of BS.1770 / EBU Tech 3341 need before they read anything.
+const BLOCK_SECONDS: f64 = 0.4;
+const WINDOW_SECONDS: f64 = 3.0;
+
+/// A level that needs `needs` seconds of audio: "too short" rather than silence when the programme is shorter.
+fn gated(l: &Loudness, value: Option<f64>, unit: &str, needs: f64) -> String {
+    if value.is_none() && l.seconds < needs {
+        format!("too short to measure (needs {needs} s)")
+    } else {
+        level(value, unit)
+    }
+}
+
 /// The measurement as text, one line each.
 pub(crate) fn describe(l: &Loudness) -> String {
     let mut text = format!(
         "Integrated loudness  {}\nLoudness range       {}\nShort-term maximum   {}\nMomentary maximum    {}\n",
-        level(l.integrated, "LUFS"),
-        level(l.range, "LU"),
-        level(l.short_term_max, "LUFS"),
-        level(l.momentary_max, "LUFS"),
+        gated(l, l.integrated, "LUFS", BLOCK_SECONDS),
+        gated(l, l.range, "LU", WINDOW_SECONDS),
+        gated(l, l.short_term_max, "LUFS", WINDOW_SECONDS),
+        gated(l, l.momentary_max, "LUFS", BLOCK_SECONDS),
     );
     text.push_str(&format!("True peak            {}\n", level(l.true_peak(), "dBTP")));
     for c in &l.channels {
@@ -150,6 +163,7 @@ pub(crate) fn describe(l: &Loudness) -> String {
     }
     match l.dialnorm() {
         Some(d) => text.push_str(&format!("Matching dialnorm    {:>7} dBFS\n", -(d as i32))),
+        None if l.seconds < BLOCK_SECONDS => text.push_str("Matching dialnorm    (the programme is too short)\n"),
         None => text.push_str("Matching dialnorm    (the programme is silent)\n"),
     }
     text

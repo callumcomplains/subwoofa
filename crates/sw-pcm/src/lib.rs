@@ -203,6 +203,28 @@ mod tests {
     }
 
     #[test]
+    fn stereo_feeds_pair() {
+        let layout = ChannelLayout::find("2.0").unwrap();
+        let p = tmp("pair.wav");
+        write_wav(&p, 2, 48_000, 16, &[1000, -2000]);
+        // a lone stereo file fills a stereo layout: left to L, right to R
+        let inputs = multichannel_inputs(layout, &p).expect("a stereo file fills 2.0");
+        let mut s = StemSet::open(layout, &inputs).unwrap();
+        let mut planar = Vec::new();
+        s.read_planar(&mut planar, 1).unwrap();
+        assert!(planar[0][0] > 0.0 && planar[1][0] < 0.0, "{planar:?}");
+    }
+
+    #[test]
+    fn stereo_alone_refused() {
+        let mono = ChannelLayout::find("1.0").unwrap();
+        let p = tmp("half.wav");
+        write_wav(&p, 2, 48_000, 16, &[1000, -2000]);
+        let inputs = HashMap::from([(Channel::C, p)]);
+        assert!(matches!(StemSet::open(mono, &inputs), Err(Error::Mismatch(_))));
+    }
+
+    #[test]
     fn rejects_garbage() {
         let p = tmp("junk.wav");
         std::fs::write(&p, b"not audio at all, just text").unwrap();

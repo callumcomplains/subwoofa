@@ -234,8 +234,8 @@ high-level description, community MLP notes) and by reading what real streams co
   (encode_to_ims_ac4)"); FFmpeg 8.1 has no AC-4 decoder (raw demux/mux only). Needs an engine build with IMS AC-4.
 - **Not done / parked**: HRA 6.1 at 48 kHz (needs a reference), DVD-Audio disc structure (AOB packs), Atmos Theatrical (IAB
   MXF), DTS:X encode, AAF import, AC-4 (DEE build has no AC-4/AAC encoder), MPEG-H, Auro-3D, Datasat.
-- Known quality limits: Express quality "modest" in README known-limits; TrueHD analyser cannot follow substream 2 of
-  Dolby's Atmos TrueHD (warning only); MA 192 kHz band 1 is 3.4% larger than the original's (investigated, not located).
+- Known quality limits: Express quality "modest" in README known-limits; MA 192 kHz band 1 is 3.4% larger than the
+  original's (investigated, not located).
 
 ---
 
@@ -349,10 +349,11 @@ print the licence line**). Chosen path is held by `sw_backend_dee::set_dee_overr
   ...` vs `--engine dolby`; compare byte sizes per second of audio (Dolby trims ~3072 frames at the end), verify with
   `verify FILE --against SRC --layout 5.1` (exact).
 
-### Verifier/analyser gap
-Our TrueHD analyser (`sw-codec-truehd/src/analyze.rs`, `sw-verify/src/thd.rs`) reports 0 blocks / "bad Huffman code" on every
-substream of Dolby's Atmos TrueHD: a syntax variant (likely extra restart-header fields) is unhandled. FFmpeg strict decode is
-the verdict meanwhile.
+### Verifier/analyser and Atmos TrueHD (fixed 2026-10-17)
+The analyser used to read Dolby's Atmos TrueHD as 0 blocks / "bad Huffman code". Cause: Atmos streams have an extended
+major sync (flag bit 0 of byte 25 after the AU header, then 2 bytes and N more 16-bit words), and `analyze.rs` assumed 28 bytes,
+so the substream directory was read from the wrong place. `major_sync_len` (same rule as `sw-verify/src/thd.rs`) fixed it:
+substreams 0-2 (2 + 4 + 2 channels of the 7.1 bed) now parse fully; substream 3 (objects) is skipped by design.
 
 ### Other recorded findings
 - Express: sequential by nature (a frame's tone choice and rate search feed each other); ~5-7x real time.
@@ -403,7 +404,7 @@ the verdict meanwhile.
     44.1-192 kHz) and `TrueHDChannelTest.mkv` for listening checks of channel order.
   - Elementary streams taken out of them (`ffmpeg -i X -map 0:a:N -c copy -f dts|truehd|eac3|data`) are in
     `F:\SubwoofaTests\online` (`uhd.raw`, `amaze_atmos.thd`, `amaze_joc71.eac3`, `dtsx_*.dtshd` ...). `amaze_atmos.thd`
-    reproduces the TrueHD-analyser gap with Atmos substreams (open item 4).
+    was the reference for fixing the TrueHD analyser with Atmos substreams.
 - Test outputs always go to `F:\SubwoofaTests` (C: is nearly full).
 
 ### 8.3 The test suite
@@ -563,7 +564,7 @@ step, uninstall); a listening test of Preview; the decision on the Opus review p
    metric exists here, so judge by the Dolby decode vs source.
 3. **TrueHD predictor variety** (ARMA/IIR search, FIR order mix, Huffman offsets) toward the last 0.7-1.4% against Dolby; use the
    `--engine dolby` reference and `stream-info`. Keep the golden file updated deliberately (only TrueHD lines).
-4. **Our TrueHD analyser vs Dolby's Atmos substreams** (find the unhandled restart-header variant).
+4. ~~Our TrueHD analyser vs Dolby's Atmos substreams~~ (fixed 2026-10-17: extended major sync length).
 5. **Roadmap #5**: video / existing-stream inputs (warn on lossy to lossy), frame-rate conversion (23.976/24/25, with/without pitch:
    without needs a time-stretch, probably FFmpeg `atempo`). **#6** DRC profile and DTS/TrueHD header edits without re-encode (needs DTS
    reference files). **#7** downmix design (BS.775 presets, loudness-matched stereo, picture of speaker feeds). **#8** macOS/Linux builds,

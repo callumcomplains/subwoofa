@@ -140,6 +140,8 @@ pub(crate) fn resolve_sources(
     let mut by_path: HashMap<PathBuf, usize> = HashMap::new();
     let mut slots = Vec::new();
     let mut multi: HashMap<usize, Vec<usize>> = HashMap::new();
+    // how many channels each stereo file has been given so far
+    let mut pair_uses: HashMap<usize, usize> = HashMap::new();
     for (i, ch) in layout.channels.iter().enumerate() {
         let path = inputs
             .get(ch)
@@ -157,7 +159,18 @@ pub(crate) fn resolve_sources(
         let n = readers[idx].info.channels as usize;
         let ch_in_file = match n {
             1 => 0,
-            2 => i % 2,
+            // a stereo file feeds a pair: the first channel it is given gets its left, the second its right
+            2 => {
+                let used = pair_uses.entry(idx).or_insert(0);
+                *used += 1;
+                if *used > 2 {
+                    return Err(Error::Mismatch(format!(
+                        "{}: a stereo file can feed two channels, but it is given for more",
+                        path.display()
+                    )));
+                }
+                *used - 1
+            }
             _ => {
                 if n != layout.channel_count() {
                     return Err(Error::Mismatch(format!(
@@ -197,16 +210,23 @@ pub(crate) fn resolve_sources(
             ch: ch_in_file,
         });
     }
+    // a stereo file given for one channel only would lose its other half without a word
+    if let Some((&idx, _)) = pair_uses.iter().find(|(_, &used)| used == 1) {
+        return Err(Error::Mismatch(format!(
+            "{}: is a stereo file but feeds only one channel; give it a pair (such as L and R) or use a mono file",
+            paths[idx].display()
+        )));
+    }
     Ok((readers, slots, paths))
 }
 
-/// If `path` is a single file holding every channel of `layout` (more than two), return the input
-/// map that points each layout channel at it. The channels are separated by `StemSet`/`slot_map`
-/// using the file's speaker mask.
+/// If `path` is a single file holding every channel of `layout` (a stereo file for a stereo layout, or more), return
+/// the input map that points each layout channel at it. The channels are separated by `StemSet`/`slot_map` (a stereo
+/// file's two by order, more by the file's speaker mask).
 pub fn multichannel_inputs(layout: &'static ChannelLayout, path: &Path) -> Option<HashMap<Channel, PathBuf>> {
     let r = PcmReader::open(path).ok()?;
     let n = r.info().channels as usize;
-    (n > 2 && n == layout.channel_count()).then(|| layout.channels.iter().map(|c| (*c, path.to_path_buf())).collect())
+    (n > 1 && n == layout.channel_count()).then(|| layout.channels.iter().map(|c| (*c, path.to_path_buf())).collect())
 }
 
 /// For one multichannel file: its channel count and speaker mask, and the first of `candidates` whose

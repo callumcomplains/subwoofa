@@ -22,7 +22,7 @@ async function measureLoudness() {
     const l = dolbyMeter
       ? await measureWithDolby(files, entire)
       : await invoke("measure_loudness", { layout: inLayout().id, inputs: files, channelOrder, start: entire ? null : Number($("start").value), duration: entire ? null : Number($("duration").value) });
-    if (l.integrated == null) { out.className = "readout bad"; out.textContent = "The input is silent."; return; }
+    if (l.integrated == null) { out.className = "readout bad"; out.textContent = l.seconds != null && l.seconds < 0.4 ? "The input is too short to measure (it needs 0.4 s)." : "The input is silent."; return; }
     const tp = dolbyMeter ? l.peak : l.channels.reduce((m, c) => (c.true_peak != null && c.true_peak > m ? c.true_peak : m), -Infinity);
     const dn = Math.min(31, Math.max(1, Math.round(-l.integrated)));
     $("dialnormOn").checked = true; $("dialnorm").disabled = false; $("dialnorm").value = -dn;

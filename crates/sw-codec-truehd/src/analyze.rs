@@ -201,7 +201,7 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         let mut off = 4;
         if au.len() >= 8 && au[4..8] == [0xF8, 0x72, 0x6F, 0xBA] {
             read_major_sync(au, &mut r, &mut states);
-            off += 28;
+            off += major_sync_len(au);
             if r.major_syncs > 0 {
                 r.major_interval.push(r.access_units - last_major_au);
             }
@@ -216,6 +216,18 @@ pub fn analyze_range(data: &[u8], first: usize, count: usize) -> Report {
         r.access_units += 1;
     }
     r
+}
+
+/// Bytes of the TrueHD major sync that opens `au` (after the 4-byte access unit header): 28, or more when its
+/// last flag announces the extra channel meaning block that Dolby Atmos streams carry (2 bytes, then the number of
+/// further 16-bit words in the top nibble of the next byte).
+fn major_sync_len(au: &[u8]) -> usize {
+    const BASE: usize = 28;
+    if au.len() >= 4 + BASE + 2 && au[4 + 25] & 1 == 1 {
+        BASE + 2 + (au[4 + 26] >> 4) as usize * 2
+    } else {
+        BASE
+    }
 }
 
 /// The major sync: rate, channel arrangements and the number of substreams (which resets the per-substream state).
@@ -577,5 +589,21 @@ impl Report {
             let _ = writeln!(s, "ERROR: {e}");
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extended_major_sync() {
+        // access unit header (4 bytes), then a 28-byte major sync, then room for the extension
+        let mut au = vec![0u8; 4 + 28 + 2 + 8];
+        assert_eq!(major_sync_len(&au), 28);
+        // the flag in byte 25 of the sync announces the extension: 2 bytes, then 3 more 16-bit words
+        au[4 + 25] = 1;
+        au[4 + 26] = 3 << 4;
+        assert_eq!(major_sync_len(&au), 28 + 2 + 6);
     }
 }
